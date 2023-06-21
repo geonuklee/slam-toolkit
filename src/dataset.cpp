@@ -85,7 +85,7 @@ KittiDataset::KittiDataset(std::string seq)
   }
 
   Eigen::Matrix<double,3,3> K;
-  g2o::SE3Quat Tlr;
+  g2o::SE3Quat Trl;
   K << 7.188560000000e+02, 0., 6.071928e+02,
       0., 7.188560000000e+02, 1.852157000000e+02,
       0., 0., 1.;
@@ -98,11 +98,11 @@ KittiDataset::KittiDataset(std::string seq)
      0.000000000000e+00, 7.188560000000e+02, 1.852157000000e+02, 0.000000000000e+00,
      0.000000000000e+00, 0.000000000000e+00, 1.000000000000e+00, 0.000000000000e+00;
   auto t = K.inverse() * P1.block<3,1>(0,3);
-  Tlr.setTranslation(t);
+  Trl.setTranslation(t);
 
   int width = 1241;
   int height = 376;
-  camera_ = new StereoCamera(K, D, K, D, Tlr, width, height);
+  camera_ = new StereoCamera(K, D, K, D, Trl, width, height);
 }
 
 KittiDataset::~KittiDataset(){

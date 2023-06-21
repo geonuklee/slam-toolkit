@@ -22,6 +22,8 @@
 cmake_minimum_required(VERSION 3.1)
 project(pipeline)
 cmake_policy(SET CMP0042 NEW)
+cmake_policy(SET CMP0072 OLD)
+
 LIST(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake_modules)
 
 find_package(OpenCV 3.4 REQUIRED PATHS $ENV{HOME}/ws/opencv_3.4.14/build)
@@ -90,5 +92,7 @@ debug g2o_types_sba_d
 
 add_subdirectory(examples/kitti)
 #add_subdirectory(examples/epip_cluster)
+add_subdirectory(examples/segmentation)
+
 
 set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_COMMAND} -E time")

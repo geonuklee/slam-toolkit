@@ -123,11 +123,11 @@ Eigen::Vector3d Camera::NormalizedUndistort(const Eigen::Vector2d& uv) const {
 
 StereoCamera::StereoCamera(const Eigen::Matrix<double,3,3>& Kl, const Eigen::VectorXd& Dl,
                const Eigen::Matrix<double,3,3>& Kr, const Eigen::VectorXd& Dr,
-               const g2o::SE3Quat& Tlr,
+               const g2o::SE3Quat& Trl,
                int width, int height
                ) 
 : Camera(Kl, Dl, width, height),
-  Tlr_(Tlr), Kr_(Kr), Dr_(Dr)
+  Trl_(Trl), Kr_(Kr), Dr_(Dr)
 {
 
 }

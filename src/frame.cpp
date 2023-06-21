@@ -396,7 +396,7 @@ bool StereoFrame::GetDepth(int kpt_index, Eigen::Vector3d& Xc) const {
   cv::KeyPoint rkpt = r_keypoints_.at(j);
   const double& fx = camera_->GetK()(0,0);
   const StereoCamera* camera = dynamic_cast<const StereoCamera*>(camera_);
-  const double baseline = - camera->GetTlr().translation().x();
+  const double baseline = - camera->GetTrl().translation().x();
   double dx = kpt.pt.x - rkpt.pt.x;
   if(dx < 0.){
     throw std::invalid_argument("StereoMatch should filter negative depth");

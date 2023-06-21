@@ -35,53 +35,33 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include <opencv2/cudastereo.hpp>
 
 cv::Mat VisualizeFlow(cv::Mat flow, cv::Mat bgr=cv::Mat() ) {
-  // Visualization part
-#if 1
   cv::Mat dst = bgr.empty()? cv::Mat::zeros(flow.rows,flow.cols,CV_8UC3) : bgr.clone();
   const int step = 20;
   for(int r=step; r+step < flow.rows; r+=step){
     for(int c=step; c+step < flow.cols; c+=step){
       cv::Point2f pt0(c,r);
-      const cv::Point2f& F = flow.at<cv::Point2f>(r,c);
+      const cv::Point2f F = flow.at<cv::Point2f>(r,c);
       float d = cv::norm(F);
       if( d > step)
         d = step;
+      else if(d < 1.){
+        cv::circle(dst, pt0, 3, CV_RGB(255,0,0) );
+        continue;
+      }
       cv::Point2f pt1 = pt0+d/cv::norm(F) * F;
       cv::arrowedLine(dst,pt0,pt1,CV_RGB(0,0,255),1,cv::LINE_4,0,.5);
     }
   }
   return dst;
-#else
-  cv::Mat flow_parts[2];
-  cv::split(flow, flow_parts);
-  // Convert the algorithm's output into Polar coordinates
-  cv::Mat magnitude, angle, magn_norm;
-  cv::cartToPolar(flow_parts[0], flow_parts[1], magnitude, angle, true);
-  cv::normalize(magnitude, magn_norm, 0.0f, 1.0f, cv::NORM_MINMAX);
-  angle *= ((1.f / 360.f) * (180.f / 255.f));
-
-  // Build hsv image
-  cv::Mat _hsv[3], hsv, hsv8, bgr;
-  //_hsv[0] = angle;
-  _hsv[0] = cv::Mat::ones(angle.size(), CV_32F);
-  _hsv[1] = angle;
-  //_hsv[2] = cv::Mat::ones(angle.size(), CV_32F);
-  _hsv[2] = magn_norm;
-  merge(_hsv, 3, hsv);
-  hsv.convertTo(hsv8, CV_8U, 255.0);
-  cv::cvtColor(hsv8, bgr, cv::COLOR_HSV2BGR);
-  return bgr;
-#endif
 }
 
 cv::Mat GetDivergence(cv::Mat flow){
-#if 1
   int dl = 5; // Half of sample window for differenctiation
   std::vector<cv::Point2i> samples = {
-    cv::Point2i(4,0),
-    cv::Point2i(4,1),
-    cv::Point2i(1,4),
-    cv::Point2i(0,4),
+    //cv::Point2i(4,0),
+    //cv::Point2i(4,1),
+    //cv::Point2i(1,4),
+    //cv::Point2i(0,4),
 
     cv::Point2i(3,0),
     cv::Point2i(3,1),
@@ -89,21 +69,21 @@ cv::Mat GetDivergence(cv::Mat flow){
     cv::Point2i(1,3),
     cv::Point2i(0,3),
 
-    cv::Point2i(2,0),
-    cv::Point2i(2,1),
-    cv::Point2i(1,2),
-    cv::Point2i(0,2),
+    //cv::Point2i(2,0),
+    //cv::Point2i(2,1),
+    //cv::Point2i(1,2),
+    //cv::Point2i(0,2),
 
-    cv::Point2i(1,0),
-    cv::Point2i(1,1),
-    cv::Point2i(0,1),
+    //cv::Point2i(1,0),
+    //cv::Point2i(1,1),
+    //cv::Point2i(0,1),
   };
   //for(auto& dpt : samples)
   //  dpt *= 2;
   //dl *= 2;
-  const float max_d = 50.;
+  // const float max_d = 50.;
 
-  cv::Mat div = cv::Mat::zeros(flow.rows,flow.cols,CV_32F);
+  cv::Mat divergency = cv::Mat::zeros(flow.rows,flow.cols,CV_32F);
   std::vector<cv::Point2f> vec_dpt2;
   std::vector<float> vec_dpt2norm;
   vec_dpt2.reserve(samples.size());
@@ -117,7 +97,7 @@ cv::Mat GetDivergence(cv::Mat flow){
   for(int r = dl; r+dl < flow.rows; r++){
     for(int c = dl; c+dl < flow.cols; c++){
       //for(const auto& dpt : samples){
-      float& div_pixel = div.at<float>(r,c);
+      float& div = divergency.at<float>(r,c);
       float n = 0.;
       for(size_t i = 0; i < samples.size(); i++){
         const auto& dpt = samples.at(i);
@@ -132,48 +112,96 @@ cv::Mat GetDivergence(cv::Mat flow){
         const auto& dpt2 = vec_dpt2.at(i);
         const auto& dpt2norm = vec_dpt2norm.at(i);
         float d =  (F1-F0).dot(dpt2) / dpt2norm;
-        div_pixel += d;
+        div += d;
         n += 1.;
       } // for i
       // TODO Median? Mean?
-      div_pixel /= n;
-      if(div_pixel > max_d)
-        div_pixel = max_d;
-      else if(div_pixel < -max_d)
-        div_pixel = -max_d;
-      div_pixel = std::abs(div_pixel);
+      div /= n;
+      //if(div_pixel > max_d)
+      //  div_pixel = max_d;
+      //else if(div_pixel < -max_d)
+      //  div_pixel = -max_d;
+      div = std::abs(div);
     }
   }
 
-#else
-  cv::Mat div = cv::Mat::zeros(flow.rows,flow.cols,CV_32F);
-  const int dl = 5; // Half of sample window for differenctiation
-  const float fdl2 = 2.* (float)dl;
-  const float dV = dl*dl-1.;
-  const float max_d = 10.;
-  for(int r0 = dl; r0+dl < flow.rows; r0++){
-    for(int c0 = dl; c0+dl < flow.cols; c0++){
-      // Get 'F'lux
-      const float& Fx0 = flow.at<cv::Point2f>(r0-dl,c0).x;
-      const float& Fx1 = flow.at<cv::Point2f>(r0+dl,c0).x;
-      const float& Fy0 = flow.at<cv::Point2f>(r0,c0-dl).y;
-      const float& Fy1 = flow.at<cv::Point2f>(r0,c0+dl).y;
-      if(Fx0 == 0. || Fy0 == 0.)
-        continue;;
-      if(Fx1 == 0. || Fy1 == 0.)
-        continue;;
-      // Gauss' divergence theorem
-      //float d = (std::abs(Fx1-Fx0) + std::abs(Fy1-Fy0))/fdl2;
-      float d = (Fx1-Fx0 + Fy1-Fy0)/fdl2;
-      if( d > max_d)
-        d = max_d;
-      else if ( d< -max_d)
-        d = - max_d;
-      div.at<float>(r0,c0) = std::abs(d);
+  return divergency;
+}
+
+cv::Mat convertMat(cv::Mat input, float lower_bound, float upper_bound) {
+  cv::Mat output(input.rows, input.cols, CV_8UC1);
+  for (int i = 0; i < input.rows; i++) {
+    for (int j = 0; j < input.cols; j++) {
+      float value = input.at<float>(i, j);
+      if (value < lower_bound)
+        output.at<uchar>(i, j) = 0; // Set element as 0
+      else if (value > upper_bound)
+        output.at<uchar>(i, j) = 255; // Set element as 255
+      else
+        // Normalize the value to the range [0, 255]
+        output.at<uchar>(i, j) = static_cast<uchar>((value - lower_bound) * (255.0 / (upper_bound - lower_bound)));
     }
   }
-#endif
-  return div;
+  return output;
+}
+
+cv::Mat GetExpectedFlow(const StereoCamera& camera,
+                     const g2o::SE3Quat& Tc0c1,
+                     cv::Mat disp1){
+  const Eigen::Matrix<double,3,3> K = camera.GetK();
+  const float baseline = - camera.GetTrl().translation().x();
+  assert(baseline>0.);
+
+  cv::Mat exp_flow = cv::Mat::zeros(disp1.rows, disp1.cols, CV_32FC2);
+  for(int r=0;  r<exp_flow.rows; r++){
+    for(int c=0; c<exp_flow.cols; c++){
+      const double du = disp1.at<float>(r,c);
+      if(du < 1.)
+        continue;
+      Eigen::Vector2d uv1( (double)c, (double)r );
+      double z1 = K(0,0) * baseline / du;
+      Eigen::Vector3d X1( z1 * (uv1[0]-K(0,2))/K(0,0),
+                          z1 * (uv1[1]-K(1,2))/K(1,1),
+                          z1);
+      Eigen::Vector3d uv0 = K*  (Tc0c1 * X1);
+      uv0.head<2>() /= uv0[2];
+      Eigen::Vector2d f = uv1 - uv0.head<2>();
+      exp_flow.at<cv::Vec2f>(r,c) = cv::Vec2f(f[0],f[1]);
+    }
+  }
+  return exp_flow;
+}
+
+cv::Mat GetFlowError(const cv::Mat flow,
+                     const cv::Mat exp_flow){
+  std::vector<cv::Mat> f0, f1;
+  cv::split(flow,f0);
+  cv::split(exp_flow,f1);
+  return cv::abs( f1[0]-f0[0] ) + cv::abs( f1[1]-f0[1] );
+}
+
+cv::Mat GetDisparity(cv::cuda::GpuMat g_gray, cv::cuda::GpuMat g_gray_r){
+  cv::cuda::GpuMat  g_disp;
+  cv::Mat disparity;
+  /*
+  {
+    static auto bm = cv::cuda::createStereoBM();
+    bm->compute(g_gray, g_gray_r, g_disp);
+    g_disp.download(disp); // 8UC
+  }
+  if(false){
+    static auto sbp = cv::cuda::createStereoBeliefPropagation();
+    sbp->compute(g_gray, g_gray_r, g_disp);
+    g_disp.download(disparity); // 32FC1
+  }
+  */
+  if(true){
+    static auto csbp = cv::cuda::createStereoConstantSpaceBP();
+    csbp->compute(g_gray, g_gray_r, g_disp);
+    g_disp.download(disparity); // 32FC1
+  }
+  disparity.convertTo(disparity, CV_32FC1);
+  return disparity;
 }
 
 class Seg{
@@ -213,7 +241,7 @@ public:
     return is_keyframe;
   }
 
-  void PutKeyframe(cv::Mat gray, cv::cuda::GpuMat g_gray){
+  void PutKeyframe(cv::Mat gray, cv::cuda::GpuMat g_gray, const g2o::SE3Quat& Tcw){
     {
       // ref: https://docs.opencv.org/3.4/d8/dd8/tutorial_good_features_to_track.html
       int maxCorners = 1000;
@@ -229,17 +257,27 @@ public:
       return;
     gray0_ = gray;
     g_gray0_ = g_gray;
+    Tc0w_ = Tcw;
     return;
   }
 
-  void Put(cv::Mat gray){
+  void Put(cv::Mat gray, cv::Mat gray_r, const g2o::SE3Quat& Tcw, const StereoCamera& camera){
+    if(camera.GetD().norm() > 1e-5){
+      std::cerr << "Not support distorted image. Put rectified image" << std::endl;
+      exit(1);
+    }
+    auto start = std::chrono::steady_clock::now();
+
+    int search_range = 0;
+    int block_size = 21;
+
     cv::Mat rgb;
     cv::cvtColor(gray, rgb, cv::COLOR_GRAY2BGR);
 
     cv::cuda::GpuMat g_gray;
     g_gray.upload(gray);
     if(gray0_.empty()){
-      PutKeyframe(gray, g_gray);
+      PutKeyframe(gray, g_gray, Tcw);
       return;
     }
 
@@ -267,22 +305,43 @@ public:
     }
 #endif
 
-    cv::Mat div = GetDivergence(flow);
-    cv::Mat div_norm;
-    cv::normalize(div, div_norm, 0, 255, cv::NORM_MINMAX, CV_8UC1);
+    cv::cuda::GpuMat g_gray_r;
+    g_gray_r.upload(gray_r);
+    cv::Mat disparity = GetDisparity(g_gray,g_gray_r);
+    g2o::SE3Quat Tc0c1 = Tc0w_ * Tcw.inverse();
+    cv::Mat exp_flow = GetExpectedFlow(camera, Tc0c1, disparity);
+    cv::Mat flow_scale; {
+      // TODO Flow Scale은 exp_flow 뿐만 아니라, flow가 0인 경우도 제외하고, disp가 0인 경우도 제외해서 정해야함.
+      std::vector<cv::Mat> tmp;
+      cv::split(exp_flow,tmp);
+      flow_scale = cv::abs(tmp[0]) + cv::abs(tmp[1]);
+    }
 
+    cv::Mat flow_errors = GetFlowError(flow, exp_flow);
+    cv::Mat divergence = GetDivergence(flow);
+    for(int r=0; r<divergence.rows; r++) {
+      for(int c=0; c<divergence.cols; c++) {
+        float& div = divergence.at<float>(r,c);
+        const float& s = flow_scale.at<float>(r,c);
+        const float S = s*s;
+        const float& disp = disparity.at<float>(r,c);
+        float& err = flow_errors.at<float>(r,c);
+        if(s > 1. && disp > 1.){
+          div /= S;
+          err /= S;
+        }
+        else{
+          div = 0.;
+          err = 0.;
+        }
+      }
+    }
+
+
+    /*
     cv::Mat binary_div;
     cv::threshold(div, binary_div, 3., 255, cv::THRESH_BINARY);
     binary_div.convertTo(binary_div,CV_8UC1);
-
-    if(true){
-      cv::Mat zero = cv::Mat::zeros(gray.rows,gray.cols,CV_8UC1);
-      std::vector<cv::Mat> vec = {zero,div_norm,div_norm};
-      cv::Mat tmp,dst;
-      cv::merge(vec,tmp);
-      cv::addWeighted(rgb,1.,tmp,1.,1.,dst);
-      cv::imshow("div_dst", dst);
-    }
 
     if(true){
       cv::Mat zero = cv::Mat::zeros(gray.rows,gray.cols,CV_8UC1);
@@ -292,18 +351,51 @@ public:
       cv::addWeighted(rgb,1.,tmp,1.,1.,dst);
       cv::imshow("edge_dst", dst);
     }
+    */
 
-    //cv::imshow("src", gray0_);
+    {
+      cv::Mat div_norm = convertMat(divergence, 0., .05);
+      cv::imshow("div_dst", div_norm);
+    }
     if(true){
       cv::Mat dst;
-      //cv::Mat tmp = VisualizeFlow(flow, rgb);
+      cv::Mat tmp = VisualizeFlow(exp_flow - flow);
+      cv::addWeighted(rgb,.5,tmp,1.,1.,dst);
+      cv::pyrDown(dst,dst);
+      cv::imshow("flow_errors", dst);
+
+      cv::Mat err_norm = convertMat(flow_errors, 0., 1.);
+      cv::pyrDown(err_norm, err_norm);
+      cv::imshow("nflow_errors", err_norm);
+    }
+    if(true){
+      cv::Mat dst;
+      cv::Mat tmp = VisualizeFlow(exp_flow);
+      cv::addWeighted(rgb,.5,tmp,1.,1.,dst);
+      cv::pyrDown(dst,dst);
+      cv::imshow("exp_flow", dst);
+    }
+
+    if(true){
+      cv::Mat ndisp;
+      cv::normalize(disparity, ndisp, 0, 255, cv::NORM_MINMAX, CV_8UC1);
+      cv::pyrDown(ndisp,ndisp);
+      cv::imshow("disp", ndisp);
+    }
+    if(true){
+      cv::Mat dst;
       cv::Mat tmp = VisualizeFlow(flow);
-      cv::addWeighted(rgb,.2,tmp,1.,1.,dst);
+      cv::addWeighted(rgb,.5,tmp,1.,1.,dst);
+      cv::pyrDown(dst,dst);
       cv::imshow("flow", dst);
     }
 
     if(is_keyframe)
-      PutKeyframe(gray, g_gray);
+      PutKeyframe(gray, g_gray, Tcw);
+
+    auto end = std::chrono::steady_clock::now();
+    auto etime_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    std::cout << "etime = " << etime_ms << std::endl;
     return;
   }
 
@@ -311,33 +403,36 @@ private:
   cv::Ptr<cv::cuda::DenseOpticalFlow> opticalflow_;
   cv::Mat gray0_;
   cv::cuda::GpuMat g_gray0_;
+  g2o::SE3Quat Tc0w_;
   std::vector<cv::Point2f> corners0_;
 
 };
 
 
 int main(int argc, char** argv){
- //suggest "13" "20";
+  //Seq :"02",("13" "20");
+  std::string fn_config = GetPackageDir()+"/config/kitti.yaml";
+  cv::FileStorage config(fn_config, cv::FileStorage::READ);
   std::string seq(argv[1]);
-  std::string dir_im = "/home/geo/dataset/kitti_odometry_dataset/sequences/"+seq+"/image_0/";
-  std::string dir_im_r = "/home/geo/dataset/kitti_odometry_dataset/sequences/"+seq+"/image_1/";
-  Eigen::Matrix<double,3,3> K;
-  K << 707.1, 0., 601.89, 0., 707.1, 183.1, 0., 0., 1.;
-  char buff[100];
-  bool stop = true;
 
+  KittiDataset dataset(seq);
+  const auto& Tcws = dataset.GetTcws();
+  if(Tcws.empty()){
+    std::cout << "Seq" << seq << " with no ground truth trajectory." << std::endl;
+    exit(1);
+  }
+  const auto& D = dataset.GetCamera()->GetD();
+  std::cout << "Distortion = " << D.transpose() << std::endl;
+  const StereoCamera* camera = dynamic_cast<const StereoCamera*>(dataset.GetCamera());
+  assert(camera);
   Seg seg;
 
-  for(int i = 0; ; i+=1){
-    snprintf(buff, sizeof(buff), "%06d.png", i);
-    std::string fn_im = dir_im + std::string(buff);
-    std::string fn_im_r = dir_im_r + std::string(buff);
-    cv::Mat gray = cv::imread(fn_im, cv::IMREAD_GRAYSCALE);
-    //cv::Mat gray_r = cv::imread(fn_im_r, cv::IMREAD_GRAYSCALE);
-    if(gray.empty())
-      break;
-    seg.Put(gray);
-
+  bool stop = true;
+  for(int i=0; i<dataset.Size(); i+=1){
+    const cv::Mat gray   = dataset.GetImage(i);
+    const cv::Mat gray_r = dataset.GetRightImage(i);
+    const g2o::SE3Quat Tcw = Tcws.at(i);
+    seg.Put(gray, gray_r, Tcw, *camera );
     char c = cv::waitKey(stop?0:1);
     if(c == 'q')
       break;

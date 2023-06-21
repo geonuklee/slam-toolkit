@@ -62,14 +62,14 @@ public:
   virtual ~StereoCamera() {}
   StereoCamera(const Eigen::Matrix<double,3,3>& K1, const Eigen::VectorXd& D1, 
                const Eigen::Matrix<double,3,3>& K2, const Eigen::VectorXd& D2,
-               const g2o::SE3Quat& Tlr,
+               const g2o::SE3Quat& Trl,
                int width, int height
                );
 
-  const g2o::SE3Quat& GetTlr() const { return Tlr_; }
+  const g2o::SE3Quat& GetTrl() const { return Trl_; }
 
 protected:
-  const g2o::SE3Quat Tlr_;
+  const g2o::SE3Quat Trl_;
   const Eigen::Matrix<double,3,3> Kr_;
   const Eigen::VectorXd Dr_;
 
