@@ -62,20 +62,10 @@ int main(int argc, char** argv){
   Seg seg;
 
   bool stop = true;
-  g2o::SE3Quat Tc0w;
   for(int i=0; i<dataset.Size(); i+=1){
     const cv::Mat gray   = dataset.GetImage(i);
     const cv::Mat gray_r = dataset.GetRightImage(i);
-    g2o::SE3Quat Tcw;
-    if(!Tcws.empty())
-      Tcw = Tcws.at(i);
-    else{
-      g2o::SE3Quat Tc1c0;
-      Tc1c0.setTranslation(Eigen::Vector3d(0.,0.,-.2) );
-      Tcw = Tc1c0 * Tc0w;
-    }
-    Tc0w = Tcw;
-    seg.Put(gray, gray_r, Tcw, *camera );
+    seg.Put(gray, gray_r, *camera );
     char c = cv::waitKey(stop?0:1);
     if(c == 'q')
       break;
