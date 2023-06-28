@@ -77,7 +77,7 @@ cv::Mat GetDifference(cv::Mat flow, cv::Mat disparity) {
     for(int c=dl; c+dl<divergence.cols; c++) {
       const float& disp = disparity.at<float>(r,c);
       float& div = divergence.at<float>(r,c);
-#if 0
+#if 1
       float R = std::min<float>(dl, .5*disp );
       R       = std::max<float>(R, 5.);
 #else
@@ -258,14 +258,18 @@ cv::Mat GetDisparity(cv::cuda::GpuMat g_gray, cv::cuda::GpuMat g_gray_r){
     bm->compute(g_gray, g_gray_r, g_disp);
     g_disp.download(disp); // 8UC
   }
+  */
   if(false){
     static auto sbp = cv::cuda::createStereoBeliefPropagation();
     sbp->compute(g_gray, g_gray_r, g_disp);
     g_disp.download(disparity); // 32FC1
   }
-  */
-  if(true){
-    static auto csbp = cv::cuda::createStereoConstantSpaceBP();
+  else{
+    int ndisp=128;
+    int iters=8;
+    int levels=4;
+    int nr_plane=4;
+    static auto csbp = cv::cuda::createStereoConstantSpaceBP(ndisp,iters,levels,nr_plane);
     csbp->compute(g_gray, g_gray_r, g_disp);
     g_disp.download(disparity); // 32FC1
   }

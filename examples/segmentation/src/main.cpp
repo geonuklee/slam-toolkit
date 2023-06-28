@@ -63,6 +63,7 @@ int main(int argc, char** argv){
 
   bool stop = true;
   for(int i=0; i<dataset.Size(); i+=1){
+    std::cout << "F# " << i << std::endl;
     const cv::Mat gray   = dataset.GetImage(i);
     const cv::Mat gray_r = dataset.GetRightImage(i);
     seg.Put(gray, gray_r, *camera );

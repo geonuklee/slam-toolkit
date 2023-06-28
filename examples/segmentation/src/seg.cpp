@@ -244,7 +244,6 @@ void Seg::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera) {
     cv::distanceTransform(~texture_edge, dist1, cv::DIST_L2, cv::DIST_MASK_3, CV_32FC1);
     cv::Mat labels, stats, centroids;
     cv::connectedComponentsWithStats(dist1 < 2.,labels,stats,centroids);
-    cv::imshow("cc label", GetColoredLabel(labels) );
     std::set<int> inliers;
     for(int i = 1; i < stats.rows; i++){
       const int max_wh = std::max(stats.at<int>(i,cv::CC_STAT_WIDTH),
@@ -262,10 +261,12 @@ void Seg::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera) {
     cv::Mat dist2;
     cv::distanceTransform(labels<1, dist2, cv::DIST_L2, cv::DIST_MASK_3, CV_32FC1);
     texture_mask = dist2 < 20.; // r1+r2
-    //texture_mask = labels > 0;
-    cv::imshow("texture_mask", 255*texture_mask);
+    //cv::imshow("texture_mask", 255*texture_mask);
   }
-  cv::Mat valid_mask = texture_mask.clone();
+  //cv::Mat valid_mask = texture_mask.clone();
+  cv::Mat valid_mask = cv::Mat::ones(texture_mask.rows, texture_mask.cols, CV_8UC1);
+  //cv::bitwise_and(valid_mask, disparity>2.,valid_mask);
+  //cv::bitwise_and(valid_mask, disparity<40.,valid_mask);
 
   cv::Mat exp_flow;
   GetExpectedFlow(camera, Tc0c1, disparity, exp_flow, valid_mask);
@@ -292,16 +293,31 @@ void Seg::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera) {
   //if( ++i < 5)
   //  return;
 
-  cv::Mat binary_edges = FlowDifference2Edge(flow_difference);
-  // TODO  cv::Mat other_edges = FlowError2Edge(flow_difference);
-
+  cv::Mat diff_edges = FlowDifference2Edge(flow_difference);
+  cv::Mat expd_diffedges; {
+    cv::Mat dist;
+    cv::distanceTransform(~diff_edges, dist, cv::DIST_L2, cv::DIST_MASK_3, CV_32FC1);
+    expd_diffedges = (dist < 20.) /255;
+    cv::Mat dst = GetColoredLabel(diff_edges);
+    cv::imshow("diff_edges", dst);
+  }
+  cv::Mat error_edges = FlowError2Edge(flow_error_scalar, expd_diffedges, valid_mask);
+  //cv::bitwise_or(error_edges, diff_edges, error_edges); // 어두워서 disp가 안잡히는 부분에서만 도움이된다.
   {
-    cv::Mat dst = GetColoredLabel(binary_edges);
+    cv::Mat dst = GetColoredLabel(error_edges);
     cv::addWeighted(rgb,.5,dst,1.,1.,dst);
     cv::imshow("edges", dst);
-    //cv::imshow("rgb", rgb);
   }
-  cv::Mat marker = DistanceWatershed(binary_edges);
+
+  cv::Mat marker = Segment(error_edges); // Sgement(error_edges,rgb);
+  {
+    cv::Mat dst = GetColoredLabel(marker);
+    cv::addWeighted(rgb,.3, dst, .7, 1., dst);
+    cv::Mat whites;
+    cv::cvtColor(error_edges*255, whites, cv::COLOR_GRAY2BGR);
+    cv::addWeighted(dst,1.,whites,.3, 1., dst);
+    cv::imshow("Marker", dst);
+  }
 
   if(false){
     cv::Mat flow_dist;
@@ -348,22 +364,27 @@ void Seg::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera) {
     cv::Mat dst;
     cv::Mat tmp = VisualizeFlow(exp_flow - flow);
     cv::addWeighted(rgb,.5,tmp,1.,1.,dst);
-    //cv::pyrDown(dst,dst);
+    cv::pyrDown(dst,dst);
     cv::imshow("flow_errors", dst);
 
     cv::Mat err_norm = convertMat(flow_error_scalar, 0., 1.);
     //cv::pyrDown(err_norm, err_norm);
     cv::imshow("nflow_errors", err_norm);
   }
-  if(false){
+  if(true){
     cv::Mat dst;
     cv::Mat tmp = VisualizeFlow(exp_flow);
     cv::addWeighted(rgb,.5,tmp,1.,1.,dst);
-    //cv::pyrDown(dst,dst);
     cv::imshow("exp_flow", dst);
   }
-
-  if(false){
+  if(true){
+    cv::Mat dst;
+    cv::Mat tmp = VisualizeFlow(flow);
+    cv::addWeighted(rgb,.5,tmp,1.,1.,dst);
+    //cv::pyrDown(dst,dst);
+    cv::imshow("flow", dst);
+  }
+  if(true){
     cv::Mat dst;
     disparity.convertTo(dst, CV_8UC1);
     cv::imshow("disp",  dst);
@@ -373,13 +394,6 @@ void Seg::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera) {
     cv::pyrDown(ndisp,ndisp);
     cv::imshow("disp", ndisp);
     */
-  }
-  if(false){
-    cv::Mat dst;
-    cv::Mat tmp = VisualizeFlow(flow);
-    cv::addWeighted(rgb,.5,tmp,1.,1.,dst);
-    //cv::pyrDown(dst,dst);
-    cv::imshow("flow", dst);
   }
   auto end = std::chrono::steady_clock::now();
   auto etime_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();

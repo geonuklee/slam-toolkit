@@ -1,5 +1,5 @@
-#ifndef SEG_H_
-#define SEG_H_
+#ifndef SEGMENT_SEG_H_
+#define SEGMENT_SEG_H_
 
 #include "stdafx.h"
 #include "camera.h"
@@ -29,8 +29,15 @@ private:
 };
 
 cv::Mat FlowDifference2Edge(cv::Mat score);
-cv::Mat FlowError2Edge(cv::Mat flow_errors);
+cv::Mat FlowError2Edge(const cv::Mat flow_errors, const cv::Mat expd_diffedges, const cv::Mat valid_mask);
 
-cv::Mat DistanceWatershed(cv::Mat edges);
-cv::Mat EdgeWatershed(const cv::Mat score);
+//cv::Mat DistanceWatershed(cv::Mat edges);
+cv::Mat Segment(const cv::Mat outline_edge, const cv::Mat rgb4vis=cv::Mat() );
+void DistanceWatershed(const cv::Mat dist_fromedge,
+                       cv::Mat& markers,
+                       cv::Mat& vis_arealimitedflood,
+                       cv::Mat& vis_rangelimitedflood,
+                       cv::Mat& vis_onedgesflood
+                       );
+
 #endif
