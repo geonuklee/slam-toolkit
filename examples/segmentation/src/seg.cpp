@@ -1,3 +1,4 @@
+#include <opencv2/core/types.hpp>
 #include <opencv2/cudaoptflow.hpp>
 #include <opencv2/cudastereo.hpp>
 #include <opencv2/cudafilters.hpp>
@@ -11,7 +12,6 @@ Seg::Seg() {
   //opticalflow_   = cv::cuda::OpticalFlowDual_TVL1::create();
   //opticalflow_ = cv::cuda::DensePyrLKOpticalFlow::create(cv::Size(13,13),3);
 }
-
 
 bool Seg::IsKeyframe(cv::Mat flow, cv::Mat rgb) {
 #if 1
@@ -71,33 +71,9 @@ cv::Mat Seg::GetFlow(cv::cuda::GpuMat g_gray) {
 
 cv::Mat Seg::GetTextureEdge(cv::Mat gray) {
   cv::Mat texture_edge;
-#if 1
-    //cv::Canny(gray, texture_edge, 300, 400);
-    cv::Canny(gray, texture_edge, 100, 400);
-#else
-    cv::cuda::GpuMat g1,g2,g3, g_all;
-    static auto filter1 = cv::cuda::createSobelFilter(CV_8UC1,CV_32FC1,1,1);
-    static auto filter2 = cv::cuda::createSobelFilter(CV_8UC1,CV_32FC1,1,0);
-    static auto filter3 = cv::cuda::createSobelFilter(CV_8UC1,CV_32FC1,0,1);
-    filter1->apply(g_gray, g1);
-    filter2->apply(g_gray, g2);
-    filter3->apply(g_gray, g3);
-    cv::Mat s1,s2,s3;
-    g1.download(s1);
-    g2.download(s2);
-    g3.download(s3);
-    /*
-    sobel = cv::abs(s1)+cv::abs(s2)+cv::abs(s3);
-    double minValue, maxValue;
-    cv::Point minLoc, maxLoc;
-    cv::minMaxLoc(sobel, &minValue, &maxValue, &minLoc, &maxLoc);
-    sobel = sobel > .1*maxValue;
-    */
-    float threshold = 100.;
-    cv::bitwise_or(cv::abs(s1)>threshold, cv::abs(s2)>threshold, texture_edge);
-    cv::bitwise_or(texture_edge, cv::abs(s3)>threshold, texture_edge);
-#endif
-    return texture_edge;
+  //cv::Canny(gray, texture_edge, 300, 400);
+  cv::Canny(gray, texture_edge, 100, 400);
+  return texture_edge;
 }
 
 void Seg::NormalizeScale(const cv::Mat disparity, const cv::Mat flow_scale,
@@ -187,6 +163,281 @@ g2o::SE3Quat Seg::TrackTc0c1(const std::vector<cv::Point2f>& corners,
   return Tc0c1;
 }
 
+std::vector<cv::Point2f> SimplifyContour(const std::vector<cv::Point>& given_cnt){
+  const float min_l = 20.;
+  std::vector<cv::Point2f> simple_cnt;
+  simple_cnt.reserve(given_cnt.size());
+
+  const cv::Point2f pt0(given_cnt.begin()->x, given_cnt.begin()->y);
+  simple_cnt.push_back(pt0);
+  cv::Point2f pt_prev(pt0);
+  for(const auto& _pt : given_cnt){
+    cv::Point2f pt(_pt.x,_pt.y);
+    cv::Point2f dpt = pt - pt_prev;
+    //float l = cv::norm(dpt);
+    float l = std::abs(dpt.x)+std::abs(dpt.y);
+    if(l  < min_l)
+      continue;
+    simple_cnt.push_back(pt);
+    pt_prev = pt;
+  }
+
+  if(simple_cnt.size() < 3)
+    simple_cnt.clear();
+  return simple_cnt;
+}
+
+
+std::map<int, ShapePtr> ConvertMarker2Instances(const cv::Mat marker) {
+  cv::Mat fg = GetBoundary(marker) < 1;
+  const int mode   = cv::RETR_TREE;
+  const int method = cv::CHAIN_APPROX_SIMPLE;
+  std::vector<std::vector<cv::Point> > contours;
+  std::vector<cv::Vec4i> hierarchy;
+  cv::findContours(fg,contours,hierarchy,mode,method);
+
+  std::map<int, ShapePtr > shapes;
+  std::map<int, float> areas;
+  for(int i = 0; i < contours.size(); i++){
+    // Ref) https://076923.github.io/posts/Python-opencv-21/
+    // const cv::Vec4i& h = hierarchy.at(i); // h[0:3] : '이전윤곽', '다음윤곽', '내곽윤곽', '외곽윤곽(부모)'
+    const std::vector<cv::Point>& _contour = contours.at(i);
+    std::vector<cv::Point2f> contour = SimplifyContour(_contour);
+    if(contour.empty())
+      continue;
+    const int& l = marker.at<int>(*contour.begin()); // Binary이미지에서 contour를 따내므로, 경계선 문제없이 라빌 획득됨.
+    if(l < 1)
+      continue;
+    const float area = cv::contourArea(contour);
+    if(area < 50)
+      continue;
+    if( !shapes.count(l) ){
+      shapes[l] = std::make_shared<Shape>();
+      areas[l]  = area;
+    }
+    else if(areas.at(l) > area)
+      continue;
+    ShapePtr s_ptr = shapes[l];
+    s_ptr->label_ = l;
+    s_ptr->outerior_ = contour;
+  }
+  for(auto it : shapes)
+    it.second->UpdateBB();
+  return shapes;
+}
+
+void Shape::UpdateBB() {
+  {
+    cv::Point2f x0(9999999.f,9999999.f);
+    cv::Point2f x1(-x0);
+    for(const auto& pt : outerior_){
+      x0.x = std::min<float>(x0.x, pt.x);
+      x0.y = std::min<float>(x0.y, pt.y);
+      x1.x = std::max<float>(x1.x, pt.x);
+      x1.y = std::max<float>(x1.y, pt.y);
+    }
+    outerior_bb_ = cv::Rect2f(x0.x,x0.y,x1.x-x0.x,x1.y-x0.y);
+  }
+  return;
+}
+
+static bool BbCollision(const cv::Rect2f& bb, const float& x, const float& y) {
+  //bb.width;
+  if(x < bb.x )
+    return false;
+  if(x > bb.x+bb.width)
+    return false;
+  if(y < bb.y)
+    return false;
+  if(y > bb.y+bb.width)
+    return false;
+  return true;
+}
+
+bool Shape::HasCollision(const int& _x, const int& _y, bool check_contour) const {
+   
+  // *[x] global shape에 대해 BB 충돌체크.
+  // *[x] contour에 대해 충돌체크
+  const float x = _x;
+  const float y = _y;
+  cv::Point2f pt(x,y);
+
+  if( !BbCollision(outerior_bb_, x, y) )
+    return false;
+  if(!check_contour)
+    return true;
+
+  // Interior contour과 충돌 없는 경우, outerior contour와 충돌체크
+  bool b_outerior_collision = cv::pointPolygonTest(outerior_, pt, false) > 0.;
+  return b_outerior_collision;
+}
+
+cv::Mat VisualizeTrackedShapes(const std::map<int, ShapePtr>& global_shapes,
+                               const cv::Mat local_marker){
+  cv::Mat dst = cv::Mat::zeros(local_marker.rows, local_marker.cols, CV_8UC3);
+  for(auto it : global_shapes){
+    ShapePtr ptr = it.second;
+    if(!ptr->stabilized_)
+      continue;
+    std::vector< std::vector<cv::Point> > cnts;
+    cnts.resize(1);
+    cnts[0].reserve(ptr->outerior_.size() );
+    for( auto pt: ptr->outerior_)
+      cnts[0].push_back(cv::Point(pt.x,pt.y));
+    const auto& color = colors.at(it.first % colors.size() );
+    cv::drawContours(dst, cnts, 0, color, 2);
+  }
+
+  return dst;
+}
+
+std::map<int,int> TrackShapes(const std::map<int, ShapePtr>& local_shapes,
+                              const cv::Mat& local_marker,
+                              const cv::Mat& flow,
+                              std::map<int, ShapePtr>& global_shapes,
+                              int& n_shapes) {
+  std::map<int,int> matches;
+  // TODO 함수 가장 마지막과 병합
+  if(global_shapes.empty()){
+    for(auto it : local_shapes){
+      const int gid =  ++n_shapes;
+      it.second->label_ = gid;
+      global_shapes[gid] = it.second;
+      //matches[gid] = gid;
+    }
+    return matches;
+  }
+
+  /* [x] global_shape의 motion update
+   * [x] IoU 계산후 best matching 획득.
+   * [x] Missing shape에 대한 대처 : 너무큰건 거르고, 자주 발견되는걸 믿자.
+  */
+  cv::Mat flow0 = cv::Mat::zeros(flow.rows,flow.cols,CV_32FC2);
+  for(int r1=0; r1<flow.rows; r1++){
+    for(int c1=0; c1<flow.cols; c1++){
+      // dpt01 : {1} coordinate에서 0->1 변위 벡터, 
+      const auto& dpt01 = flow.at<cv::Point2f>(r1,c1);
+      if(std::abs(dpt01.x)+std::abs(dpt01.y) < 1e-10)
+        continue;
+      cv::Point2f pt0(c1-dpt01.x, r1-dpt01.y);
+      if(pt0.x < 0 || pt0.y < 0 || pt0.x > flow.cols-1 || pt0.y > flow.rows-1)
+        continue;
+      flow0.at<cv::Point2f>(pt0) = dpt01;
+    }
+  }
+
+  // Motion update
+  for(auto git : global_shapes){
+    ShapePtr ptr = git.second;
+    for(auto& pt : ptr->outerior_){
+      const auto& dpt01 = flow0.at<cv::Point2f>(pt);
+      pt += dpt01;
+      // TODO 화면 구석에 몰리면 지워야하나?
+      pt.x = std::max<float>(pt.x, 0.f);
+      pt.x = std::min<float>(pt.x,local_marker.cols-1.f);
+      pt.y = std::max<float>(pt.y, 0.f);
+      pt.y = std::min<float>(pt.y,local_marker.rows-1.f);
+    }
+    ptr->UpdateBB();
+  }
+
+  // Sampling area
+  std::map<int, size_t> g_areas;
+  std::map<int, size_t> l_areas;
+  std::map<int, std::map<int, size_t>  > l2g_overlaps;
+  bool check_contour = true;
+  const int dl = 2;
+  for(int r=dl; r+dl<local_marker.rows; r+=dl){
+    for(int c=dl; c+dl<local_marker.cols; c+=dl){
+      const int& local_l = local_marker.at<int>(r,c);
+      if(local_l < 1)
+        continue;
+      l_areas[local_l]++;
+      for(auto git : global_shapes){
+        ShapePtr ptr = git.second;
+        bool b = ptr->HasCollision(c,r, check_contour);
+        if(!b)
+          continue;
+        // TODO 겹치는 경우 
+        const int& global_l = ptr->label_;
+        g_areas[global_l]++;
+        l2g_overlaps[local_l][global_l]++;
+      }
+    }
+  }
+
+  // 각 local_l 에 대해 가장 높은 IoU를 보이는 global_l을 연결
+  std::map<int, std::pair<int, float > > g2l;
+  for(auto it : l2g_overlaps){
+    const int& local_l = it.first;
+    float n_local = l_areas.at(local_l);
+    //std::cout << "l#" << local_l << " : {";
+    float max_iou = .5; // min_iou
+    int best_gid = -1;
+    for(auto it2 : it.second){
+      const int& global_l = it2.first;
+      float n_overlap = it2.second;
+      float n_global = g_areas.at(global_l);
+      float iou = n_overlap / (n_global+n_local-n_overlap);
+      //std::cout << "(" << global_l << "," << iou << "),";
+      if(iou < max_iou)
+        continue;
+      max_iou = iou;
+      best_gid = global_l;
+    }
+    //std::cout << "}" << std::endl;
+    if(best_gid < 0)
+      continue;
+    if(g2l.count(best_gid)){
+      const auto& ll_iou = g2l.at(best_gid);
+      if(max_iou > ll_iou.second)
+        g2l[best_gid] = std::make_pair(local_l, max_iou);
+    } else
+      g2l[best_gid] = std::make_pair(local_l, max_iou);
+  }
+  // g2l에 g->l l->g 연결에서 모두 IoU 가 최대인 케이스만 남음.
+  std::list<int> layoff_list;
+  for(auto it : global_shapes){
+    const int& gid = it.first;
+    ShapePtr g_ptr = it.second;
+    if(g2l.count(gid)){
+      const int& lid = g2l.at(gid).first;
+      ShapePtr l_ptr = local_shapes.at(lid);
+      g_ptr->n_missing_ = 0;
+      g_ptr->n_matching_++;
+      g_ptr->n_belief_++;
+      if(g_ptr->n_belief_ > 1)
+        g_ptr->stabilized_ = true;
+      g_ptr->outerior_ = l_ptr->outerior_;
+      g_ptr->outerior_bb_ = l_ptr->outerior_bb_;
+      matches[lid] = gid;
+      continue;
+    }
+    g_ptr->n_missing_++;
+    g_ptr->n_belief_--;
+
+    if(g_ptr->n_missing_ > 2)
+      layoff_list.push_back(gid);
+    else if(g_ptr->n_belief_ < 1)
+      layoff_list.push_back(gid);
+
+  }
+  for(int gid : layoff_list)
+    global_shapes.erase(gid);
+  // 매칭안된 local shape를 새로 등록
+  for(auto it : local_shapes){
+    const int& lid = it.first;
+    ShapePtr l_ptr = it.second;
+    if(matches.count(lid))
+      continue;
+    const int gid =  ++n_shapes;
+    l_ptr->label_ = gid;
+    global_shapes[gid] = l_ptr;
+    //matches[gid] = gid;
+  }
+  return matches;
+}
+
 void Seg::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera) {
   if(camera.GetD().norm() > 1e-5){
     std::cerr << "Not support distorted image. Put rectified image" << std::endl;
@@ -235,11 +486,8 @@ void Seg::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera) {
   g2o::SE3Quat Tc0c1 = Tc0w_ * Tcw.inverse(); // 주어진 Tcw를 사용.
 #endif
   cv::Mat texture_edge = GetTextureEdge(gray);
+  /*
   cv::Mat texture_mask; {
-    /* 
-      1) small_r보다 작은 edge를 지우기 위해,
-         dist < 5.
-    */
     cv::Mat dist1;
     cv::distanceTransform(~texture_edge, dist1, cv::DIST_L2, cv::DIST_MASK_3, CV_32FC1);
     cv::Mat labels, stats, centroids;
@@ -263,8 +511,8 @@ void Seg::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera) {
     texture_mask = dist2 < 20.; // r1+r2
     //cv::imshow("texture_mask", 255*texture_mask);
   }
-  //cv::Mat valid_mask = texture_mask.clone();
-  cv::Mat valid_mask = cv::Mat::ones(texture_mask.rows, texture_mask.cols, CV_8UC1);
+  */
+  cv::Mat valid_mask = cv::Mat::ones(gray.rows, gray.cols, CV_8UC1);
   //cv::bitwise_and(valid_mask, disparity>2.,valid_mask);
   //cv::bitwise_and(valid_mask, disparity<40.,valid_mask);
 
@@ -298,18 +546,30 @@ void Seg::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera) {
     cv::Mat dist;
     cv::distanceTransform(~diff_edges, dist, cv::DIST_L2, cv::DIST_MASK_3, CV_32FC1);
     expd_diffedges = (dist < 20.) /255;
-    cv::Mat dst = GetColoredLabel(diff_edges);
-    cv::imshow("diff_edges", dst);
+
+    //cv::Mat dst = GetColoredLabel(diff_edges);
+    //cv::imshow("diff_edges", dst);
   }
-  cv::Mat error_edges = FlowError2Edge(flow_error_scalar, expd_diffedges, valid_mask);
-  //cv::bitwise_or(error_edges, diff_edges, error_edges); // 어두워서 disp가 안잡히는 부분에서만 도움이된다.
-  {
-    cv::Mat dst = GetColoredLabel(error_edges);
-    cv::addWeighted(rgb,.5,dst,1.,1.,dst);
-    cv::imshow("edges", dst);
+  cv::Mat error_edges = FlowError2Edge(flow_error_scalar, expd_diffedges, valid_mask); {
+    //cv::Mat dst = GetColoredLabel(error_edges);
+    //cv::addWeighted(rgb,.5,dst,1.,1.,dst);
+    //cv::imshow("error_edges", dst);
   }
 
   cv::Mat marker = Segment(error_edges); // Sgement(error_edges,rgb);
+#if 1
+  std::map<int, ShapePtr> local_shapes = ConvertMarker2Instances(marker);
+  static std::map<int, ShapePtr> global_shapes; // TODO 맴버변수로
+  static int n_shapes = 0;
+  std::map<int,int> l2g = TrackShapes(local_shapes, marker, flow, global_shapes, n_shapes);
+  {
+    // TODO 결과물의 visualization
+    std::cout << "n(gShapes) = " << global_shapes.size() << std::endl;
+    cv::Mat dst = VisualizeTrackedShapes(global_shapes, marker);
+    cv::imshow("TrackedShapes", dst);
+  }
+#endif
+
   {
     cv::Mat dst = GetColoredLabel(marker);
     cv::addWeighted(rgb,.3, dst, .7, 1., dst);
@@ -319,10 +579,19 @@ void Seg::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera) {
     cv::imshow("Marker", dst);
   }
 
+  /*
+  cv::Mat filtered_marker;
+  if(marker0_.empty())
+    filtered_marker = marker;
+  else{
+    filtered_marker = TrackMarker(flow, marker0_);
+  }
+  */
+
   if(false){
     cv::Mat flow_dist;
     cv::distanceTransform(flow_difference < .5, flow_dist, cv::DIST_L2, cv::DIST_MASK_3);
-    cv::Mat output_edges = cv::Mat::zeros(texture_edge.rows, texture_edge.cols, CV_8UC1);
+    cv::Mat output_edges = cv::Mat::zeros(gray.rows, gray.cols, CV_8UC1);
     for(int r=0; r<output_edges.rows; r++){
       for(int c=0; c<output_edges.cols;c++){
         const uchar& te = texture_edge.at<uchar>(r,c);
@@ -347,7 +616,7 @@ void Seg::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera) {
     cv::imshow("thick_edges", dst);
   }
 
-  if(true){
+  if(false){
     cv::Mat n_sobel;
     cv::normalize(texture_edge, n_sobel, 0, 255, cv::NORM_MINMAX, CV_8UC1);
 
@@ -360,7 +629,7 @@ void Seg::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera) {
     cv::merge(vec, dst);
     cv::imshow("scores", dst);
   }
-  if(true){
+  if(false){
     cv::Mat dst;
     cv::Mat tmp = VisualizeFlow(exp_flow - flow);
     cv::addWeighted(rgb,.5,tmp,1.,1.,dst);
@@ -371,20 +640,20 @@ void Seg::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera) {
     //cv::pyrDown(err_norm, err_norm);
     cv::imshow("nflow_errors", err_norm);
   }
-  if(true){
+  if(false){
     cv::Mat dst;
     cv::Mat tmp = VisualizeFlow(exp_flow);
     cv::addWeighted(rgb,.5,tmp,1.,1.,dst);
     cv::imshow("exp_flow", dst);
   }
-  if(true){
+  if(false){
     cv::Mat dst;
     cv::Mat tmp = VisualizeFlow(flow);
     cv::addWeighted(rgb,.5,tmp,1.,1.,dst);
     //cv::pyrDown(dst,dst);
     cv::imshow("flow", dst);
   }
-  if(true){
+  if(false){
     cv::Mat dst;
     disparity.convertTo(dst, CV_8UC1);
     cv::imshow("disp",  dst);

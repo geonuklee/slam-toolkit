@@ -24,11 +24,6 @@ cv::Mat FlowError2Edge(const cv::Mat flow_errors, const cv::Mat expd_diffedges, 
 }
 
 cv::Mat FlowDifference2Edge(cv::Mat score) {
-  /* 
-    1. Seed 판정 : score > high_threshold.
-    2. Seed 확장 : score > low_threshold 인 경우에 모두 확장.
-    - 거리 제한? : 이건 추후에 생각해보자..
-  */
   struct Node {
     int r_, c_;
     int lv_;
@@ -816,7 +811,7 @@ void DistanceWatershed(const cv::Mat _dist_fromedge,
         cv::line(_fg,pt0, pt1, 1, thick);
       }
 #else
-      float ed = 99999.;
+      float ed = std::max(_marker.rows, _marker.cols);
       for(const cv::Point& ipt : contours.at(i))
         ed = std::min(ed, _dist_fromedge.at<float>(ipt.y,ipt.x) );
       const cv::Point& pt = contours.at(i).at(0);

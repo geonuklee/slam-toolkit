@@ -279,51 +279,8 @@ cv::Mat GetDisparity(cv::cuda::GpuMat g_gray, cv::cuda::GpuMat g_gray_r){
 
 cv::Mat GetColoredLabel(cv::Mat mask, bool put_text){
   cv::Mat dst = cv::Mat::zeros(mask.rows, mask.cols, CV_8UC3);
-  std::map<int, cv::Point> annotated_lists;
 
-  cv::Mat connected_labels, stats, centroids;
-  cv::Mat binary = cv::Mat::zeros(mask.rows, mask.cols, CV_8UC1);
-  for(size_t i = 0; i < mask.rows; i++){
-    for(size_t j = 0; j < mask.cols; j++){
-      int idx;
-      if(mask.type() == CV_8UC1)
-        idx = mask.at<unsigned char>(i,j);
-      else if(mask.type() == CV_32S) // TODO Unify type of marker map to CV_32S
-        idx = mask.at<int>(i,j);
-      else
-        throw "Unexpected type";
-      if(idx > 1)
-        binary.at<unsigned char>(i,j) = 1;
-    }
-  }
-  cv::connectedComponentsWithStats(binary, connected_labels, stats, centroids, 4);
-
-  for(int i=0; i<stats.rows; i++) {
-    int x = centroids.at<double>(i, 0);
-    int y = centroids.at<double>(i, 1);
-    if(x < 0 or y < 0 or x >= mask.cols or y >= mask.cols)
-      continue;
-
-    int idx;
-    if(mask.type() == CV_8UC1)
-      idx = mask.at<unsigned char>(y,x);
-    else if(mask.type() == CV_32S) // TODO Unify type of marker map to CV_32S
-      idx = mask.at<int>(y,x);
-
-    if(idx > 1 && !annotated_lists.count(idx) ){
-      bool overlaped=false;
-      cv::Point pt(x,y);
-      for(auto it : annotated_lists){
-        cv::Point e(pt - it.second);
-        if(std::abs(e.x)+std::abs(e.y) < 20){
-          overlaped = true;
-          break;
-        }
-      }
-      if(!overlaped)
-        annotated_lists[idx] = pt;
-    }
-  }
+  std::set<int> labels;
 
   for(size_t i = 0; i < mask.rows; i++){
     for(size_t j = 0; j < mask.cols; j++){
@@ -351,30 +308,49 @@ cv::Mat GetColoredLabel(cv::Mat mask, bool put_text){
       dst.at<cv::Vec3b>(i,j)[1] = bgr[1];
       dst.at<cv::Vec3b>(i,j)[2] = bgr[2];
 
-      if(idx > 1 && !annotated_lists.count(idx) ){
-        bool overlaped=false;
-        cv::Point pt(j,i+10);
-        for(auto it : annotated_lists){
-          cv::Point e(pt - it.second);
-          if(std::abs(e.x)+std::abs(e.y) < 20){
-            overlaped = true;
-            break;
-          }
-        }
-        if(!overlaped)
-          annotated_lists[idx] = pt;
-      }
+      labels.insert(idx);
     }
   }
 
   if(put_text){
-    for(auto it : annotated_lists){
-      //cv::rectangle(dst, it.second+cv::Point(0,-10), it.second+cv::Point(20,0), CV_RGB(255,255,255), -1);
-      const auto& c0 = colors.at( it.first % colors.size() );
-      //const auto color = c0;
+    for(int l : labels){
+      cv::Mat fg = mask == l;
+      cv::rectangle(fg, cv::Rect(cv::Point(0,0), cv::Point(fg.cols-1,fg.rows-1)), false, 2);
+
+      cv::Mat dist;
+      cv::distanceTransform(fg, dist, cv::DIST_L2, cv::DIST_MASK_3);
+      double minv, maxv;
+      cv::Point minloc, maxloc;
+      cv::minMaxLoc(dist, &minv, &maxv, &minloc, &maxloc);
+      const auto& c0 = colors.at( l % colors.size() );
       const auto color = (c0[0]+c0[1]+c0[2] > 255*2) ? CV_RGB(0,0,0) : CV_RGB(255,255,255);
-      cv::putText(dst, std::to_string(it.first), it.second, cv::FONT_HERSHEY_SIMPLEX, 0.5, color);
+      cv::putText(dst, std::to_string(l), maxloc, cv::FONT_HERSHEY_SIMPLEX, 0.5, color);
     }
   }
   return dst;
 }
+
+cv::Mat GetBoundary(const cv::Mat marker, int w){
+  cv::Mat boundarymap = cv::Mat::zeros(marker.rows,marker.cols, CV_8UC1);
+  for(int r0 = 0; r0 < marker.rows; r0++){
+    for(int c0 = 0; c0 < marker.cols; c0++){
+      const int& i0 = marker.at<int>(r0,c0);
+      bool b = false;
+      for(int r1 = std::max(r0-w,0); r1 < std::min(r0+w,marker.rows); r1++){
+        for(int c1 = std::max(c0-w,0); c1 < std::min(c0+w,marker.cols); c1++){
+          const int& i1 = marker.at<int>(r1,c1);
+          b = i0 != i1;
+          if(b)
+            break;
+        }
+        if(b)
+          break;
+      }
+      if(!b)
+        continue;
+      boundarymap.at<unsigned char>(r0,c0) = true;
+    }
+  }
+  return boundarymap;
+}
+
