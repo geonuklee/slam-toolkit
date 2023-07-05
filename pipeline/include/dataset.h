@@ -37,7 +37,8 @@ public:
   virtual cv::Mat GetImage(int i) const = 0;
   virtual int Size() const = 0;
   virtual const Camera* GetCamera() const = 0;
-  virtual ORB_SLAM2::ORBextractor* GetExtractor() const = 0; // Suggest proper extractor for given dataset
+
+  //virtual ORB_SLAM2::ORBextractor* GetExtractor() const = 0; // Suggest proper extractor for given dataset
 };
 
 class StereoDataset : public Dataset{
@@ -58,7 +59,8 @@ public:
   virtual const EigenMap<int, g2o::SE3Quat>& GetTcws() const;
   virtual const Camera* GetCamera() const;
 
-  virtual ORB_SLAM2::ORBextractor* GetExtractor() const;
+  // virtual ORB_SLAM2::ORBextractor* GetExtractor() const;
+  //ORB_SLAM2::ORBextractor* extractor_;
 private:
   std::map<int, std::string> im0_filenames_;
   std::map<int, std::string> im1_filenames_;
@@ -66,7 +68,6 @@ private:
   EigenMap<int, g2o::SE3Quat> Tcws_;
 
   StereoCamera* camera_;
-  ORB_SLAM2::ORBextractor* extractor_;
 };
 
 #endif

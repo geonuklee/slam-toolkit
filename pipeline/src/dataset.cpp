@@ -24,13 +24,8 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include "dataset.h"
 #include "orb_extractor.h"
 
+/*
 ORB_SLAM2::ORBextractor* KittiDataset::GetExtractor() const {
-  return extractor_;
-}
-
-KittiDataset::KittiDataset(std::string seq)
-  : extractor_(nullptr)
-{
   {
     int nfeatures = 2000;
     float scale_factor = 1.2;
@@ -45,6 +40,13 @@ KittiDataset::KittiDataset(std::string seq)
                                     initial_fast_th,
                                     min_fast_th);
   }
+
+  return extractor_;
+}
+*/
+
+KittiDataset::KittiDataset(std::string seq)
+{
   std::string dataset_path = GetPackageDir() + "/kitti_odometry_dataset";
   std::string im0_path = dataset_path+"/sequences/"+seq+"/image_0";
   std::string im1_path = dataset_path+"/sequences/"+seq+"/image_1";
@@ -106,8 +108,6 @@ KittiDataset::KittiDataset(std::string seq)
 }
 
 KittiDataset::~KittiDataset(){
-  if(extractor_)
-    delete extractor_;
   delete camera_;
 }
 

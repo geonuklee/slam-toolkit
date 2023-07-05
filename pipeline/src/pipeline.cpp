@@ -58,7 +58,7 @@ ORB_SLAM2::ORBextractor* CreateExtractor(){
 }
 
 ORB_SLAM2::ORBVocabulary* CreateVocabulary(){
-  std::string fn = GetPackageDir()+"/thirdparty/ORBvoc.txt";
+  std::string fn = GetPackageDir()+"/../thirdparty/ORBvoc.txt";
   ORB_SLAM2::ORBVocabulary* ptr = new ORB_SLAM2::ORBVocabulary();
   if(!ptr->loadFromTextFile(fn) ){
     throw std::invalid_argument("Load ORBVoc failure");
