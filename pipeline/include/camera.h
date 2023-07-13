@@ -47,6 +47,8 @@ public:
   int GetWidth() const { return width_; }
   int GetHeight() const { return height_; }
 
+  virtual std::string GetType() const { return "mono"; }
+
 protected:
 
   const int width_;
@@ -65,16 +67,21 @@ public:
                const g2o::SE3Quat& Trl,
                int width, int height
                );
-
   const g2o::SE3Quat& GetTrl() const { return Trl_; }
+  virtual std::string GetType() const { return "stereo"; }
 
 protected:
   const g2o::SE3Quat Trl_;
   const Eigen::Matrix<double,3,3> Kr_;
   const Eigen::VectorXd Dr_;
-
 };
 
+class DepthCamera : public Camera {
+public:
+  virtual ~DepthCamera() {}
+  DepthCamera(const Eigen::Matrix<double,3,3>& K, const Eigen::VectorXd& D, int width, int height);
+  virtual std::string GetType() const { return "depth"; }
+};
 
 
 #endif

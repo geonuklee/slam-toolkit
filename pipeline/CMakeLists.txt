@@ -52,8 +52,10 @@ include_directories(${Qt5Widgets_INCLUDE_DIRS})
 find_package(GTest REQUIRED)
 include_directories(${GTEST_INCLUDE_DIRS})
 
-set(CMAKE_CXX_STANDARD 14)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -pthread -fdiagnostics-color=always")
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -fdiagnostics-color=always")
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fopenmp") # Forbid it with direct method.
 
 add_definitions(-DPACKAGE_DIR="${CMAKE_SOURCE_DIR}")
@@ -81,6 +83,7 @@ optimized g2o_types_sba
 debug g2o_core_d
 debug g2o_stuff_d
 debug g2o_types_sba_d
+stdc++fs
 )
 
 

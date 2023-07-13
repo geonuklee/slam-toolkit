@@ -34,7 +34,7 @@ class ORBextractor;
 class Dataset {
 public:
   virtual const EigenMap<int, g2o::SE3Quat>& GetTcws() const = 0;
-  virtual cv::Mat GetImage(int i) const = 0;
+  virtual cv::Mat GetImage(int i, int flags=cv::IMREAD_GRAYSCALE) const = 0;
   virtual int Size() const = 0;
   virtual const Camera* GetCamera() const = 0;
 
@@ -43,18 +43,20 @@ public:
 
 class StereoDataset : public Dataset{
 public:
-  virtual cv::Mat GetRightImage(int i) const = 0;
+  virtual cv::Mat GetRightImage(int i, int flags=cv::IMREAD_GRAYSCALE) const = 0;
 
 protected:
 };
 
 class KittiDataset : public StereoDataset {
 public:
-  KittiDataset(std::string seq);
+  KittiDataset(std::string seq, std::string dataset_path="");
   virtual ~KittiDataset();
 
-  virtual cv::Mat GetImage(int i) const;
-  virtual cv::Mat GetRightImage(int i) const; 
+  virtual cv::Mat GetImage(int i, int flags=cv::IMREAD_GRAYSCALE) const;
+  virtual cv::Mat GetRightImage(int i, int flags=cv::IMREAD_GRAYSCALE) const; 
+  virtual cv::Mat GetDepthImage(int i) const;
+
   virtual int Size() const;
   virtual const EigenMap<int, g2o::SE3Quat>& GetTcws() const;
   virtual const Camera* GetCamera() const;
@@ -64,10 +66,11 @@ public:
 private:
   std::map<int, std::string> im0_filenames_;
   std::map<int, std::string> im1_filenames_;
+  std::map<int, std::string> depth_filenames_;
 
   EigenMap<int, g2o::SE3Quat> Tcws_;
 
-  StereoCamera* camera_;
+  Camera* camera_; // TODO Steroe, Depth, etc..
 };
 
 #endif

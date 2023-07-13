@@ -1,10 +1,6 @@
 #!/usr/bin/python3
 #-*- coding:utf-8 -*-
 
-'''
-    Reference : https://github.com/waymo-research/waymo-open-dataset/blob/master/tutorial/tutorial.ipynb
-'''
-
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
@@ -15,174 +11,35 @@ import itertools
 tf.enable_eager_execution()
 
 from waymo_open_dataset.utils import range_image_utils
-from waymo_open_dataset.utils import transform_utils
-from waymo_open_dataset.utils import  frame_utils
+from waymo_open_dataset.utils import frame_utils
 from waymo_open_dataset import dataset_pb2 as open_dataset
-
-import matplotlib.pyplot as plt
 import cv2
+import time
+import argparse
+from os import path as osp
+from shutil import rmtree
 
-def rgba(d):
-    """Generates a color based on range.
+from depth_map import dense_map
+from scipy.spatial.transform import Rotation
 
-    Args:
-      d: the depth value of a given point.
-    Returns:
-      The color for a given depth
-    """
-    c = plt.get_cmap('jet')((d % 20.0) / 20.0)
-    c = list(c)
-    c[-1] = 0.5  # alpha
-    return c
-
-def plot_image(camera_image):
-    """Plot a cmaera image."""
-    plt.figure(figsize=(20, 12))
-    plt.imshow(tf.image.decode_jpeg(camera_image.image))
-    plt.grid("off")
-    return
-
-def plot_points_on_image(projected_points, camera_image, rgba_func,
-        point_size=5.0):
-    plot_image(camera_image)
-    xs = []
-    ys = []
-    colors = []
-    for point in projected_points:
-        xs.append(point[0])  # width, col
-        ys.append(point[1])  # height, row
-        colors.append(rgba_func(point[2]))
-    plt.scatter(xs, ys, c=colors, s=point_size, edgecolors="none")
-    return
-
-
-def func1():
-    # Reference : https://github.com/waymo-research/waymo-open-dataset/blob/master/tutorial/tutorial.ipynb
-    FILENAME = '/home/geo/ws/slam-toolkit/thirdparty/segment-10203656353524179475_7625_000_7645_000_with_camera_labels.tfrecord'
-    dataset = tf.data.TFRecordDataset(FILENAME, compression_type='')
-    for data in dataset:
-        frame = open_dataset.Frame()
-        frame.ParseFromString(bytearray(data.numpy()))
-        (range_images, camera_projections, _, range_image_top_pose) = frame_utils.parse_range_image_and_camera_projection(frame)
-        # points : {[N,3]} 3d lidar points
-        # cp_poitns {[N,6]} list of camera projections of length n(lidar)
-        points, cp_points = frame_utils.convert_range_image_to_point_cloud(
-                frame,
-                range_images,
-                camera_projections,
-                range_image_top_pose)
-        points_ri2, cp_points_ri2 = frame_utils.convert_range_image_to_point_cloud(
-                frame,
-                range_images,
-                camera_projections,
-                range_image_top_pose,
-                ri_index=1)
-        # 3d points in vehicle frame.
-        points_all = np.concatenate(points, axis=0)
-        points_all_ri2 = np.concatenate(points_ri2, axis=0)
-        # camera projection corresponding to each point.
-        cp_points_all = np.concatenate(cp_points, axis=0)
-        cp_points_all_ri2 = np.concatenate(cp_points_ri2, axis=0)
-        images = sorted(frame.images, key=lambda i:i.name)
-        cp_points_all_concat = np.concatenate([cp_points_all, points_all], axis=-1)
-        cp_points_all_concat_tensor = tf.constant(cp_points_all_concat)
-        _cp_points_all_tensor = tf.constant(cp_points_all, dtype=tf.int32)
-
-        # range_all_tensor = tf.norm(points_all, axis=-1, keepdims=True)
-        for index, image in enumerate(frame.images): 
-            # frame.images.name != frame.context.lidars.name 임을 주의.
-            # ref : https://github.com/waymo-research/waymo-open-dataset/blob/656f759070a7b1356f9f0403b17cd85323e0626c/src/waymo_open_dataset/dataset.proto
-            str_name = open_dataset.CameraName.Name.Name(image.name)
-            if str_name != 'FRONT':
-                continue
-            mask = tf.equal(_cp_points_all_tensor[..., 0], image.name)
-            cp_points_all_tensor = tf.cast(tf.gather_nd(
-                _cp_points_all_tensor, tf.where(mask)), dtype=tf.float32)
-            #range_all_tensor = tf.gather_nd(range_all_tensor, tf.where(mask))
-            # TODO points_all은 vechile frame이지 camera frame이 아니다...
-            # ref : https://github.com/waymo-research/waymo-open-dataset/blob/656f759070a7b1356f9f0403b17cd85323e0626c/src/waymo_open_dataset/utils/range_image_utils.py#L388
-            depth_all_tensor = cp_points_all_tensor[...,3:4]
-
-            # cp_points_all_tensor의 1,2 (1:2)는 는 각각 projected image u, v
-            projected_points_all_from_raw_data \
-                    = tf.concat([cp_points_all_tensor[..., 1:3], depth_all_tensor], axis=-1).numpy()
-            plot_points_on_image(projected_points_all_from_raw_data, image, rgba, point_size=5.0)
-            plt.show()
-        break # Break data
-
-# From Github https://github.com/balcilar/DenseDepthMap
-def dense_map(Pts, n, m, grid):
-    ng = 2 * grid + 1
-    mX = np.zeros((m,n)) + np.float("inf")
-    mY = np.zeros((m,n)) + np.float("inf")
-    mD = np.zeros((m,n))
-    mX[np.int32(Pts[1]),np.int32(Pts[0])] = Pts[0] - np.round(Pts[0])
-    mY[np.int32(Pts[1]),np.int32(Pts[0])] = Pts[1] - np.round(Pts[1])
-    mD[np.int32(Pts[1]),np.int32(Pts[0])] = Pts[2]
-    KmX = np.zeros((ng, ng, m - ng, n - ng))
-    KmY = np.zeros((ng, ng, m - ng, n - ng))
-    KmD = np.zeros((ng, ng, m - ng, n - ng))
-    for i in range(ng):
-        for j in range(ng):
-            KmX[i,j] = mX[i : (m - ng + i), j : (n - ng + j)] - grid - 1 +i
-            KmY[i,j] = mY[i : (m - ng + i), j : (n - ng + j)] - grid - 1 +i
-            KmD[i,j] = mD[i : (m - ng + i), j : (n - ng + j)]
-    S = np.zeros_like(KmD[0,0])
-    Y = np.zeros_like(KmD[0,0])
-    for i in range(ng):
-        for j in range(ng):
-            s = 1/np.sqrt(KmX[i,j] * KmX[i,j] + KmY[i,j] * KmY[i,j])
-            Y = Y + s * KmD[i,j]
-            S = S + s
-    S[S == 0] = 1
-    out = np.zeros((m,n))
-    out[grid + 1 : -grid, grid + 1 : -grid] = Y/S
-    return out
-
-def get_camera_points(range_image_cartesian,
+def get_uvz_points(range_image_cartesian,
         extrinsic,
         camera_projection,
-        camera_image_size,
         camera_name,
         pool_method=tf.math.unsorted_segment_min,
         scale=.5,
         scope=None):
-    # ref : range_image_utils.build_camera_depth_image
-    '''
-    Args:
-      range_image_cartesian: [B, H, W, 3] tensor. Range image points in vehicle
-        frame. Note that if the range image is provided by pixel_pose, then you
-        can optionally pass in the cartesian coordinates in each pixel frame.
-      extrinsic: [B, 4, 4] tensor. Camera extrinsic.
-      camera_projection: [B, H, W, 6] tensor. Each range image pixel is associated
-        with at most two camera projections. See dataset.proto for more details.
-      camera_image_size: a list of [height, width] integers.
-      camera_name: an integer that identifies a camera. See dataset.proto.
-      pool_method: pooling method when multiple lidar points are projected to one
-        image pixel.
-      scope: the name scope.
-
-    Returns:
-    TODO
-    '''
     with tf.compat.v1.name_scope(scope, 'BuildCameraDepthImage',
                     [range_image_cartesian, extrinsic, camera_projection]):
-        # [B, 4, 4]
-        vehicle_to_camera = tf.linalg.inv(extrinsic)
-        # [B, 3, 3]
-        vehicle_to_camera_rotation = vehicle_to_camera[:, 0:3, 0:3]
-        # [B, 3]
-        vehicle_to_camera_translation = vehicle_to_camera[:, 0:3, 3]
-        # [B, H, W, 3]
-        # 여기가 xyz(range_image_cartesian, [B,H,W,3]) 의 vehicle->camera 좌표변환
+        vehicle_to_camera = tf.linalg.inv(extrinsic) # [B=1,4,4]
+        vehicle_to_camera_rotation = vehicle_to_camera[:, 0:3, 0:3] # [B=1,3,3]
+        vehicle_to_camera_translation = vehicle_to_camera[:, 0:3, 3] # [B=1,3]
+        # xyz(range_image_cartesian, [B,H,W,3]) 의 vehicle->camera 좌표변환
         range_image_camera = tf.einsum(
                         'bij,bhwj->bhwi', vehicle_to_camera_rotation,
                         range_image_cartesian) + vehicle_to_camera_translation[:, tf.newaxis,
-                                        tf.newaxis, :]
-        # [B, H, W]
-        range_image_camera_norm = tf.norm(tensor=range_image_camera, axis=-1)
-        # TODO norm 대신 [...,2]
-
+                                        tf.newaxis, :] # [B=1,H,W,3]
+        # Computing camera_projection_mask
         camera_projection_mask_1 = tf.tile(
                         tf.equal(camera_projection[..., 0:1], camera_name), [1, 1, 1, 2])
         camera_projection_mask_2 = tf.tile(
@@ -200,52 +57,120 @@ def get_camera_points(range_image_cartesian,
         camera_projection_mask = tf.logical_or(camera_projection_mask_1,
                         camera_projection_mask_2)[..., 0]
 
-        def fn(args):
-            """Builds depth image for a single frame."""
-            # NOTE: Do not use ri_range > 0 as mask as missing range image pixels are
-            # not necessarily populated as range = 0.
-            mask, ri_range, cp = args
-            mask_ids = tf.compat.v1.where(mask)
-            index = tf.gather_nd(
-                            tf.stack([cp[..., 1], cp[..., 0]], axis=-1), mask_ids)
-            value = tf.gather_nd(ri_range, mask_ids)
-            return range_image_utils.scatter_nd_with_pool(index, value, camera_image_size, pool_method)
-
-    # range image의 norm을 맵핑하는 scatter 대신 dense_map을 호출할 방법이 필요하다... 
-    # TODO -> 그러므로 'xyz_cam' points를 구하는 함수필요. scatter pool 거창한 결과물 말고
-    # 그러고나서 dense_map(pts, width,height,grid=8) 호출하면 끝
-    #import pdb; pdb.set_trace()
-    # range_image_camera      : 1, 64, 2650, 3
-    # range_image_camera_norm : 1, 64, 2650
-    # camera_projection_mask  : 1, 64, 2650
+    # range image의 norm을 맵핑하는 scatter 대신 dense_map을 호출할 방법이 필요해서,
+    # range_image_camera         : 1, 64, 2650, 3
+    # range_image_camera_norm    : 1, 64, 2650
+    # camera_projection_mask     : 1, 64, 2650
     # camera_projection_selected : 1, 64, 2650, 2
-    # 1) waymodataset은 x축을 깊이방향 좌표계로 삼고있었다. notion 참고!
-    # 그리고 dense_map의 pts는 u,v,z다 . (x,y,z)가 아니라
-    pts0 = tf.boolean_mask(range_image_camera, camera_projection_mask).numpy()
+
+    # 1) waymodataset은 x축을 깊이방향 좌표계로 삼고있었다.
+    # 2) 그리고 dense_map의 pts는 u,v,z다 . (x,y,z)가 아니라
+    Xc = tf.boolean_mask(range_image_camera, camera_projection_mask).numpy()
     uv = tf.boolean_mask(camera_projection[...,1:3], camera_projection_mask).numpy()
     uv = scale * uv
-    width = int(scale*camera_image_size[1])
-    height = int(scale*camera_image_size[0])
-    pts  = np.hstack([uv,pts0[:,0].reshape(-1,1)])
+    uvz_points  = np.hstack([uv,Xc[:,0].reshape(-1,1)]) # Waymodatset은 depth를 x-axis에 할당함.
+    return uvz_points
 
-    # 이게 오래걸린다
-    depth =  dense_map(pts.T, width, height, grid=2)
-    #depth = tf.map_fn(fn,
-    #        elems=[camera_projection_mask, range_image_camera_norm, camera_projection_selected],
-    #        dtype=range_image_camera_norm.dtype,
-    #        back_prop=False).numpy()[0,:,:]
-    #import pdb; pdb.set_trace()
-    return depth 
+def parse_depth(range_image_cartesian,
+                camera_projections,
+                image_name,
+                camera_image_shape,
+                extrinsic,
+                use_inpaint,
+                verbose,
+                depth_compute_scale = .25
+                ):
+    # depth_compute_scale : desne_depth의 projection계산부담을 줄이기위해 intrinsic의 scale을 낮추는 이미지 배율
 
+    # ric : range image cartesian (reshaped as [batch,w,h,channel] tensor) 
+    ric_shape = range_image_cartesian[image_name].shape
+    ric = np.reshape(range_image_cartesian[image_name], [1, ric_shape[0], ric_shape[1], ric_shape[2]])
 
+    cp = camera_projections[image_name][0]
+    cp_tensor = tf.reshape(tf.convert_to_tensor(value=cp.data), cp.shape.dims)
+    cp_shape = cp_tensor.shape
+    cp_tensor = np.reshape(cp_tensor, [1, cp_shape[0], cp_shape[1], cp_shape[2]])
 
-def func2():
-    # build depth image
-    # ref1 for waymo : https://github.com/waymo-research/waymo-open-dataset/issues/650
-    # ref2 for dense depth : https://github.com/BerensRWU/DenseMap/blob/main/depth_map.py
-    FILENAME = '/home/geo/ws/slam-toolkit/thirdparty/segment-10203656353524179475_7625_000_7645_000_with_camera_labels.tfrecord'
-    dataset = tf.data.TFRecordDataset(FILENAME, compression_type='')
+    '''
+    다음 두 코드가 모두 dense depth map을 획득하는데 부적합해서 선언한 함수의 호출.
+    1) range_image_utils.build_camera_depth_image
+        : 'range (sqrt(x^2+y^2+z^2))'를 낱개의 image pixel에 맵핑, sparse range image를 만든다.
+    2) https://github.com/waymo-research/waymo-open-dataset/blob/master/tutorial/tutorial.ipynb
+        : 마찬가지로 'range'를 visualization한 projected points를 rgb 이미지 위해 뿌려 visualization만 수행한다.
+    따라서 sqrt(x^2+y^2+z^2) 대신 'z'값을 밀집한 깊이 이미지를 만들어야 한다.
+    '''
+    # uvz__points (Nx3) : [:,:2]는 projected image point, [:,2]는 cv의 notation을 따르는 camera좌표계에서 z값.
+    uvz_points = get_uvz_points(ric, extrinsic, cp_tensor, image_name,scale=depth_compute_scale)
+    sw = int(depth_compute_scale*camera_image_shape[1])
+    sh = int(depth_compute_scale*camera_image_shape[0])
+    depth =  dense_map(uvz_points.T, sw, sh, grid=2).astype(np.float32) # 이게 오래걸린다
+
+    if use_inpaint:
+        m0 = ~(depth < 1000.)
+        m1 = depth < 0.001
+        dist = cv2.distanceTransform( (m1).astype(np.uint8), distanceType=cv2.DIST_L2, maskSize=5)
+        m1d = np.logical_and(dist<2.,m1)
+        m = np.logical_or(m0,m1d)
+        depth = cv2.inpaint(depth,m.astype(np.uint8),3, cv2.INPAINT_TELEA)
+
+    #depth = cv2.resize(depth, (camera_image_shape[1], camera_image_shape[0]), interpolation=cv2.INTER_NEAREST)
+    return depth
+
+def InverseTransfrom(R, tvec):
+    #return mR.T, -np.matmul(mR.T, tvec)
+    return R.inv(), -R.inv().apply(tvec)
+
+def MultTransform(Ra, ta, Rb, tb):
+    #return np.matmul(mRa,mRb), np.matmul(mRa,tb)+ta
+    return Ra*Rb, Ra.apply(tb)+ta
+
+def Transform2str(R, t):
+    Twc = np.hstack((R.as_matrix(),t.reshape(-1,1))).reshape((-1,))
+    msg = ''
+    for elem in Twc:
+        msg += ' %e'%elem
+    msg = msg[1:]
+    return msg
+
+def parse_tfrecord(filename, use_inpaint=True,verbose=True):
+    # Reference : https://github.com/waymo-research/waymo-open-dataset/blob/master/tutorial/tutorial.ipynb
+    depth_compute_scale = .25
+
+    dataset = tf.data.TFRecordDataset(filename, compression_type='')
+    fdtype = np.float32
+    RWw, tWw = None, None
+    # RcC : Fix coordinate system as {opencv camera} <- {waymo Camera}
+    RcC = np.array( [0., -1., 0.,
+                     0., 0., -1.,
+                     1., 0., 0.], dtype=fdtype).reshape((3,3))
+    RcC = Rotation.from_matrix(RcC)
+
+    output_dir = 'output'
+    poses_dir = osp.join(output_dir,'poses')
+    sequences_dir = osp.join(output_dir,'sequences')
+
+    if not osp.exists(output_dir):
+        os.mkdir(output_dir)
+        os.mkdir(poses_dir)
+        os.mkdir(sequences_dir)
+
+    seq_name = osp.splitext(osp.basename(filename))[0]
+    seq_dir = osp.join(sequences_dir,seq_name)
+    pos_fn  = osp.join(poses_dir, seq_name+'.txt')
+    if osp.exists(seq_dir):
+        rmtree(seq_dir)
+    if osp.exists(pos_fn):
+        os.remove(pos_fn)
+    os.mkdir(seq_dir)
+    calib_fn = osp.join(seq_dir, 'calib.txt')
+    im_dir   = osp.join(seq_dir, 'image_0')
+    depth_dir= osp.join(seq_dir, 'depth_0') # TODO KITTI directory structure for depth?
+    os.mkdir(im_dir)
+    os.mkdir(depth_dir)
+    f_pos = open(pos_fn, 'w')
+    i_frame = 0
     for data in dataset:
+        t0 = time.time()
         frame = open_dataset.Frame()
         frame.ParseFromString(bytearray(data.numpy()))
         (range_images, camera_projections, _, range_image_top_pose) = frame_utils.parse_range_image_and_camera_projection(frame)
@@ -254,42 +179,120 @@ def func2():
                 range_image_top_pose,
                 ri_index=0,
                 keep_polar_features=False)
+
+        # ref : https://github.com/waymo-research/waymo-open-dataset/blob/master/tutorial/tutorial_camera_only.ipynb
+        # Denote : Waymodataset은 차량,카메라의 전방이 'x' axis로 좌표를 할당
+        # TWv : {waymo World} <- {vehicle}
+        TWv = np.array(frame.pose.transform).reshape(4, 4).astype(fdtype) # Transform into world from vehicle coordinate system.
+        RWv, tWv = Rotation.from_matrix(TWv[:3,:3]), TWv[:3,-1]
+        RvW, tvW = InverseTransfrom(RWv, tWv)
+
+        ccalib = None
         for im in frame.images:
             camera_name = open_dataset.CameraName.Name.Name(im.name)
             if camera_name != 'FRONT':
                 continue
-            extrinsic = np.reshape(frame.context.camera_calibrations[im.name-1].extrinsic.transform, [1,4,4]).astype(np.float32)
-            camera_image_size = (frame.context.camera_calibrations[im.name-1].height, frame.context.camera_calibrations[im.name-1].width)                
-            ric_shape = range_image_cartesian[im.name].shape
-            ric = np.reshape(range_image_cartesian[im.name], [1, ric_shape[0], ric_shape[1], ric_shape[2]])
+            if ccalib is None:
+                ccalib = frame.context.camera_calibrations[im.name-1]
+                # ref) https://github.com/waymo-research/waymo-open-dataset/blob/master/src/waymo_open_dataset/dataset.proto#L93
+                # calib.intrinsic : 1d Array of [f_u,f_v,c_u,c_v, k1,k2,p1,p2,k3].
+                fu,fv,cu,cv,k1,k2,p1,p2,k3 = ccalib.intrinsic
+                K0 = np.array([fu, 0.,cu, 0.,fv,cv, 0.,0.,1.]).reshape((3,3))
+                D0 = np.array([k1,k2,p1,p2,k3])
+                output_scale = .5
+                output_size = int(output_scale*ccalib.width), int(output_scale*ccalib.height)
+                K, _ = cv2.getOptimalNewCameraMatrix(K0, D0,
+                                                    (ccalib.width, ccalib.height), 0.,
+                                                    output_size)
+                rgb_mapx, rgb_mapy = cv2.initUndistortRectifyMap(K0,D0,None,K,output_size,cv2.CV_32FC1)
+                K0[:2,:] *= depth_compute_scale
+                depth_mapx, depth_mapy = cv2.initUndistortRectifyMap(K0,D0,None,K,output_size,cv2.CV_32FC1)
+                camera_image_shape = (ccalib.height, ccalib.width)
 
-            cp = camera_projections[im.name][0]
-            cp_tensor = tf.reshape(tf.convert_to_tensor(value=cp.data), cp.shape.dims)
-            cp_shape = cp_tensor.shape
-            cp_tensor = np.reshape(cp_tensor, [1, cp_shape[0], cp_shape[1], cp_shape[2]])
+                with open(calib_fn,'w') as f:
+                    # TODO intrinsic as newK
+                    msg = "P0:"
+                    P = np.hstack((K,np.zeros((3,1),dtype=K.dtype))).reshape(-1,).tolist()
+                    for p in P:
+                        msg += ' %e'%p
+                    f.write(msg)
 
-            depth = get_camera_points(ric, extrinsic, cp_tensor, camera_image_size, im.name,scale=.25)
-            cv_im = tf.image.decode_jpeg(im.image).numpy()
-            cv_im = cv2.cvtColor(cv_im, cv2.COLOR_RGB2BGR)
-            cv_im = cv2.resize(cv_im, (640,480) )
-            ## TODO dense map함수 선언 : https://github.com/BerensRWU/DenseMap/blob/main/depth_map.py
-            #depth = range_image_utils.build_camera_depth_image(ric,
-            #             extrinsic,
-            #             cp_tensor,
-            #             camera_image_size,
-            #             im.name).numpy()[0,:,:]
-            #depth = cv2.pyrDown(depth)
-            ndepth = cv2.normalize(depth,None, 0,1,cv2.NORM_MINMAX)*255
-            ndepth = ndepth.astype(np.uint8)
-            cv2.imshow("depth", ndepth)
-            cv2.imshow("rgb", cv_im)
-            c = cv2.waitKey(1)
-            if(ord('q') == c):
+            # TCv : {waymo Camera} <- {vehicle}
+            TCv = np.reshape(ccalib.extrinsic.transform,
+                    [4,4]).astype(fdtype)
+            Rcv, tcv = MultTransform(RcC,np.zeros_like(tWv),
+                                    Rotation.from_matrix(TCv[:3,:3]), TCv[:3,-1])
+
+            # TcW = Tcv * TvW : {oepncv camera} <- {waymo World}
+            RcW,tcW = MultTransform(Rcv,tcv,RvW,tvW)
+            if RWw is None:
+                # TWw = TcW.inv() : {waymo World} <- {kitti world}
+                RWw, tWw = InverseTransfrom(RcW, tcW)
+                Rcw, tcw = Rotation.from_matrix(np.eye(3)), np.zeros_like(tWv)
+            else:
+                # Tcw = TcW * TWw : {opencv camera} <- {kitti world}
+                Rcw, tcw = MultTransform(RcW,tcW, RWw,tWw)
+
+            Rwc, twc = InverseTransfrom(Rcw, tcw)
+            msg = Transform2str(Rwc,twc) + "\n"
+            # Twc 값을 row major로 풀어서, pos_fn에 저장
+            f_pos.write(msg)
+            f_pos.flush()
+            # Verbose camera translation
+            #print('twc = %.3f, %.3f, %.3f' % ( twc[0], twc[1], twc[2]) )
+
+            rgb = tf.image.decode_jpeg(im.image).numpy()
+            rgb = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+            depth = parse_depth(range_image_cartesian,
+                                camera_projections,
+                                im.name,
+                                camera_image_shape,
+                                np.reshape(TCv, [1,4,4]),
+                                use_inpaint,
+                                verbose,
+                                depth_compute_scale)
+            # Rectification
+            rgb = cv2.remap(rgb, rgb_mapx,rgb_mapy,cv2.INTER_NEAREST)
+            depth = cv2.remap(depth, depth_mapx,depth_mapy,cv2.INTER_NEAREST)
+
+            # TODO 06d?
+            cv2.imwrite(osp.join(im_dir,   '%06d.png'%i_frame), rgb)
+            cv2.imwrite(osp.join(depth_dir,'%06d.png'%i_frame), depth)
+            i_frame += 1
+            if(i_frame >= 1e+6):
+                print("Unexpected number of frames.")
                 exit(1)
+
+            '''
+                TODO
+                * [x] Resize depth for given intrinsic
+                * [x] Poses for Tcw
+                * [x] extrinsic, distortion as np.array
+                    * [x] Rectification
+                * [x] pos_fn 저장
+                * [x] calib.txt 저장
+                * [x] image_0, depth_0 저장
+                * [x] calib.txt 불러오기
+                * [ ] Batch dataset download code ref https://github.com/RalphMao/Waymo-Dataset-Tool
+            '''
+
+            if verbose:
+                vis_depth = cv2.normalize(depth,None, 0,1,cv2.NORM_MINMAX)*255
+                vis_depth = vis_depth.astype(np.uint8)
+                cv2.imshow("depth", vis_depth)
+                cv2.imshow("rgb",   rgb)
+                c = cv2.waitKey(1)
+                if(ord('q') == c):
+                    exit(1)
+                #print("etime = %.2f [sec]"%(time.time()-t0) )
     print("done")
-    cv2.waitKey()
     return
 
 if __name__ == '__main__':
-    #func1()
-    func2()
+    parser = argparse.ArgumentParser(description='Parse tfrecord of waymo as KITTI format')
+    parser.add_argument('--filename', help="The filename of the tfrecord",
+            default='segment-10203656353524179475_7625_000_7645_000_with_camera_labels.tfrecord') 
+    args = parser.parse_args()
+    filename = args.filename
+    parse_tfrecord(filename)

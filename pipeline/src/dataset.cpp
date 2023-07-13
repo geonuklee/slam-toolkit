@@ -23,6 +23,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 
 #include "dataset.h"
 #include "orb_extractor.h"
+#include <filesystem>
 
 /*
 ORB_SLAM2::ORBextractor* KittiDataset::GetExtractor() const {
@@ -45,12 +46,15 @@ ORB_SLAM2::ORBextractor* KittiDataset::GetExtractor() const {
 }
 */
 
-KittiDataset::KittiDataset(std::string seq)
+KittiDataset::KittiDataset(std::string seq, std::string dataset_path)
+  : camera_(nullptr)
 {
-  std::string dataset_path = GetPackageDir() + "/kitti_odometry_dataset";
-  std::string im0_path = dataset_path+"/sequences/"+seq+"/image_0";
-  std::string im1_path = dataset_path+"/sequences/"+seq+"/image_1";
-  boost::filesystem::directory_iterator it{im0_path}, end;
+  if(dataset_path.empty())
+    dataset_path = GetPackageDir() + "/kitti_odometry_dataset";
+  std::string im0_path   = dataset_path+"/sequences/"+seq+"/image_0";
+  std::string im1_path   = dataset_path+"/sequences/"+seq+"/image_1";
+  std::string depth_path = dataset_path+"/sequences/"+seq+"/depth_0";
+  std::filesystem::directory_iterator it{im0_path}, end;
   for(; it != end; it++){
     std::string str = it->path().filename().stem().string();
     if(it->path().filename().extension() != ".png"){
@@ -61,7 +65,10 @@ KittiDataset::KittiDataset(std::string seq)
     }
     size_t i = std::stoi(str);
     im0_filenames_[i] = it->path().string();
-    im1_filenames_[i] = im1_path+"/" + it->path().filename().string();
+    if( std::filesystem::exists(im1_path) )
+      im1_filenames_[i] = im1_path+"/" + it->path().filename().string();
+    if( std::filesystem::exists(depth_path) )
+      depth_filenames_[i] = depth_path+"/" + it->path().filename().string();
   }
 
   const std::string fn_poses  = dataset_path + "/poses/"+seq+".txt";
@@ -86,42 +93,73 @@ KittiDataset::KittiDataset(std::string seq)
     }
   }
 
-  Eigen::Matrix<double,3,3> K;
-  g2o::SE3Quat Trl;
-  K << 7.188560000000e+02, 0., 6.071928e+02,
-      0., 7.188560000000e+02, 1.852157000000e+02,
-      0., 0., 1.;
+  EigenMap<std::string, Eigen::Matrix<double,3,4> > Projections; {
+    std::string calib_path = dataset_path+"/sequences/"+seq+"/calib.txt";
+    std::ifstream file(calib_path);
+    std::string line;
 
+    while (std::getline(file, line)) {
+      std::istringstream iss(line);
+      std::string name;
+      iss >> name;
+      name = name.substr(0, name.size() - 1);
+      Eigen::Matrix<double,3,4> P;
+      for(int r=0; r<P.rows(); r++){
+        for(int c=0; c<P.cols(); c++){
+          double value;
+          iss >> value;
+          P(r,c) = value;
+        }
+      }
+      Projections[name] = P;
+    }
+  }
+
+  Eigen::Matrix<double,3,3> K = Projections.at("P0").block<3,3>(0,0);
   Eigen::Matrix<double,4,1> D;
   D.setZero();
-
-  Eigen::Matrix<double,3,4> P1; // KR | Kt
-  P1 << 7.188560000000e+02, 0.000000000000e+00, 6.071928000000e+02, -3.861448000000e+02,
-     0.000000000000e+00, 7.188560000000e+02, 1.852157000000e+02, 0.000000000000e+00,
-     0.000000000000e+00, 0.000000000000e+00, 1.000000000000e+00, 0.000000000000e+00;
-  auto t = K.inverse() * P1.block<3,1>(0,3);
-  Trl.setTranslation(t);
-
-  int width = 1241;
-  int height = 376;
-  camera_ = new StereoCamera(K, D, K, D, Trl, width, height);
+  cv::Mat im = GetImage(0);
+  int width  = im.cols;
+  int height = im.rows;
+  if( std::filesystem::exists(im1_path) ){
+    // Stereo vision
+    const Eigen::Matrix<double,3,4>& P1 = Projections.at("P1");
+    auto t = K.inverse() * P1.block<3,1>(0,3);
+    g2o::SE3Quat Trl;
+    Trl.setTranslation(t);
+    camera_ = new StereoCamera(K, D, K, D, Trl, width, height);
+  }
+  else if( std::filesystem::exists(depth_path) ){
+    camera_ = new DepthCamera(K, D, width, height);
+  }
+  else{
+    std::cout << "KittiDataset::KittiDataset() Failed to define camera type." << std::endl;
+    exit(1);
+  }
 }
 
 KittiDataset::~KittiDataset(){
   delete camera_;
 }
 
-cv::Mat KittiDataset::GetImage(int i) const{
+cv::Mat KittiDataset::GetImage(int i, int flags) const{
   std::string fn = im0_filenames_.at(i);
-  cv::Mat src = cv::imread(fn, cv::IMREAD_GRAYSCALE);
+  cv::Mat src = cv::imread(fn, flags);
   return src;
 }
 
-cv::Mat KittiDataset::GetRightImage(int i) const{
+cv::Mat KittiDataset::GetRightImage(int i, int flags) const{
   std::string fn = im1_filenames_.at(i);
-  cv::Mat src = cv::imread(fn, cv::IMREAD_GRAYSCALE);
+  cv::Mat src = cv::imread(fn, flags);
   return src;
 }
+
+cv::Mat KittiDataset::GetDepthImage(int i) const{
+  std::string fn = depth_filenames_.at(i);
+  cv::Mat src = cv::imread(fn, cv::IMREAD_UNCHANGED);
+  return src;
+}
+
 
 int KittiDataset::Size() const{
   return im0_filenames_.size();

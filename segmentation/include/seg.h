@@ -25,26 +25,37 @@ public:
 class Seg {
 public:
   Seg();
+  void Put(cv::Mat rgb, cv::Mat depth, const DepthCamera& camera);
+  void Put(cv::Mat rgb, cv::Mat rgb_r, const StereoCamera& camera);
+
+private:
+
+  // TODO 
+  void _Put(cv::Mat gray,
+            cv::cuda::GpuMat g_gray,
+            cv::Mat depth,
+            const Camera& camera,
+            cv::Mat rgb // for visualization
+            );
+
   bool IsKeyframe(cv::Mat flow, cv::Mat rgb = cv::Mat());
   void PutKeyframe(cv::Mat gray, cv::cuda::GpuMat g_gray);
-  void Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera);
 
   cv::Mat GetFlow(cv::cuda::GpuMat g_gray);
   cv::Mat GetTextureEdge(cv::Mat gray);
 
-  void NormalizeScale(const cv::Mat disparity, const cv::Mat flow_scale,
+  void NormalizeScale(const cv::Mat flow_scale,
                       cv::Mat& flow_difference, cv::Mat& flow_errors);
 
   g2o::SE3Quat TrackTc0c1(const std::vector<cv::Point2f>& corners,
                           const cv::Mat flow,
-                          const cv::Mat disparity,
-                          const StereoCamera& camera);
+                          const cv::Mat depth,
+                          const Camera& camera);
 
 private:
 
   cv::Ptr<cv::cuda::DenseOpticalFlow> optical_flow_;
   cv::Mat gray0_;
-  //cv::Mat marker0_;
   cv::cuda::GpuMat g_gray0_;
 };
 

@@ -76,7 +76,7 @@ cv::Mat Seg::GetTextureEdge(cv::Mat gray) {
   return texture_edge;
 }
 
-void Seg::NormalizeScale(const cv::Mat disparity, const cv::Mat flow_scale,
+void Seg::NormalizeScale(const cv::Mat flow_scale,
                          cv::Mat& flow_difference, cv::Mat& flow_errors) {
   for(int r=0; r<flow_difference.rows; r++) {
     for(int c=0; c<flow_difference.cols; c++) {
@@ -84,10 +84,8 @@ void Seg::NormalizeScale(const cv::Mat disparity, const cv::Mat flow_scale,
       const float& s = flow_scale.at<float>(r,c);
       float S = std::min<float>(100.f,s);
       S = std::max<float>(1.f, S);
-      //const float S = 1.;
-      const float& disp = disparity.at<float>(r,c);
       float& err = flow_errors.at<float>(r,c);
-      if(s > 1.) { //  && disp > 1.){
+      if(s > 1.) {
         diff /= S;
         err /= S;
       }
@@ -100,38 +98,33 @@ void Seg::NormalizeScale(const cv::Mat disparity, const cv::Mat flow_scale,
   return;
 }
 
-
 g2o::SE3Quat Seg::TrackTc0c1(const std::vector<cv::Point2f>& corners,
                              const cv::Mat flow,
-                             const cv::Mat disparity,
-                             const StereoCamera& camera) {
-  // corners : {1} coordinate의 특징점
-  // flow : {1} coordinate에서 0->1 변위 벡터, 
-  // disparity : {1} coordinate의 disparity
-  const auto Trl_ = camera.GetTrl();
-  const float base_line = -Trl_.translation().x();
+                             const cv::Mat depth,
+                             const Camera& camera) {
   const float fx = camera.GetK()(0,0);
   const float fy = camera.GetK()(1,1);
   const float cx = camera.GetK()(0,2);
   const float cy = camera.GetK()(1,2);
-  // std::cout << "baseline = " << base_line << std::endl;
+
   std::vector< cv::Point2f > img0_points;
   std::vector< cv::Point3f > obj1_points;
   img0_points.reserve(corners.size());
   obj1_points.reserve(corners.size());
   for(const auto& pt1 : corners){
-    const float& disp = disparity.at<float>(pt1);
-    if(disp < 1.)
+    const float& z1 = depth.at<float>(pt1);
+    if(z1 < .001) // TODO invalid를 따로 분리, depth가 이상하다?
       continue;
+    else if(z1 > 50.)
+      continue;
+
     const auto& dpt01 = flow.at<cv::Point2f>(pt1); 
     const float duv = std::abs(dpt01.x)+std::abs(dpt01.y);
     //if(duv < 1. || duv > 50.)
     //  continue;
-    float z1 = base_line *  fx / disp;
     float x1 = z1 * (pt1.x - cx) / fx;
     float y1 = z1 * (pt1.y - cy) / fy;
     img0_points.push_back(pt1-dpt01);
-    //img0_points.push_back(pt1);
     obj1_points.push_back(cv::Point3f(x1,y1,z1));
   }
 
@@ -154,8 +147,8 @@ g2o::SE3Quat Seg::TrackTc0c1(const std::vector<cv::Point2f>& corners,
     cvR.at<double>(1,0), cvR.at<double>(1,1), cvR.at<double>(1,2),
     cvR.at<double>(2,0), cvR.at<double>(2,1), cvR.at<double>(2,2);
   Eigen::Vector3d t(tvec.at<double>(0,0), tvec.at<double>(1,0), tvec.at<double>(2,0) );
-  //std::cout << "tvec = " << tvec.t() << std::endl;
-  //std::cout << "t = " << t.transpose() << std::endl;
+  // std::cout << "t/frame = " << t.transpose() << std::endl; // Verbose translation per frame
+
   Eigen::Quaterniond quat(R);
   Tc0c1.setRotation(quat);
   Tc0c1.setTranslation(t);
@@ -438,11 +431,13 @@ std::map<int,int> TrackShapes(const std::map<int, ShapePtr>& local_shapes,
   return matches;
 }
 
-void Seg::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera) {
-  if(camera.GetD().norm() > 1e-5){
-    std::cerr << "Not support distorted image. Put rectified image" << std::endl;
-    exit(1);
-  }
+void Seg::_Put(cv::Mat gray,
+               cv::cuda::GpuMat g_gray,
+               cv::Mat depth,
+               const Camera& camera,
+               cv::Mat rgb
+               ) {
+
   auto start = std::chrono::steady_clock::now();
 
   std::vector<cv::Point2f> corners; {
@@ -458,12 +453,6 @@ void Seg::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera) {
   }
   if(corners.empty())
     return;
-
-  cv::Mat rgb;
-  cv::cvtColor(gray, rgb, cv::COLOR_GRAY2BGR);
-
-  cv::cuda::GpuMat g_gray;
-  g_gray.upload(gray);
   if(gray0_.empty()){
     PutKeyframe(gray, g_gray);
     return;
@@ -475,49 +464,13 @@ void Seg::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera) {
     cv::waitKey(1);
     return;
   }
-
-  cv::cuda::GpuMat g_gray_r;
-  g_gray_r.upload(gray_r);
-  cv::Mat disparity = GetDisparity(g_gray,g_gray_r);
-
-#if 1
-  g2o::SE3Quat Tc0c1 = TrackTc0c1(corners,flow,disparity,camera); // TODO 이걸로 대신한다.
-#else
-  g2o::SE3Quat Tc0c1 = Tc0w_ * Tcw.inverse(); // 주어진 Tcw를 사용.
-#endif
+  g2o::SE3Quat Tc0c1 = TrackTc0c1(corners,flow,depth,camera);
   cv::Mat texture_edge = GetTextureEdge(gray);
-  /*
-  cv::Mat texture_mask; {
-    cv::Mat dist1;
-    cv::distanceTransform(~texture_edge, dist1, cv::DIST_L2, cv::DIST_MASK_3, CV_32FC1);
-    cv::Mat labels, stats, centroids;
-    cv::connectedComponentsWithStats(dist1 < 2.,labels,stats,centroids);
-    std::set<int> inliers;
-    for(int i = 1; i < stats.rows; i++){
-      const int max_wh = std::max(stats.at<int>(i,cv::CC_STAT_WIDTH),
-                                  stats.at<int>(i,cv::CC_STAT_HEIGHT));
-      if(max_wh > 50)
-        inliers.insert(i);
-    }
-
-    for(int r = 0; r < labels.rows; r++){
-      for(int c = 0; c < labels.cols; c++){
-        int& l = labels.at<int>(r,c);
-        l = inliers.count(l) ? 1 : 0;
-      }
-    }
-    cv::Mat dist2;
-    cv::distanceTransform(labels<1, dist2, cv::DIST_L2, cv::DIST_MASK_3, CV_32FC1);
-    texture_mask = dist2 < 20.; // r1+r2
-    //cv::imshow("texture_mask", 255*texture_mask);
-  }
-  */
-  cv::Mat valid_mask = cv::Mat::ones(gray.rows, gray.cols, CV_8UC1);
-  //cv::bitwise_and(valid_mask, disparity>2.,valid_mask);
-  //cv::bitwise_and(valid_mask, disparity<40.,valid_mask);
+  //cv::Mat valid_mask = cv::Mat::ones(gray.rows, gray.cols, CV_8UC1);
+  cv::Mat valid_mask = depth > 0.;
 
   cv::Mat exp_flow;
-  GetExpectedFlow(camera, Tc0c1, disparity, exp_flow, valid_mask);
+  GetExpectedFlow(camera, Tc0c1, depth, exp_flow, valid_mask);
 
   cv::Mat flow_scale; {
     std::vector<cv::Mat> tmp;
@@ -532,14 +485,10 @@ void Seg::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera) {
     cv::split(flow_error2, vec);
     flow_error_scalar = cv::abs( vec[0] ) + cv::abs( vec[1] );
   }
-  cv::Mat flow_difference = GetDifference(flow, disparity);
-
-  NormalizeScale(disparity, flow_scale, flow_difference, flow_error_scalar);
+  cv::Mat flow_difference = GetDifference(flow);
+  NormalizeScale(flow_scale, flow_difference, flow_error_scalar);
   if(is_keyframe)
     PutKeyframe(gray, g_gray);
-  //static int i = 0;
-  //if( ++i < 5)
-  //  return;
 
   cv::Mat diff_edges = FlowDifference2Edge(flow_difference);
   cv::Mat expd_diffedges; {
@@ -555,7 +504,6 @@ void Seg::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera) {
     //cv::addWeighted(rgb,.5,dst,1.,1.,dst);
     //cv::imshow("error_edges", dst);
   }
-
   cv::Mat marker = Segment(error_edges); // Sgement(error_edges,rgb);
 #if 1
   std::map<int, ShapePtr> local_shapes = ConvertMarker2Instances(marker);
@@ -577,43 +525,6 @@ void Seg::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera) {
     cv::cvtColor(error_edges*255, whites, cv::COLOR_GRAY2BGR);
     cv::addWeighted(dst,1.,whites,.3, 1., dst);
     cv::imshow("Marker", dst);
-  }
-
-  /*
-  cv::Mat filtered_marker;
-  if(marker0_.empty())
-    filtered_marker = marker;
-  else{
-    filtered_marker = TrackMarker(flow, marker0_);
-  }
-  */
-
-  if(false){
-    cv::Mat flow_dist;
-    cv::distanceTransform(flow_difference < .5, flow_dist, cv::DIST_L2, cv::DIST_MASK_3);
-    cv::Mat output_edges = cv::Mat::zeros(gray.rows, gray.cols, CV_8UC1);
-    for(int r=0; r<output_edges.rows; r++){
-      for(int c=0; c<output_edges.cols;c++){
-        const uchar& te = texture_edge.at<uchar>(r,c);
-        if(!te)
-          continue;
-        float R = 1.*disparity.at<float>(r,c);
-        if(flow_dist.at<float>(r,c) > R)
-          continue;
-        output_edges.at<uchar>(r,c) = 1;
-      }
-    }
-    cv::imshow("output", 255*output_edges);
-    //cv::imshow("flow_dist", 255*(flow_dist<5.));
-    //cv::Mat texture_dist;
-    //cv::distanceTransform(texture_edge < 1, texture_dist, cv::DIST_L2, cv::DIST_MASK_3);
-    //cv::imshow("texture_dist", 255*(texture_dist<5.) );
-    cv::Mat zeros = cv::Mat::zeros(texture_edge.rows, texture_edge.cols, CV_8UC1);
-    std::vector<cv::Mat> vec = {zeros,flow_dist<2.,texture_edge>0};
-    cv::Mat dst;
-    cv::merge(vec, dst);
-    dst *= 255;
-    cv::imshow("thick_edges", dst);
   }
 
   if(false){
@@ -653,19 +564,65 @@ void Seg::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera) {
     //cv::pyrDown(dst,dst);
     cv::imshow("flow", dst);
   }
-  if(false){
-    cv::Mat dst;
-    disparity.convertTo(dst, CV_8UC1);
-    cv::imshow("disp",  dst);
-    /*
-    cv::Mat ndisp;
-    cv::normalize(disparity, ndisp, 0, 255, cv::NORM_MINMAX, CV_8UC1);
-    cv::pyrDown(ndisp,ndisp);
-    cv::imshow("disp", ndisp);
-    */
+
+  if(true){
+    cv::Mat ndepth;
+    cv::normalize(depth,ndepth,0,255,cv::NORM_MINMAX,CV_8UC1);
+    cv::imshow("rgb", rgb);
+    cv::imshow("depth", ndepth);
   }
-  auto end = std::chrono::steady_clock::now();
-  auto etime_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-  std::cout << "etime = " << etime_ms << std::endl;
+  return;
+}
+
+void Seg::Put(cv::Mat rgb, cv::Mat rgb_r, const StereoCamera& camera) {
+  if(camera.GetD().norm() > 1e-5){
+    std::cerr << "Not support distorted image. Put rectified image" << std::endl;
+    exit(1);
+  }
+
+  cv::Mat gray;
+  cv::cvtColor(rgb,gray,cv::COLOR_BGR2GRAY);
+  cv::cuda::GpuMat g_gray;
+  g_gray.upload(gray);
+
+  cv::Mat gray_r;
+  cv::cvtColor(rgb_r,gray_r,cv::COLOR_BGR2GRAY);
+  cv::cuda::GpuMat g_gray_r;
+  g_gray_r.upload(gray_r);
+  cv::Mat disparity = GetDisparity(g_gray,g_gray_r);
+
+  const auto Trl_ = camera.GetTrl();
+  const float base_line = -Trl_.translation().x();
+  const float fx = camera.GetK()(0,0);
+
+  cv::Mat depth= cv::Mat::zeros(rgb.rows,rgb.cols, CV_32FC1);
+  for(int r=0; r<rgb.rows; r++){
+    for(int c=0; c<rgb.cols; c++){
+      const float& disp = disparity.at<float>(r,c);
+      if(disp < 1.)
+        continue;
+      depth.at<float>(r,c) = base_line *  fx / disp;
+    }
+  }
+
+  /*
+  cv::imshow("rgb", rgb);
+  cv::imshow("rgb_r", rgb_r);
+  cv::Mat ndepth;
+  cv::normalize(depth,ndepth,0,255,cv::NORM_MINMAX,CV_8UC1);
+  cv::imshow("depth", ndepth);
+  */
+  _Put(gray, g_gray, depth, camera, rgb);
+  return;
+}
+
+
+void Seg::Put(cv::Mat rgb, cv::Mat depth, const DepthCamera& camera) {
+  cv::Mat gray;
+  cv::cvtColor(rgb,gray,cv::COLOR_BGR2GRAY);
+  cv::cuda::GpuMat g_gray;
+  g_gray.upload(gray);
+
+  _Put(gray, g_gray, depth, camera, rgb);
   return;
 }

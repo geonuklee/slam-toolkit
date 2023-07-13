@@ -68,8 +68,39 @@ cv::Mat convertMat(cv::Mat input, float lower_bound, float upper_bound) {
   return output;
 }
 
+cv::Mat GetDifference(cv::Mat flow) {
+  cv::Mat divergence = cv::Mat::zeros(flow.rows,flow.cols,CV_32F);
+  int dl = 5;
+  float dth = 20.* M_PI/180.;
+  for(int r=dl; r+dl<divergence.rows; r++) {
+    for(int c=dl; c+dl<divergence.cols; c++) {
+      float& div = divergence.at<float>(r,c);
+      float R = std::max<float>(R, 5.);
+      cv::Point2i dpt0(r,r);
+      float n = 0.;
+      cv::Point2i pt0(c,r);
+      for(float th=0.; th<2.*M_PI-dth; th+=dth){
+        cv::Point2i dpt(R*std::cos(th), R*std::sin(th));
+        if(dpt == dpt0)
+          continue;
+        dpt0 = dpt;
+        cv::Point2i pt1 = pt0+dpt;
+        const cv::Point2f& F0 = flow.at<cv::Point2f>(pt0);
+        const cv::Point2f& F1 = flow.at<cv::Point2f>(pt1);
+        const float d =  cv::norm(F1-F0);
+        div += d;
+        n += 1.;
+      }
+      div /= n;
+      div = std::abs(div);
+    }
+  }
+  return divergence;
+}
 
 cv::Mat GetDifference(cv::Mat flow, cv::Mat disparity) {
+  std::cout << "Remove GetDifference(cv::Mat flow, cv::Mat disparity) " << std::endl;
+  exit(1);
   cv::Mat divergence = cv::Mat::zeros(flow.rows,flow.cols,CV_32F);
   int dl = 5;
   float dth = 20.* M_PI/180.;
@@ -178,25 +209,14 @@ cv::Mat GetDivergence(cv::Mat flow) {
   return divergency;
 }
 
-void GetExpectedFlow(const StereoCamera& camera, const g2o::SE3Quat& Tc0c1, const cv::Mat disp1,
+void GetExpectedFlow(const Camera& camera, const g2o::SE3Quat& Tc0c1, const cv::Mat depth,
                      cv::Mat& exp_flow, cv::Mat& valid_mask) {
   const Eigen::Matrix<double,3,3> K = camera.GetK();
-  const float baseline = - camera.GetTrl().translation().x();
-  assert(baseline>0.);
-
-  if(valid_mask.empty())
-    valid_mask = cv::Mat::ones(disp1.rows, disp1.cols, CV_8UC1);
-
-  exp_flow = cv::Mat::zeros(disp1.rows, disp1.cols, CV_32FC2);
+  exp_flow = cv::Mat::zeros(valid_mask.rows, valid_mask.cols, CV_32FC2);
   for(int r=0;  r<exp_flow.rows; r++){
     for(int c=0; c<exp_flow.cols; c++){
-      const double du = disp1.at<float>(r,c);
-      if(du < 1.){
-        valid_mask.at<uchar>(r,c) = false;
-        continue;
-      }
       Eigen::Vector2d uv1( (double)c, (double)r );
-      double z1 = K(0,0) * baseline / du;
+      double z1 = depth.at<float>(r,c);
       Eigen::Vector3d X1( z1 * (uv1[0]-K(0,2))/K(0,0),
                           z1 * (uv1[1]-K(1,2))/K(1,1),
                           z1);
@@ -208,6 +228,9 @@ void GetExpectedFlow(const StereoCamera& camera, const g2o::SE3Quat& Tc0c1, cons
   }
   return;
 }
+
+
+
 
 cv::Mat GetFlowError(const cv::Mat flow, const cv::Mat exp_flow, cv::Mat& valid_mask) {
 #if 1

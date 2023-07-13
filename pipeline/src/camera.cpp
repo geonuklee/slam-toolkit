@@ -132,6 +132,9 @@ StereoCamera::StereoCamera(const Eigen::Matrix<double,3,3>& Kl, const Eigen::Vec
 
 }
 
+DepthCamera::DepthCamera(const Eigen::Matrix<double,3,3>& K, const Eigen::VectorXd& D, int width, int height)
+  : Camera(K, D, width, height) {
+}
 
 double GetInetrpolatedIntensity(cv::Mat gray, const Eigen::Vector2d& uv) {
   // ref) https://stackoverflow.com/questions/13299409/how-to-get-the-image-pixel-at-real-locations-in-opencv
