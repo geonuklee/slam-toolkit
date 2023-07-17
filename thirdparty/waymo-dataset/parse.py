@@ -5,10 +5,10 @@ import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 import tensorflow.compat.v1 as tf
+tf.enable_eager_execution()
 import math
 import numpy as np
 import itertools
-tf.enable_eager_execution()
 
 from waymo_open_dataset.utils import range_image_utils
 from waymo_open_dataset.utils import frame_utils
@@ -21,6 +21,7 @@ from shutil import rmtree
 
 from depth_map import dense_map
 from scipy.spatial.transform import Rotation
+import struct
 
 def get_uvz_points(range_image_cartesian,
         extrinsic,
@@ -255,44 +256,45 @@ def parse_tfrecord(filename, use_inpaint=True,verbose=True):
             # Rectification
             rgb = cv2.remap(rgb, rgb_mapx,rgb_mapy,cv2.INTER_NEAREST)
             depth = cv2.remap(depth, depth_mapx,depth_mapy,cv2.INTER_NEAREST)
-
             # TODO 06d?
             cv2.imwrite(osp.join(im_dir,   '%06d.png'%i_frame), rgb)
-            cv2.imwrite(osp.join(depth_dir,'%06d.png'%i_frame), depth)
+            # Write the shape information and byte buffer to a binary file
+            with open(osp.join(depth_dir,'%06d.png'%i_frame), 'wb') as file:
+                rows, cols = depth.shape
+                byte_buffer = depth.tobytes()
+                #import pdb; pdb.set_trace()
+                file.write(struct.pack("<i",rows))
+                file.write(struct.pack("<i",cols))
+                file.write(byte_buffer)
+                file.flush()
             i_frame += 1
             if(i_frame >= 1e+6):
                 print("Unexpected number of frames.")
                 exit(1)
 
-            '''
-                TODO
-                * [x] Resize depth for given intrinsic
-                * [x] Poses for Tcw
-                * [x] extrinsic, distortion as np.array
-                    * [x] Rectification
-                * [x] pos_fn 저장
-                * [x] calib.txt 저장
-                * [x] image_0, depth_0 저장
-                * [x] calib.txt 불러오기
-                * [ ] Batch dataset download code ref https://github.com/RalphMao/Waymo-Dataset-Tool
-            '''
-
             if verbose:
                 vis_depth = cv2.normalize(depth,None, 0,1,cv2.NORM_MINMAX)*255
                 vis_depth = vis_depth.astype(np.uint8)
                 cv2.imshow("depth", vis_depth)
-                cv2.imshow("rgb",   rgb)
+                base = osp.splitext(osp.basename(filename))[0]
+                vis_rgb = rgb.copy()
+                vis_rgb = cv2.putText(vis_rgb, base, (5,15), cv2.FONT_HERSHEY_SIMPLEX, .5,(255,0,0),1)
+                cv2.imshow("rgb",   vis_rgb)
                 c = cv2.waitKey(1)
                 if(ord('q') == c):
-                    exit(1)
+                    print("cancel %s" % seq_name)
+                    f_pos.close()
+                    os.remove(calib_fn)
+                    os.remove(pos_fn)
+                    rmtree(seq_dir)
+                    return False
                 #print("etime = %.2f [sec]"%(time.time()-t0) )
-    print("done")
-    return
+    return True
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Parse tfrecord of waymo as KITTI format')
     parser.add_argument('--filename', help="The filename of the tfrecord",
-            default='segment-10203656353524179475_7625_000_7645_000_with_camera_labels.tfrecord') 
+            default='segment-10247954040621004675_2180_000_2200_000_with_camera_labels.tfrecord')
     args = parser.parse_args()
     filename = args.filename
     parse_tfrecord(filename)
