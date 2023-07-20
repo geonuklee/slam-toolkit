@@ -38,6 +38,13 @@ private:
             cv::Mat rgb // for visualization
             );
 
+  void _Put_old(cv::Mat gray,
+            cv::cuda::GpuMat g_gray,
+            cv::Mat depth,
+            const Camera& camera,
+            cv::Mat rgb // for visualization
+            );
+
   bool IsKeyframe(cv::Mat flow, cv::Mat rgb = cv::Mat());
   void PutKeyframe(cv::Mat gray, cv::cuda::GpuMat g_gray);
 

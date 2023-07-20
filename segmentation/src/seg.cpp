@@ -9,8 +9,8 @@
 Seg::Seg() {
   //optical_flow_ = cv::cuda::FarnebackOpticalFlow::create(5, 0.5, true, 15); // 30
   optical_flow_ = cv::cuda::BroxOpticalFlow::create(0.197f, 50.0f, 0.8f, 5, 150, 10); // 가장좋은결과.
-  //opticalflow_   = cv::cuda::OpticalFlowDual_TVL1::create();
-  //opticalflow_ = cv::cuda::DensePyrLKOpticalFlow::create(cv::Size(13,13),3);
+  //optical_flow_   = cv::cuda::OpticalFlowDual_TVL1::create();
+  //optical_flow_ = cv::cuda::DensePyrLKOpticalFlow::create(cv::Size(13,13),3);
 }
 
 bool Seg::IsKeyframe(cv::Mat flow, cv::Mat rgb) {
@@ -431,7 +431,287 @@ std::map<int,int> TrackShapes(const std::map<int, ShapePtr>& local_shapes,
   return matches;
 }
 
+cv::Mat GetGrad(const cv::Mat depth , const cv::Mat valid_mask,
+             const Camera& camera,
+             cv::Mat& gradx,
+             cv::Mat& grady,
+             cv::Mat& valid_grad,
+             bool verbose
+             ) {
+  gradx = cv::Mat::zeros(depth.rows, depth.cols, CV_32FC1);
+  grady = cv::Mat::zeros(depth.rows, depth.cols, CV_32FC1);
+  valid_grad = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
+  // sample offset, [meter]
+  const float s = 0.1;
+  const float sfx = s*camera.GetK()(0,0);
+  const float sfy = s*camera.GetK()(1,1);
+  cv::Mat dst;
+  if(verbose)
+    dst = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC3);
+  for(int r = 0; r < depth.rows; r++) {
+    for(int c = 0; c < depth.cols; c++) {
+      const cv::Point2i pt(c,r);
+      if(!valid_mask.at<uchar>(pt))
+        continue;
+      const float& z = depth.at<float>(pt);
+      const int du = std::max<int>( (int) sfx/z, 1);
+      const int dv = std::max<int>( (int) sfy/z, 1);
+      cv::Point2i ptx0(c-du,r);
+      cv::Point2i ptx1(c+du,r);
+      cv::Point2i pty0(c,r-dv);
+      cv::Point2i pty1(c,r+dv);
+      if(ptx0.x < 0 || !valid_mask.at<uchar>(ptx0) )
+        continue;
+      if(ptx1.x > depth.cols || !valid_mask.at<uchar>(ptx1) )
+        continue;
+      if(pty0.y < 0 || !valid_mask.at<uchar>(pty0) )
+        continue;
+      if(pty1.y > depth.rows || !valid_mask.at<uchar>(pty1) )
+        continue;
+      valid_grad.at<uchar>(pt) = true;
+      const float gx = (depth.at<float>(ptx1) - depth.at<float>(ptx0) ) / s;
+      const float gy = (depth.at<float>(pty1) - depth.at<float>(pty0) ) / s;
+      gradx.at<float>(pt) = gx;
+      grady.at<float>(pt) = gy;
+      if(!verbose)
+        continue;
+      auto& color = dst.at<cv::Vec3b>(pt);
+      int val = std::min<int>(255, std::max<int>(0, std::abs(10.*gy) ) );
+      if(gy > 0)
+        color[0] = val;
+      else
+        color[1] = val;
+      val = std::min<int>(255, std::max<int>(0, std::abs(10.*gx) ) );
+      color[2] = val;
+    }
+  }
+  return dst;
+}
+
+static bool SameSign(const float& v1, const float& v2){
+  if(v1 > 0.)
+    return v2 > 0.;
+  else if(v1 < 0.)
+    return v2 < 0.;
+  return (v1 == 0.) && (v2 == 0.);
+}
+
+cv::Mat GetConcaveEdges(const cv::Mat gradx,
+                     const cv::Mat grady,
+                     const cv::Mat depth,
+                     const cv::Mat valid_mask,
+                     const Camera& camera){
+  cv::Mat hessian = cv::Mat::zeros(depth.rows, depth.cols, CV_32FC1);
+  const int dl = 5; // "Shallow groove"를 찾을것도 아닌데, 간격이 좁을필요가..
+  const int R = 10; // NMAS range
+  /*
+  const float s = 1. / ( 2. * (float)dl );
+  const float sfx = s*camera.GetK()(0,0);
+  const float sfy = s*camera.GetK()(1,1);
+  */
+  const float fx = camera.GetK()(0,0);
+  const float fy = camera.GetK()(1,1);
+
+  for(int r=dl; r < depth.rows-dl; r++) {
+    for(int c=dl; c < depth.cols-dl; c++) {
+      const cv::Point2i pt(c,r);
+      if(!valid_mask.at<uchar>(pt))
+        continue;
+      const float& z = depth.at<float>(pt);
+      cv::Point2i ptx0(c-dl,r);
+      cv::Point2i ptx1(c+dl,r);
+      cv::Point2i pty0(c,r-dl);
+      cv::Point2i pty1(c,r+dl);
+      if(ptx0.x < 0 || !valid_mask.at<uchar>(ptx0) )
+        continue;
+      if(ptx1.x > depth.cols || !valid_mask.at<uchar>(ptx1) )
+        continue;
+      if(pty0.y < 0 || !valid_mask.at<uchar>(pty0) )
+        continue;
+      if(pty1.y > depth.rows || !valid_mask.at<uchar>(pty1) )
+        continue;
+      float hxx = gradx.at<float>(ptx1) - gradx.at<float>(ptx0);
+      float hyy = grady.at<float>(pty1) - grady.at<float>(pty0);
+      hessian.at<float>(pt) = hxx + hyy;
+    }
+  }
+  std::vector<cv::Point2i> samples = {
+    cv::Point2i(1,0),
+    cv::Point2i(-1,0),
+    cv::Point2i(0,1),
+    cv::Point2i(0,-1),
+  };
+
+  cv::Mat edges = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
+  for(int r=dl; r < depth.rows-dl; r++) {
+    for(int c=dl; c < depth.cols-dl; c++) {
+      const cv::Point2i pt(c,r);
+      if(!valid_mask.at<uchar>(pt))
+        continue;
+      const float& h = hessian.at<float>(pt);
+      bool ismax = true;
+      for(int dr=1; dr<R; dr++){
+        for(const auto& dpt : samples){
+          const cv::Point2i pt1 = pt + dr * dpt;
+          const float& h1 = hessian.at<float>(pt1);
+          if(std::abs(h1) < std::abs(h))
+            continue;
+          if(SameSign(h1,h))
+            continue;
+          ismax = false;
+          break;
+        }
+        if(!ismax)
+          break;
+      }
+      if(!ismax) // NMAS
+        continue;
+      // Hessian을 고려한 edge 판단
+      if( h < -15.)
+        edges.at<uchar>(pt) = 1;
+    }
+  }
+  return edges;
+}
+
+cv::Mat FilterThinNoise(const cv::Mat edges){
+  cv::Mat kernel = cv::Mat::ones(3,3,edges.type());
+  cv::Mat output;
+  cv::morphologyEx(edges, output, cv::MORPH_OPEN, kernel );
+  return output;
+}
+
+cv::Mat GetDDEdges(const cv::Mat depth, const cv::Mat valid_mask,
+                   const Camera& camera){
+  cv::Mat edge = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
+  std::vector<cv::Point2i> samples = {
+    cv::Point2i(1,0),
+    cv::Point2i(-1,0),
+    cv::Point2i(0,1),
+    cv::Point2i(0,-1),
+  };
+
+  for(int r0 = 0; r0 < depth.rows; r0++) {
+    for(int c0 = 0; c0 < depth.cols; c0++) {
+      const cv::Point2i pt0(c0,r0);
+      if(!valid_mask.at<unsigned char>(pt0))
+        continue;
+      const float& z0 = depth.at<float>(pt0);
+      unsigned char& e = edge.at<unsigned char>(pt0);
+      for(int l=1; l < 4; l++){
+        for(const auto& dpt : samples){
+          const cv::Point2i pt1 = pt0+l*dpt;
+          if(pt1.x < 0 || pt1.x >= depth.cols || pt1.y < 0 || pt1.y >= depth.rows)
+            continue;
+          if(!valid_mask.at<unsigned char>(pt1))
+            continue;
+          const float& z1 = depth.at<float>(pt1);
+          float th = std::max<float>(0.01*z0, 2.);
+          if(std::abs(z1-z0) < th)
+            continue;
+          e = true;
+          break;
+        }
+        if(e)
+          break;
+      }
+    }
+  }
+  return edge;
+}
+
 void Seg::_Put(cv::Mat gray,
+               cv::cuda::GpuMat g_gray,
+               cv::Mat depth,
+               const Camera& camera,
+               cv::Mat rgb
+               ) {
+  auto start = std::chrono::steady_clock::now();
+  std::vector<cv::Point2f> corners; {
+    // ref: https://docs.opencv.org/3.4/d8/dd8/tutorial_good_features_to_track.html
+    int maxCorners = 1000;
+    double qualityLevel = 0.01;
+    double minDistance = 10;
+    int blockSize = 3, gradientSize = 3;
+    bool useHarrisDetector = false;
+    double k = 0.04;
+    cv::goodFeaturesToTrack(gray, corners, maxCorners, qualityLevel, minDistance, cv::Mat(),
+                            blockSize, gradientSize, useHarrisDetector,k);
+  }
+  if(corners.empty())
+    return;
+  if(gray0_.empty()){
+    PutKeyframe(gray, g_gray);
+    return;
+  }
+  /* TODO
+  * [x] Optical flow 대신 depth diff 구현
+      * [x] Concave edge
+        * [x] depth filter
+        * [x] concave edge 결과물에 대한 filter
+  * [ ] Segmentation 적용
+  * [ ] Contour quality 개선
+  * [ ] Harris corner 분배
+  */
+#if 1
+  const bool is_keyframe = true;
+#else
+  // Flow대신 ORB matcher 적용
+  cv::Mat flow = GetFlow(g_gray);
+  IsKeyframe(flow,rgb);
+#endif
+  cv::Mat valid_depth = depth > 0.;
+  cv::erode(valid_depth,valid_depth,cv::Mat::ones(13,13,CV_32FC1) );
+  for(int r=0; r<depth.rows;r++){
+    for(int c=0; c<depth.cols;c++){
+      auto& color = rgb.at<cv::Vec3b>(r,c);
+      if(valid_depth.at<uchar>(r,c))
+        continue;
+      color[0] = color[1] = color[2] = 0;
+    }
+  }
+
+  cv::Mat filtered_depth; // Shallow groove가 필요없어서 그냥 Gaussian
+  cv::GaussianBlur(depth,filtered_depth, cv::Size(7,7), 0., 0.);
+
+  // cv::Mat dd_edges = GetDDEdges(filtered_depth, valid_depth, camera); // concave_edge를 보완해주는 positive detection이 없음.
+  cv::Mat gradx, grady, valid_grad;
+  cv::Mat vis_grad = GetGrad(filtered_depth, valid_depth, camera, gradx, grady, valid_grad, true);
+  cv::Mat valid;
+  cv::bitwise_and(valid_depth, valid_grad, valid);
+  cv::Mat concave_edges = GetConcaveEdges(gradx,grady,depth,valid,camera);
+  concave_edges = FilterThinNoise(concave_edges);
+
+
+  if(false){
+    cv::Mat ndepth;
+    cv::normalize(depth,ndepth,0,255,cv::NORM_MINMAX,CV_8UC1);
+    cv::imshow("depth", ndepth);
+  }
+
+  //cv::imshow("vdepth", (depth < .01) * 255 );
+  {
+    //cv::pyrDown(vis_grad,vis_grad);
+    //cv::imshow("vis_grad", vis_grad);
+    cv::Mat dst = GetColoredLabel(concave_edges);
+    cv::addWeighted(rgb,.5,dst,1.,1.,dst);
+    cv::pyrDown(dst,dst);
+    cv::imshow("concave_edges", dst);
+    cv::moveWindow("concave_edges", depth.cols+20,10);
+  }
+
+  if(!is_keyframe){
+    cv::waitKey(1);
+    return;
+  }
+
+  if(is_keyframe)
+    PutKeyframe(gray, g_gray);
+
+  return;
+}
+
+void Seg::_Put_old(cv::Mat gray,
                cv::cuda::GpuMat g_gray,
                cv::Mat depth,
                const Camera& camera,
@@ -466,7 +746,6 @@ void Seg::_Put(cv::Mat gray,
   }
   g2o::SE3Quat Tc0c1 = TrackTc0c1(corners,flow,depth,camera);
   cv::Mat texture_edge = GetTextureEdge(gray);
-  //cv::Mat valid_mask = cv::Mat::ones(gray.rows, gray.cols, CV_8UC1);
   cv::Mat valid_mask = depth > 0.;
 
   cv::Mat exp_flow;
@@ -495,14 +774,17 @@ void Seg::_Put(cv::Mat gray,
     cv::Mat dist;
     cv::distanceTransform(~diff_edges, dist, cv::DIST_L2, cv::DIST_MASK_3, CV_32FC1);
     expd_diffedges = (dist < 20.) /255;
-
-    //cv::Mat dst = GetColoredLabel(diff_edges);
-    //cv::imshow("diff_edges", dst);
   }
-  cv::Mat error_edges = FlowError2Edge(flow_error_scalar, expd_diffedges, valid_mask); {
-    //cv::Mat dst = GetColoredLabel(error_edges);
-    //cv::addWeighted(rgb,.5,dst,1.,1.,dst);
-    //cv::imshow("error_edges", dst);
+  if(true){
+    cv::Mat dst = GetColoredLabel(diff_edges);
+    cv::addWeighted(rgb,.5,dst,1.,1.,dst);
+    cv::imshow("diff_edges", dst);
+  }
+  cv::Mat error_edges = FlowError2Edge(flow_error_scalar, expd_diffedges, valid_mask);
+  if(true){
+    cv::Mat dst = GetColoredLabel(error_edges);
+    cv::addWeighted(rgb,.5,dst,1.,1.,dst);
+    cv::imshow("error_edges", dst);
   }
   cv::Mat marker = Segment(error_edges); // Sgement(error_edges,rgb);
 #if 1
@@ -510,15 +792,14 @@ void Seg::_Put(cv::Mat gray,
   static std::map<int, ShapePtr> global_shapes; // TODO 맴버변수로
   static int n_shapes = 0;
   std::map<int,int> l2g = TrackShapes(local_shapes, marker, flow, global_shapes, n_shapes);
-  {
+  if(false){
     // TODO 결과물의 visualization
     std::cout << "n(gShapes) = " << global_shapes.size() << std::endl;
     cv::Mat dst = VisualizeTrackedShapes(global_shapes, marker);
     cv::imshow("TrackedShapes", dst);
   }
 #endif
-
-  {
+  if(false){
     cv::Mat dst = GetColoredLabel(marker);
     cv::addWeighted(rgb,.3, dst, .7, 1., dst);
     cv::Mat whites;
@@ -568,7 +849,6 @@ void Seg::_Put(cv::Mat gray,
   if(true){
     cv::Mat ndepth;
     cv::normalize(depth,ndepth,0,255,cv::NORM_MINMAX,CV_8UC1);
-    cv::imshow("rgb", rgb);
     cv::imshow("depth", ndepth);
   }
   return;
@@ -604,14 +884,6 @@ void Seg::Put(cv::Mat rgb, cv::Mat rgb_r, const StereoCamera& camera) {
       depth.at<float>(r,c) = base_line *  fx / disp;
     }
   }
-
-  /*
-  cv::imshow("rgb", rgb);
-  cv::imshow("rgb_r", rgb_r);
-  cv::Mat ndepth;
-  cv::normalize(depth,ndepth,0,255,cv::NORM_MINMAX,CV_8UC1);
-  cv::imshow("depth", ndepth);
-  */
   _Put(gray, g_gray, depth, camera, rgb);
   return;
 }

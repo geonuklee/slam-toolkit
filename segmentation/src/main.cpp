@@ -37,8 +37,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 
 int TestKitti(int argc, char** argv) {
   //Seq :"02",("13" "20");
-  std::string seq(argv[1]);
-
+  std::string seq(argv[2]);
   KittiDataset dataset(seq);
   const auto& Tcws = dataset.GetTcws();
   if(Tcws.empty()){
@@ -68,15 +67,17 @@ int TestKitti(int argc, char** argv) {
 
 int TestWaymodataset(int argc, char** argv) {
   // 주어진 RGB+Dense Depthmap에서 
-  std::string dataset_path = GetPackageDir()+ "/../thirdparty/waymo-dataset/output/";
-  std::string seq = "segment-10247954040621004675_2180_000_2200_000_with_camera_labels"; // TODO Batch실행?
+  const std::string dataset_path = GetPackageDir()+ "/../thirdparty/waymo-dataset/output/";
+  const std::string seq(argv[2]);
+  const std::string start = argc > 3 ? std::string(argv[3]) : "0";
+
   KittiDataset dataset(seq,dataset_path);
   const DepthCamera* camera = dynamic_cast<const DepthCamera*>(dataset.GetCamera());
   assert(camera);
   Seg seg;
   //std::cout << "Intrinsic = \n" << camera->GetK() << std::endl;
   const EigenMap<int, g2o::SE3Quat>& Tcws = dataset.GetTcws();
-  bool stop = false;
+  bool stop = 0==std::stoi(start);
   for(int i=0; i<dataset.Size(); i+=1){
     const auto Twc = Tcws.at(i).inverse();
     //std::cout << "t=" << Twc.translation().transpose() << std::endl;
@@ -94,8 +95,15 @@ int TestWaymodataset(int argc, char** argv) {
 }
 
 int main(int argc, char** argv){
-  return TestKitti(argc, argv); // TODO depth update가 제대로 안된다
-  //return TestWaymodataset(argc, argv);
+  if(argc < 2){
+    std::cout << "No arguments for dataset name." << std::endl;
+    exit(-1);
+  }
+  const std::string dataset_name(argv[1]);
+  if(dataset_name=="kitti")
+      return TestKitti(argc, argv); // TODO depth update가 제대로 안된다
+  else if(dataset_name=="waymo")
+      return TestWaymodataset(argc, argv);
 
   return 1;
 }
