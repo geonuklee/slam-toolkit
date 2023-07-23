@@ -72,10 +72,10 @@ if __name__=='__main__':
         assert flag == 0, 'Failed to download segment %s'%url
         if parse_tfrecord(fn, use_inpaint=True, verbose=True):
             with open(fn_whitelist,"a") as f:
-                f.write(url)
+                f.write(url+"\n")
         else:
             with open(fn_blacklist,"a") as f:
-                f.write(url)
+                f.write(url+"\n")
         os.remove(fn) # Remove after converting 
 
         disk_usage = psutil.disk_usage('/')

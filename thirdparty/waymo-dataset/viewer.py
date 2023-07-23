@@ -16,6 +16,7 @@ if __name__=='__main__':
         seq = osp.basename(seq_dir)
         image_files = glob.glob(osp.join(seq_dir,'image_0','*.png') )
         image_files = sorted(image_files, key=lambda x: x.split('/')[-1])
+        print("seq=%s"%seq)
         copy_to_clipboard(seq)
         c = None
         for i, fn in enumerate(image_files):

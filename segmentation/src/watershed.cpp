@@ -208,26 +208,22 @@ bool IsTooSmallSeed(const cv::RotatedRect& obb, const int& rows, const int& cols
   return wh < 20.;
 }
 
-cv::Mat Segment(const cv::Mat outline_edge, const cv::Mat rgb4vis) {
+cv::Mat Segment(const cv::Mat outline_edge,
+                cv::Mat valid_mask,
+                bool limit_expand_range,
+                cv::Mat rgb4vis) {
   const bool verbose = !rgb4vis.empty();
+  if(valid_mask.empty())
+    valid_mask = cv::Mat::ones(outline_edge.rows, outline_edge.cols, CV_8UC1);
+
   cv::Mat marker;
   cv::Mat dist_fromoutline; {
-#if 1
-    cv::distanceTransform(outline_edge<1, dist_fromoutline, cv::DIST_L2, cv::DIST_MASK_PRECISE);
-#else
-    cv::Mat divided;
-    cv::bitwise_and(depthmask, ~outline_edge, divided);
-    cv::bitwise_and(vignett8U_, divided, divided);
-    if(divided.type()!=CV_8UC1)
-      divided.convertTo(divided, CV_8UC1); // distanceTransform asks CV_8UC1 input.
-    cv::distanceTransform(divided, dist_transform, cv::DIST_L2, cv::DIST_MASK_3);
-#endif
-    /*for(int r=0; r<dist_fromoutline.rows; r++)
-      for(int c=0; c<dist_fromoutline.cols; c++)
-        if(!validmask.at<unsigned char>(r,c))
-          dist_fromoutline.at<float>(r,c) = 0.;*/
-
+    //cv::distanceTransform(outline_edge<1, dist_fromoutline, cv::DIST_L2, cv::DIST_MASK_PRECISE);
+    cv::Mat dinput;
+    cv::bitwise_and(outline_edge<1, valid_mask, dinput);
+    cv::distanceTransform(dinput, dist_fromoutline, cv::DIST_L2, cv::DIST_MASK_PRECISE);
   }
+
   const int rows = outline_edge.rows;
   const int cols = outline_edge.cols;
 
@@ -502,7 +498,7 @@ cv::Mat Segment(const cv::Mat outline_edge, const cv::Mat rgb4vis) {
     }
 
   } // if(verbose)
-  DistanceWatershed(dist_fromoutline, marker,
+  DistanceWatershed(dist_fromoutline, marker, limit_expand_range,
                     vis_arealimitedflood,
                     vis_rangelimitedflood,
                     vis_onedgesflood);
@@ -574,11 +570,11 @@ cv::Mat Segment(const cv::Mat outline_edge, const cv::Mat rgb4vis) {
 
 void DistanceWatershed(const cv::Mat _dist_fromedge,
                        cv::Mat& _marker,
+                       bool limit_expand_range,
                        cv::Mat& vis_arealimitedflood,
                        cv::Mat& vis_rangelimitedflood,
                        cv::Mat& vis_onedgesflood
                        ){
-
   const int IN_QUEUE = -2; // Pixel visited
   const int WSHED = -1;    // Pixel belongs to watershed
   const cv::Size size = _marker.size();
@@ -792,7 +788,7 @@ void DistanceWatershed(const cv::Mat _dist_fromedge,
   }
 
   // Second step - Expand each instance in limited range
-  {
+  if(limit_expand_range) {
     cv::Mat _fg = _marker > 0;
     const int mode   = cv::RETR_EXTERNAL;
     const int method = cv::CHAIN_APPROX_SIMPLE;

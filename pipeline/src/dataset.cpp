@@ -156,8 +156,20 @@ cv::Mat KittiDataset::GetRightImage(int i, int flags) const{
 
 cv::Mat KittiDataset::GetDepthImage(int i) const{
   std::string fn = depth_filenames_.at(i);
-  cv::Mat src = cv::imread(fn, cv::IMREAD_UNCHANGED);
-  return src;
+  std::ifstream file(fn, std::ios::binary | std::ios::ate);
+  std::streamsize size = file.tellg();
+  file.seekg(0, std::ios::beg);
+  char* buffer = new char[size];
+  if (!file.read(buffer, size)) {
+    std::cerr << "Failed to read file.";
+    return cv::Mat();
+  }
+  file.close();
+  int32_t rows = *(int32_t*)buffer;
+  int32_t cols = *(int32_t*)(buffer + sizeof(int32_t));
+  float* data = (float*)(buffer + 2 * sizeof(int));
+  cv::Mat depth(rows,cols,CV_32FC1,data); // delete data는 필요없음.
+  return depth;
 }
 
 

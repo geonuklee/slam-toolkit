@@ -69,12 +69,27 @@ private:
 cv::Mat FlowDifference2Edge(cv::Mat score);
 cv::Mat FlowError2Edge(const cv::Mat flow_errors, const cv::Mat expd_diffedges, const cv::Mat valid_mask);
 
-cv::Mat Segment(const cv::Mat outline_edge, const cv::Mat rgb4vis=cv::Mat() );
+cv::Mat Segment(const cv::Mat outline_edge,
+                cv::Mat valid_mask=cv::Mat() ,
+                bool limit_expand_range=true,
+                cv::Mat rgb4vis=cv::Mat() );
 void DistanceWatershed(const cv::Mat dist_fromedge,
                        cv::Mat& markers,
+                       bool limit_expand_range,
                        cv::Mat& vis_arealimitedflood,
                        cv::Mat& vis_rangelimitedflood,
                        cv::Mat& vis_onedgesflood
                        );
+
+std::map<int, ShapePtr> ConvertMarker2Instances(const cv::Mat marker);
+std::map<int,int> TrackShapes(const std::map<int, ShapePtr>& local_shapes,
+                              const cv::Mat& local_marker,
+                              const cv::Mat& flow,
+                              const float min_iou,
+                              std::map<int, ShapePtr>& global_shapes,
+                              int& n_shapes);
+cv::Mat VisualizeTrackedShapes(const std::map<int, ShapePtr>& global_shapes,
+                               const cv::Mat local_marker);
+
 
 #endif
