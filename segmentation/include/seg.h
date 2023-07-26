@@ -13,10 +13,10 @@ public:
   int n_missing_;
   int n_matching_;
   int n_belief_;
-  int stabilized_;
+  bool stabilized_;
   std::vector<cv::Point2f> outerior_;
   cv::Rect2f outerior_bb_;
-  Shape (): label_(-1), n_missing_(0), n_matching_(0), n_belief_(0) {
+  Shape (): label_(-1), n_missing_(0), n_matching_(0), n_belief_(0), stabilized_(false) {
   }
   void UpdateBB();
   bool HasCollision(const int& x, const int& y, bool check_contour) const;
@@ -30,7 +30,6 @@ public:
 
 private:
 
-  // TODO 
   void _Put(cv::Mat gray,
             cv::cuda::GpuMat g_gray,
             cv::Mat depth,
@@ -38,26 +37,11 @@ private:
             cv::Mat rgb // for visualization
             );
 
-  void _Put_old(cv::Mat gray,
-            cv::cuda::GpuMat g_gray,
-            cv::Mat depth,
-            const Camera& camera,
-            cv::Mat rgb // for visualization
-            );
 
   bool IsKeyframe(cv::Mat flow, cv::Mat rgb = cv::Mat());
   void PutKeyframe(cv::Mat gray, cv::cuda::GpuMat g_gray);
 
   cv::Mat GetFlow(cv::cuda::GpuMat g_gray);
-  cv::Mat GetTextureEdge(cv::Mat gray);
-
-  void NormalizeScale(const cv::Mat flow_scale,
-                      cv::Mat& flow_difference, cv::Mat& flow_errors);
-
-  g2o::SE3Quat TrackTc0c1(const std::vector<cv::Point2f>& corners,
-                          const cv::Mat flow,
-                          const cv::Mat depth,
-                          const Camera& camera);
 
 private:
 
@@ -66,13 +50,11 @@ private:
   cv::cuda::GpuMat g_gray0_;
 };
 
-cv::Mat FlowDifference2Edge(cv::Mat score);
-cv::Mat FlowError2Edge(const cv::Mat flow_errors, const cv::Mat expd_diffedges, const cv::Mat valid_mask);
-
 cv::Mat Segment(const cv::Mat outline_edge,
                 cv::Mat valid_mask=cv::Mat() ,
                 bool limit_expand_range=true,
                 cv::Mat rgb4vis=cv::Mat() );
+
 void DistanceWatershed(const cv::Mat dist_fromedge,
                        cv::Mat& markers,
                        bool limit_expand_range,
@@ -88,8 +70,6 @@ std::map<int,int> TrackShapes(const std::map<int, ShapePtr>& local_shapes,
                               const float min_iou,
                               std::map<int, ShapePtr>& global_shapes,
                               int& n_shapes);
-cv::Mat VisualizeTrackedShapes(const std::map<int, ShapePtr>& global_shapes,
-                               const cv::Mat local_marker);
 
 
 #endif

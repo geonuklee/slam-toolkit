@@ -41,6 +41,36 @@ void Seg::Put(cv::Mat rgb, cv::Mat rgb_r, const StereoCamera& camera) {
 }
 
 /*
+cv::Mat Seg::GetTextureEdge(cv::Mat gray) {
+  cv::Mat texture_edge;
+  //cv::Canny(gray, texture_edge, 300, 400);
+  cv::Canny(gray, texture_edge, 100, 400);
+  return texture_edge;
+}
+
+
+void Seg::NormalizeScale(const cv::Mat flow_scale,
+                         cv::Mat& flow_difference, cv::Mat& flow_errors) {
+  for(int r=0; r<flow_difference.rows; r++) {
+    for(int c=0; c<flow_difference.cols; c++) {
+      float& diff = flow_difference.at<float>(r,c);
+      const float& s = flow_scale.at<float>(r,c);
+      float S = std::min<float>(100.f,s);
+      S = std::max<float>(1.f, S);
+      float& err = flow_errors.at<float>(r,c);
+      if(s > 1.) {
+        diff /= S;
+        err /= S;
+      }
+      else{
+        diff = 0.;
+        err = 0.;
+      }
+    }
+  }
+  return;
+}
+
 void Seg::_Put_old(cv::Mat gray,
                cv::cuda::GpuMat g_gray,
                cv::Mat depth,

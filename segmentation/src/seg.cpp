@@ -4,6 +4,7 @@
 
 #include "../include/seg.h"
 #include "../include/util.h"
+#include "orb_extractor.h"
 
 Seg::Seg() {
   //optical_flow_ = cv::cuda::FarnebackOpticalFlow::create(5, 0.5, true, 15); // 30
@@ -66,93 +67,6 @@ cv::Mat Seg::GetFlow(cv::cuda::GpuMat g_gray) {
   g_flow.download(flow); // flow : 2ch float image
   flow = -flow;
   return flow;
-}
-
-cv::Mat Seg::GetTextureEdge(cv::Mat gray) {
-  cv::Mat texture_edge;
-  //cv::Canny(gray, texture_edge, 300, 400);
-  cv::Canny(gray, texture_edge, 100, 400);
-  return texture_edge;
-}
-
-void Seg::NormalizeScale(const cv::Mat flow_scale,
-                         cv::Mat& flow_difference, cv::Mat& flow_errors) {
-  for(int r=0; r<flow_difference.rows; r++) {
-    for(int c=0; c<flow_difference.cols; c++) {
-      float& diff = flow_difference.at<float>(r,c);
-      const float& s = flow_scale.at<float>(r,c);
-      float S = std::min<float>(100.f,s);
-      S = std::max<float>(1.f, S);
-      float& err = flow_errors.at<float>(r,c);
-      if(s > 1.) {
-        diff /= S;
-        err /= S;
-      }
-      else{
-        diff = 0.;
-        err = 0.;
-      }
-    }
-  }
-  return;
-}
-
-g2o::SE3Quat Seg::TrackTc0c1(const std::vector<cv::Point2f>& corners,
-                             const cv::Mat flow,
-                             const cv::Mat depth,
-                             const Camera& camera) {
-  const float fx = camera.GetK()(0,0);
-  const float fy = camera.GetK()(1,1);
-  const float cx = camera.GetK()(0,2);
-  const float cy = camera.GetK()(1,2);
-
-  std::vector< cv::Point2f > img0_points;
-  std::vector< cv::Point3f > obj1_points;
-  img0_points.reserve(corners.size());
-  obj1_points.reserve(corners.size());
-  for(const auto& pt1 : corners){
-    const float& z1 = depth.at<float>(pt1);
-    if(z1 < .001) // TODO invalid를 따로 분리, depth가 이상하다?
-      continue;
-    else if(z1 > 50.)
-      continue;
-
-    const auto& dpt01 = flow.at<cv::Point2f>(pt1); 
-    const float duv = std::abs(dpt01.x)+std::abs(dpt01.y);
-    //if(duv < 1. || duv > 50.)
-    //  continue;
-    float x1 = z1 * (pt1.x - cx) / fx;
-    float y1 = z1 * (pt1.y - cy) / fy;
-    img0_points.push_back(pt1-dpt01);
-    obj1_points.push_back(cv::Point3f(x1,y1,z1));
-  }
-
-  const float max_rprj_err = 2.;
-  cv::Mat cvK = (cv::Mat_<double>(3,3) << fx, 0., cx,
-                                         0., fy, cy, 
-                                         0., 0., 1. );
-  cv::Mat cvDistortion = (cv::Mat_<double>(4,1) << 0., 0., 0., 0. );
-  cv::Mat rvec = cv::Mat::zeros(3,1,cvK.type());
-  cv::Mat tvec = cv::Mat::zeros(3,1,cvK.type());
-  cv::Mat inliers;
-  cv::solvePnPRansac(obj1_points,img0_points, cvK, cvDistortion, rvec, tvec, true, 100, max_rprj_err, 0.99, inliers);
-  //cv::solvePnP(obj1_points, img0_points, cvK, cvDistortion, rvec, tvec, true);
-
-  cv::Mat cvR;
-  cv::Rodrigues(rvec, cvR);
-  g2o::SE3Quat Tc0c1;
-  Eigen::Matrix<double,3,3> R;
-  R << cvR.at<double>(0,0), cvR.at<double>(0,1), cvR.at<double>(0,2),
-    cvR.at<double>(1,0), cvR.at<double>(1,1), cvR.at<double>(1,2),
-    cvR.at<double>(2,0), cvR.at<double>(2,1), cvR.at<double>(2,2);
-  Eigen::Vector3d t(tvec.at<double>(0,0), tvec.at<double>(1,0), tvec.at<double>(2,0) );
-  // std::cout << "t/frame = " << t.transpose() << std::endl; // Verbose translation per frame
-
-  Eigen::Quaterniond quat(R);
-  Tc0c1.setRotation(quat);
-  Tc0c1.setTranslation(t);
-  //std::cout << "Tc0c1 = " << Tc0c1.to_homogeneous_matrix() << std::endl;
-  return Tc0c1;
 }
 
 std::vector<cv::Point2f> SimplifyContour(const std::vector<cv::Point>& given_cnt){
@@ -627,7 +541,8 @@ cv::Mat EntireVisualization(const cv::Mat _rgb,
                             const cv::Mat valid_depth,
                             const cv::Mat outline_edges,
                             const std::map<int, ShapePtr>& global_shapes,
-                            const cv::Mat local_marker
+                            const cv::Mat local_marker,
+                            const std::vector<cv::KeyPoint>& keypoints
                             ) {
   cv::Mat rgb = _rgb.clone();
   HighlightValidmask(valid_depth, rgb);
@@ -636,7 +551,7 @@ cv::Mat EntireVisualization(const cv::Mat _rgb,
                   GetColoredLabel(local_marker), .5,
                   1., vis_edges_marker);
 
-  cv::Mat vis_edges_trackedshapes;
+  cv::Mat vis_trackedshapes;
   cv::Mat colored_shapes = rgb.clone();
 
   const int fontFace = cv::FONT_HERSHEY_SIMPLEX;
@@ -662,7 +577,7 @@ cv::Mat EntireVisualization(const cv::Mat _rgb,
 
   cv::addWeighted(rgb, 1.,
                   colored_shapes, .5,
-                  1., vis_edges_trackedshapes);
+                  1., vis_trackedshapes);
   for(auto it : global_shapes){
     ShapePtr ptr = it.second;
     if(!draw_contours.count(it.first) )
@@ -680,13 +595,19 @@ cv::Mat EntireVisualization(const cv::Mat _rgb,
     auto size = cv::getTextSize(txt, fontFace, fontScale, fontThick, &baseline);
     cv::Point cp(bb.x+.5*bb.width, bb.y+.5*bb.height);
     cv::Point dpt(.5*size.width, .5*size.height);
-    cv::rectangle(vis_edges_trackedshapes,
+    cv::rectangle(vis_trackedshapes,
                   cp-dpt-cv::Point(0,3*baseline),
                   cp+dpt,
                   CV_RGB(255,255,255), -1);
-    cv::putText(vis_edges_trackedshapes, txt, cp-dpt,fontFace, fontScale,
+    cv::putText(vis_trackedshapes, txt, cp-dpt,fontFace, fontScale,
                 color0, fontThick);
-    cv::drawContours(vis_edges_trackedshapes, cnts, 0, color0, 2);
+    cv::drawContours(vis_trackedshapes, cnts, 0, color0, 2);
+  }
+
+  bool show_keypoints = true;
+  if(show_keypoints){
+    for(const auto& kpt : keypoints) 
+      cv::circle(vis_trackedshapes, kpt.pt, 3, CV_RGB(255,0,0), 1);
   }
 
   for(int r=0; r<rgb.rows; r++){
@@ -702,8 +623,8 @@ cv::Mat EntireVisualization(const cv::Mat _rgb,
 
   cv::pyrDown(vis_edges_marker,vis_edges_marker);
 
-  cv::Mat dst = cv::Mat::zeros(std::max<int>(vis_edges_marker.rows, vis_edges_trackedshapes.rows),
-                               vis_edges_marker.cols + vis_edges_trackedshapes.cols,
+  cv::Mat dst = cv::Mat::zeros(std::max<int>(vis_edges_marker.rows, vis_trackedshapes.rows),
+                               vis_edges_marker.cols + vis_trackedshapes.cols,
                                CV_8UC3);
   {
     cv::Rect rect(0, 0, vis_edges_marker.cols, vis_edges_marker.rows);
@@ -713,12 +634,55 @@ cv::Mat EntireVisualization(const cv::Mat _rgb,
   }
   {
     cv::Rect rect(vis_edges_marker.cols,0,
-                  vis_edges_trackedshapes.cols, vis_edges_trackedshapes.rows);
+                  vis_trackedshapes.cols, vis_trackedshapes.rows);
     cv::Mat roi(dst, rect);
-    vis_edges_trackedshapes.copyTo(roi);
+    vis_trackedshapes.copyTo(roi);
     cv::rectangle(dst, rect, CV_RGB(0,255,0), 2);
   }
   return dst;
+}
+
+void Extract(cv::InputArray gray, const std::map<int, ShapePtr>& global_shapes,
+             std::vector<cv::KeyPoint>& keypoints,
+             cv::OutputArray descriptions) {
+  /*
+  # 기존 알고리즘
+    기존 ORB SLAM의 keypoint (orb_extractor.cpp)는
+    ORBextrctor::extract()
+      1) ComputeKeyPointsOctTree()
+        각 image pyramid level에서 >
+          가로세로 30x30pixel과 짜투리 셀에 대해서,
+          조각난 이미지를 FAST에 입력, level별로 분리해서 vector<vector<keypoint>에, 해당 lv scale의 uv 좌표 수집.
+          keypoint를 분배하고, 그중 response가 강한것만 남기기위해,
+          DistributeOctTree(), 가 keypoint를 Quadtree에 분배.
+            각 노드는 포함하는 점이 1개만 남거나, node의 숫자가 required features보다 많아질때 중단된다.
+            마지막으로 각 노드에서 가장 큰 response를 가진 keypoint만 추려낸다.
+            즉, 화면 골고루에 강한점부터 뿌리고 점점 약한점이 사이사이에 추가된다.
+      2) le:hi coc_err_hi ctermfg=1 ctermbg=15vel별 keypoints에 대해, scaled image를 사용, ORB descriptor를 추출하고, 
+         scale을 복원해 std::vector<Keypoint>, cv::Mat descriptor 취합.
+  # 개선,적용
+    * 추출된 FAST point 중,
+    Octree(lv별 Quadtree) Node별로, 가장 response가 강한 point부터 남기면서,
+    이미 충분한 keypoint를 가진 shape에 위치한 keypoint는 skip < 이기능만 DistributeOctree 단계에서 추가.
+       TODO) Inprogress, 맞다. keypoint extractor 구현.
+    * 우려사항 : FAST가 각 shape를 추적하기에 충분할 만큼 feature point 추출이 가능한가?
+      * 차라리 shape BB 안에 한해서 다시 FAST를 따로 돌리는게 났다? ... 이건 느리기만하니 패스.
+      * 모든 segment에 대해 상대 '좌표계' - 특히 orientation을 계산하는건 어렵다.
+       - feature point가 충분히 추적안되는 instnace도 '분리'는 필요.
+       - EdgeSE3Switchable 대신에, 무엇을 error로 삼아야할까?
+  */
+   
+  // ORBextractor::extract()
+  int nfeatures = 2000;
+  float scale_factor = 1.2;
+  int nlevels = 8;
+  int initial_fast_th = 20;
+  int min_fast_th = 7;
+  static std::unique_ptr<ORB_SLAM2::ORBextractor> extractor(new ORB_SLAM2::ORBextractor(nfeatures, scale_factor,
+                                                                  nlevels, initial_fast_th, min_fast_th));
+  extractor->extract(gray, cv::noArray(), keypoints, descriptions);
+
+  return;
 }
 
 void Seg::_Put(cv::Mat gray,
@@ -761,16 +725,21 @@ void Seg::_Put(cv::Mat gray,
 
   bool limit_expand_range = false;
   cv::Mat marker = Segment(outline_edges,valid_depth,limit_expand_range); // Sgement(error_edges,rgb);
-  /* 
-  * [ ] TODO Visualzation 개선 / 후 commit
-  * [ ] Harris corner 분배
-  * [ ] Vertigo link 판정
-  */
+ /* 
+  * [x] Visualzation 개선 / 후 commit
+  * [x] keypoint extraction, visualization
+  * [ ] Switchable edge 기반 LBA
+ */
   std::map<int, ShapePtr> local_shapes = ConvertMarker2Instances(marker);
   static std::map<int, ShapePtr> global_shapes; // TODO 맴버변수로
   static int n_shapes = 0;
   const float min_iou = .3;
   std::map<int,int> l2g = TrackShapes(local_shapes, marker, flow, min_iou, global_shapes, n_shapes);
+
+  std::vector<cv::KeyPoint> keypoints;
+  cv::Mat descriptions;
+  Extract(gray, global_shapes, keypoints, descriptions);
+  // TODO LBA
 
   if(!is_keyframe){
     cv::waitKey(1);
@@ -782,14 +751,13 @@ void Seg::_Put(cv::Mat gray,
 
   auto stop = std::chrono::steady_clock::now();
   std::cout << "etime = " << std::chrono::duration_cast<std::chrono::milliseconds>(stop-start).count() << "[msec]" << std::endl;
-  // TODO 결과물의 visualization
   {
-    cv::Mat dst = EntireVisualization(rgb, valid_depth, outline_edges, global_shapes, marker);
+    cv::Mat dst = EntireVisualization(rgb, valid_depth, outline_edges, global_shapes, marker,
+                                      keypoints);
     cv::imshow("vis", dst);
   }
   return;
 }
-
 
 void Seg::Put(cv::Mat rgb, cv::Mat depth, const DepthCamera& camera) {
   cv::Mat gray;
