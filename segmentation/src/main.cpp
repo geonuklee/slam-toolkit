@@ -31,9 +31,9 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include "camera.h"
 //#include "pipeline.h"
 //#include "qmap_viewer.h"
-//#include "common.h"
 //#include <QApplication>
 //#include <QWidget>
+#include "segslam.h"
 
 int TestKitti(int argc, char** argv) {
   //Seq :"02",("13" "20");
@@ -47,14 +47,17 @@ int TestKitti(int argc, char** argv) {
   std::cout << "Distortion = " << D.transpose() << std::endl;
   const StereoCamera* camera = dynamic_cast<const StereoCamera*>(dataset.GetCamera());
   assert(camera);
-  Seg seg;
+  Segmentor segmentor;
 
   bool stop = true;
   for(int i=0; i<dataset.Size(); i+=1){
     std::cout << "F# " << i << std::endl;
     const cv::Mat rgb   = dataset.GetImage(i, cv::IMREAD_COLOR);
     const cv::Mat rgb_r = dataset.GetRightImage(i, cv::IMREAD_COLOR);
-    seg.Put(rgb, rgb_r, *camera );
+    cv::Mat gray, gray_r;
+    cv::cvtColor(rgb,gray,cv::COLOR_BGR2GRAY);
+    cv::cvtColor(rgb_r,gray_r,cv::COLOR_BGR2GRAY);
+    segmentor.Put(gray, gray_r, *camera, rgb);
     char c = cv::waitKey(stop?0:1);
     if(c == 'q')
       break;
@@ -74,16 +77,30 @@ int TestWaymodataset(int argc, char** argv) {
   KittiDataset dataset(seq,dataset_path);
   const DepthCamera* camera = dynamic_cast<const DepthCamera*>(dataset.GetCamera());
   assert(camera);
-  Seg seg;
+  Segmentor segmentor;
+
+  int nfeatures = 2000;
+  float scale_factor = 1.2;
+  int nlevels = 8;
+  int initial_fast_th = 20;
+  int min_fast_th = 7;
+  ORB_SLAM2::ORBextractor extractor(nfeatures, scale_factor,
+                                    nlevels, initial_fast_th, min_fast_th);
+  seg::Pipeline pipeline(camera, &extractor);
+
   //std::cout << "Intrinsic = \n" << camera->GetK() << std::endl;
   const EigenMap<int, g2o::SE3Quat>& Tcws = dataset.GetTcws();
   bool stop = 0==std::stoi(start);
   for(int i=0; i<dataset.Size(); i+=1){
     const auto Twc = Tcws.at(i).inverse();
     //std::cout << "t=" << Twc.translation().transpose() << std::endl;
+
     const cv::Mat rgb   = dataset.GetImage(i,cv::IMREAD_UNCHANGED);
     const cv::Mat depth = dataset.GetDepthImage(i);
-    seg.Put(rgb, depth, *camera );
+    cv::Mat gray;
+    cv::cvtColor(rgb,gray,cv::COLOR_BGR2GRAY);
+    const std::map<seg::Pth, ShapePtr>& shapes = segmentor.Put(gray, depth, *camera, rgb);
+    pipeline.Put(gray, depth, shapes, rgb);
 
     char c = cv::waitKey(stop?0:100);
     if(c == 'q')

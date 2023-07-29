@@ -1,7 +1,6 @@
 #ifndef STDAFX_H_
 #define STDAFX_H_
 
-
 #include <stdio.h>
 #include <iostream>
 #include <algorithm>
@@ -29,5 +28,6 @@
 #include <fstream>
 #include <g2o/types/slam3d/se3quat.h>
 
+#include "common.h"
 
 #endif

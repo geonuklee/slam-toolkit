@@ -4,7 +4,6 @@
 #include "stdafx.h"
 #include "camera.h"
 
-
 class Shape;
 typedef std::shared_ptr<Shape> ShapePtr;
 class Shape {
@@ -22,19 +21,19 @@ public:
   bool HasCollision(const int& x, const int& y, bool check_contour) const;
 };
 
-class Seg {
+class Segmentor {
 public:
-  Seg();
-  void Put(cv::Mat rgb, cv::Mat depth, const DepthCamera& camera);
-  void Put(cv::Mat rgb, cv::Mat rgb_r, const StereoCamera& camera);
+  Segmentor();
+  const std::map<int, ShapePtr>& Put(cv::Mat gray, cv::Mat depth, const DepthCamera& camera, cv::Mat vis_rgb);
+  const std::map<int, ShapePtr>& Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera, cv::Mat vis_rgb);
 
 private:
 
-  void _Put(cv::Mat gray,
+  const std::map<int, ShapePtr>& _Put(cv::Mat gray,
             cv::cuda::GpuMat g_gray,
             cv::Mat depth,
             const Camera& camera,
-            cv::Mat rgb // for visualization
+            cv::Mat vis_rgb // for visualization
             );
 
 
@@ -44,10 +43,12 @@ private:
   cv::Mat GetFlow(cv::cuda::GpuMat g_gray);
 
 private:
-
   cv::Ptr<cv::cuda::DenseOpticalFlow> optical_flow_;
   cv::Mat gray0_;
   cv::cuda::GpuMat g_gray0_;
+
+  std::map<int, ShapePtr> global_shapes_; // 최근까지 제대로 추적되던 instance의 모음.
+  int n_shapes_;
 };
 
 cv::Mat Segment(const cv::Mat outline_edge,

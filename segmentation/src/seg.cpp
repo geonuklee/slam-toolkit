@@ -4,16 +4,16 @@
 
 #include "../include/seg.h"
 #include "../include/util.h"
-#include "orb_extractor.h"
 
-Seg::Seg() {
+Segmentor::Segmentor()
+: n_shapes_(0) {
   //optical_flow_ = cv::cuda::FarnebackOpticalFlow::create(5, 0.5, true, 15); // 30
   optical_flow_ = cv::cuda::BroxOpticalFlow::create(0.197f, 50.0f, 0.8f, 5, 150, 10); // 가장좋은결과.
   //optical_flow_   = cv::cuda::OpticalFlowDual_TVL1::create();
   //optical_flow_ = cv::cuda::DensePyrLKOpticalFlow::create(cv::Size(13,13),3);
 }
 
-bool Seg::IsKeyframe(cv::Mat flow, cv::Mat rgb) {
+bool Segmentor::IsKeyframe(cv::Mat flow, cv::Mat rgb) {
 #if 1
   return true;
 #else
@@ -45,13 +45,13 @@ bool Seg::IsKeyframe(cv::Mat flow, cv::Mat rgb) {
 #endif
 }
 
-void Seg::PutKeyframe(cv::Mat gray, cv::cuda::GpuMat g_gray){
+void Segmentor::PutKeyframe(cv::Mat gray, cv::cuda::GpuMat g_gray){
   gray0_ = gray;
   g_gray0_ = g_gray;
   return;
 }
 
-cv::Mat Seg::GetFlow(cv::cuda::GpuMat g_gray) {
+cv::Mat Segmentor::GetFlow(cv::cuda::GpuMat g_gray) {
   cv::Mat flow;
   cv::cuda::GpuMat g_flow;
   // ref) https://android.googlesource.com/platform/external/opencv3/+/master/samples/gpu/optical_flow.cpp#189
@@ -92,7 +92,6 @@ std::vector<cv::Point2f> SimplifyContour(const std::vector<cv::Point>& given_cnt
     simple_cnt.clear();
   return simple_cnt;
 }
-
 
 std::map<int, ShapePtr> ConvertMarker2Instances(const cv::Mat marker) {
   cv::Mat fg = GetBoundary(marker) < 1;
@@ -185,33 +184,36 @@ std::map<int,int> TrackShapes(const std::map<int, ShapePtr>& local_shapes,
                               std::map<int, ShapePtr>& global_shapes,
                               int& n_shapes) {
   // Convert coordinate of flow
-  cv::Mat flow0 = cv::Mat::zeros(flow.rows,flow.cols,CV_32FC2);
-  for(int r1=0; r1<flow.rows; r1++){
-    for(int c1=0; c1<flow.cols; c1++){
-      // dpt01 : {1} coordinate에서 0->1 변위 벡터, 
-      const auto& dpt01 = flow.at<cv::Point2f>(r1,c1);
-      if(std::abs(dpt01.x)+std::abs(dpt01.y) < 1e-10)
-        continue;
-      cv::Point2f pt0(c1-dpt01.x, r1-dpt01.y);
-      if(pt0.x < 0 || pt0.y < 0 || pt0.x > flow.cols-1 || pt0.y > flow.rows-1)
-        continue;
-      flow0.at<cv::Point2f>(pt0) = dpt01;
+  cv::Mat flow0;
+  if(!flow.empty()){
+    flow0 = cv::Mat::zeros(flow.rows,flow.cols,CV_32FC2);
+    for(int r1=0; r1<flow.rows; r1++){
+      for(int c1=0; c1<flow.cols; c1++){
+        // dpt01 : {1} coordinate에서 0->1 변위 벡터, 
+        const auto& dpt01 = flow.at<cv::Point2f>(r1,c1);
+        if(std::abs(dpt01.x)+std::abs(dpt01.y) < 1e-10)
+          continue;
+        cv::Point2f pt0(c1-dpt01.x, r1-dpt01.y);
+        if(pt0.x < 0 || pt0.y < 0 || pt0.x > flow.cols-1 || pt0.y > flow.rows-1)
+          continue;
+        flow0.at<cv::Point2f>(pt0) = dpt01;
+      }
     }
-  }
 
-  // Motion update
-  for(auto git : global_shapes){
-    ShapePtr ptr = git.second;
-    for(auto& pt : ptr->outerior_){
-      const auto& dpt01 = flow0.at<cv::Point2f>(pt);
-      pt += dpt01;
-      // TODO 화면 구석에 몰리면 지워야하나?
-      pt.x = std::max<float>(pt.x, 0.f);
-      pt.x = std::min<float>(pt.x,local_marker.cols-1.f);
-      pt.y = std::max<float>(pt.y, 0.f);
-      pt.y = std::min<float>(pt.y,local_marker.rows-1.f);
+    // Motion update
+    for(auto git : global_shapes){
+      ShapePtr ptr = git.second;
+      for(auto& pt : ptr->outerior_){
+        const auto& dpt01 = flow0.at<cv::Point2f>(pt);
+        pt += dpt01;
+        // TODO 화면 구석에 몰리면 지워야하나?
+        pt.x = std::max<float>(pt.x, 0.f);
+        pt.x = std::min<float>(pt.x,local_marker.cols-1.f);
+        pt.y = std::max<float>(pt.y, 0.f);
+        pt.y = std::min<float>(pt.y,local_marker.rows-1.f);
+      }
+      ptr->UpdateBB();
     }
-    ptr->UpdateBB();
   }
 
   // Sampling area
@@ -541,8 +543,7 @@ cv::Mat EntireVisualization(const cv::Mat _rgb,
                             const cv::Mat valid_depth,
                             const cv::Mat outline_edges,
                             const std::map<int, ShapePtr>& global_shapes,
-                            const cv::Mat local_marker,
-                            const std::vector<cv::KeyPoint>& keypoints
+                            const cv::Mat local_marker
                             ) {
   cv::Mat rgb = _rgb.clone();
   HighlightValidmask(valid_depth, rgb);
@@ -604,12 +605,6 @@ cv::Mat EntireVisualization(const cv::Mat _rgb,
     cv::drawContours(vis_trackedshapes, cnts, 0, color0, 2);
   }
 
-  bool show_keypoints = true;
-  if(show_keypoints){
-    for(const auto& kpt : keypoints) 
-      cv::circle(vis_trackedshapes, kpt.pt, 3, CV_RGB(255,0,0), 1);
-  }
-
   for(int r=0; r<rgb.rows; r++){
     for(int c=0; c<rgb.cols; c++){
       if( !outline_edges.at<uchar>(r,c) )
@@ -642,65 +637,26 @@ cv::Mat EntireVisualization(const cv::Mat _rgb,
   return dst;
 }
 
-void Extract(cv::InputArray gray, const std::map<int, ShapePtr>& global_shapes,
-             std::vector<cv::KeyPoint>& keypoints,
-             cv::OutputArray descriptions) {
-  /*
-  # 기존 알고리즘
-    기존 ORB SLAM의 keypoint (orb_extractor.cpp)는
-    ORBextrctor::extract()
-      1) ComputeKeyPointsOctTree()
-        각 image pyramid level에서 >
-          가로세로 30x30pixel과 짜투리 셀에 대해서,
-          조각난 이미지를 FAST에 입력, level별로 분리해서 vector<vector<keypoint>에, 해당 lv scale의 uv 좌표 수집.
-          keypoint를 분배하고, 그중 response가 강한것만 남기기위해,
-          DistributeOctTree(), 가 keypoint를 Quadtree에 분배.
-            각 노드는 포함하는 점이 1개만 남거나, node의 숫자가 required features보다 많아질때 중단된다.
-            마지막으로 각 노드에서 가장 큰 response를 가진 keypoint만 추려낸다.
-            즉, 화면 골고루에 강한점부터 뿌리고 점점 약한점이 사이사이에 추가된다.
-      2) le:hi coc_err_hi ctermfg=1 ctermbg=15vel별 keypoints에 대해, scaled image를 사용, ORB descriptor를 추출하고, 
-         scale을 복원해 std::vector<Keypoint>, cv::Mat descriptor 취합.
-  # 개선,적용
-    * 추출된 FAST point 중,
-    Octree(lv별 Quadtree) Node별로, 가장 response가 강한 point부터 남기면서,
-    이미 충분한 keypoint를 가진 shape에 위치한 keypoint는 skip < 이기능만 DistributeOctree 단계에서 추가.
-       TODO) Inprogress, 맞다. keypoint extractor 구현.
-    * 우려사항 : FAST가 각 shape를 추적하기에 충분할 만큼 feature point 추출이 가능한가?
-      * 차라리 shape BB 안에 한해서 다시 FAST를 따로 돌리는게 났다? ... 이건 느리기만하니 패스.
-      * 모든 segment에 대해 상대 '좌표계' - 특히 orientation을 계산하는건 어렵다.
-       - feature point가 충분히 추적안되는 instnace도 '분리'는 필요.
-       - EdgeSE3Switchable 대신에, 무엇을 error로 삼아야할까?
-  */
-   
-  // ORBextractor::extract()
-  int nfeatures = 2000;
-  float scale_factor = 1.2;
-  int nlevels = 8;
-  int initial_fast_th = 20;
-  int min_fast_th = 7;
-  static std::unique_ptr<ORB_SLAM2::ORBextractor> extractor(new ORB_SLAM2::ORBextractor(nfeatures, scale_factor,
-                                                                  nlevels, initial_fast_th, min_fast_th));
-  extractor->extract(gray, cv::noArray(), keypoints, descriptions);
-
-  return;
-}
-
-void Seg::_Put(cv::Mat gray,
+const std::map<int, ShapePtr>& Segmentor::_Put(cv::Mat gray,
                cv::cuda::GpuMat g_gray,
                cv::Mat depth,
                const Camera& camera,
-               cv::Mat rgb
+               cv::Mat vis_rgb
                ) {
   auto start = std::chrono::steady_clock::now();
   std::vector<cv::Point2f> corners = GetCorners(gray);
   if(corners.empty())
-    return;
+    return global_shapes_;
+  /*
   if(gray0_.empty()){
     PutKeyframe(gray, g_gray);
-    return;
+    return global_shapes_;
   }
+  */
   const bool is_keyframe = true;
-  cv::Mat flow = GetFlow(g_gray); // Flow for tracking shape.
+  cv::Mat flow;
+  if(!gray0_.empty())
+    GetFlow(g_gray); // Flow for tracking shape.
 #if 1
 #else
   // Flow대신 ORB matcher 적용
@@ -725,25 +681,14 @@ void Seg::_Put(cv::Mat gray,
 
   bool limit_expand_range = false;
   cv::Mat marker = Segment(outline_edges,valid_depth,limit_expand_range); // Sgement(error_edges,rgb);
- /* 
-  * [x] Visualzation 개선 / 후 commit
-  * [x] keypoint extraction, visualization
-  * [ ] Switchable edge 기반 LBA
- */
-  std::map<int, ShapePtr> local_shapes = ConvertMarker2Instances(marker);
-  static std::map<int, ShapePtr> global_shapes; // TODO 맴버변수로
-  static int n_shapes = 0;
-  const float min_iou = .3;
-  std::map<int,int> l2g = TrackShapes(local_shapes, marker, flow, min_iou, global_shapes, n_shapes);
 
-  std::vector<cv::KeyPoint> keypoints;
-  cv::Mat descriptions;
-  Extract(gray, global_shapes, keypoints, descriptions);
-  // TODO LBA
+  std::map<int, ShapePtr> local_shapes = ConvertMarker2Instances(marker);
+  const float min_iou = .3;
+  std::map<int,int> l2g = TrackShapes(local_shapes, marker, flow, min_iou, global_shapes_, n_shapes_);
 
   if(!is_keyframe){
     cv::waitKey(1);
-    return;
+    return global_shapes_;
   }
 
   if(is_keyframe)
@@ -751,20 +696,18 @@ void Seg::_Put(cv::Mat gray,
 
   auto stop = std::chrono::steady_clock::now();
   std::cout << "etime = " << std::chrono::duration_cast<std::chrono::milliseconds>(stop-start).count() << "[msec]" << std::endl;
-  {
-    cv::Mat dst = EntireVisualization(rgb, valid_depth, outline_edges, global_shapes, marker,
-                                      keypoints);
+  if(!vis_rgb.empty()){
+    cv::Mat dst = EntireVisualization(vis_rgb, valid_depth, outline_edges, global_shapes_, marker);
     cv::imshow("vis", dst);
   }
-  return;
+
+  return global_shapes_;
 }
 
-void Seg::Put(cv::Mat rgb, cv::Mat depth, const DepthCamera& camera) {
-  cv::Mat gray;
-  cv::cvtColor(rgb,gray,cv::COLOR_BGR2GRAY);
+const std::map<int, ShapePtr>& Segmentor::Put(cv::Mat gray, cv::Mat depth, const DepthCamera& camera,
+                    cv::Mat vis_rgb) {
   cv::cuda::GpuMat g_gray;
   g_gray.upload(gray);
 
-  _Put(gray, g_gray, depth, camera, rgb);
-  return;
+  return _Put(gray, g_gray, depth, camera, vis_rgb);
 }
