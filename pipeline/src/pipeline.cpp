@@ -88,7 +88,7 @@ Pipeline::Pipeline(const Camera* camera)
 {
   const auto& inv_sigma2 = extractor_->GetInverseScaleSigmaSquares();
   pose_tracker_ = new IndirectPoseTracker(inv_sigma2);
-  local_mapper_ = new StandardLocalMapper(std::make_shared<IndirectStereoMethod>(inv_sigma2) );
+  local_mapper_ = new BasicLocalMapper(std::make_shared<IndirectStereoMethod>(inv_sigma2) );
   loop_detetor_ = new LoopDetector(map_);
   loop_closer_  = new LoopCloser(map_, std::make_shared<IndirectPoseTracker>(inv_sigma2) );
 

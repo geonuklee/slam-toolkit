@@ -60,8 +60,8 @@ public:
   virtual void AddViewer(PipelineViewer* viewer) = 0;
 };
 
-class StandardPoseTracker;
-class StandardLocalMapper;
+class BasicPoseTracker;
+class BasicLocalMapper;
 
 class Pipeline : public AbstractPipeline{
 public:
@@ -87,8 +87,8 @@ private:
   const Camera*const camera_;
   ORB_SLAM2::ORBextractor*const extractor_;
 
-  StandardPoseTracker* pose_tracker_;
-  StandardLocalMapper* local_mapper_;
+  BasicPoseTracker* pose_tracker_;
+  BasicLocalMapper* local_mapper_;
   PipelineMap*const map_;
 
   LoopDetector* loop_detetor_;

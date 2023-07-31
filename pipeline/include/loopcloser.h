@@ -28,7 +28,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include "stdafx.h"
 
 class PipelineMap;
-class StandardPoseTracker;
+class BasicPoseTracker;
 class IndirectPoseTracker;
 
 class LoopCloser {

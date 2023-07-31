@@ -30,13 +30,13 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include "frame.h"
 #include "camera.h"
 
-StandardLocalMapper::StandardLocalMapper(const std::shared_ptr<StandardMethod> method)
+BasicLocalMapper::BasicLocalMapper(const std::shared_ptr<StandardMethod> method)
  : method_(method)
 {
 
 }
 
-void StandardLocalMapper::InitializeGraph(const PipelineMap* map, Frame* curr_frame,
+void BasicLocalMapper::InitializeGraph(const PipelineMap* map, Frame* curr_frame,
                     g2o::SparseOptimizer& optimizer,
                     std::map<Frame*, g2o::OptimizableGraph::Vertex*>& v_poses,
                     std::map<Mappoint*, g2o::OptimizableGraph::Vertex*>& v_mappoints,
@@ -119,7 +119,7 @@ void StandardLocalMapper::InitializeGraph(const PipelineMap* map, Frame* curr_fr
   map->UnLock();
 }
 
-void StandardLocalMapper::Optimize(const PipelineMap* map, Frame* curr_frame, int n_iter) {
+void BasicLocalMapper::Optimize(const PipelineMap* map, Frame* curr_frame, int n_iter) {
 
    g2o::SparseOptimizer optimizer;
    method_->SetSolver(StandardMethod::LM, optimizer);

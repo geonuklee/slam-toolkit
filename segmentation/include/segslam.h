@@ -1,9 +1,8 @@
 #ifndef SEG_FRAME_
 #define SEG_FRAME_
+#include <flann/flann.hpp> // include it before opencv
 #include "stdafx.h"
 #include "seg.h"
-#include <opencv2/core/mat.hpp>
-#include <opencv2/core/types.hpp>
 
 namespace ORB_SLAM2{
   class ORBextractor;
@@ -24,24 +23,35 @@ typedef int Ith; // ith mappoint
 SegFrame에서는 이를 instance별로 묶고, instance들을 묶은 RigidGroup을 attribute로 가진다.
 '
 */
+class Frame;
 class RigidGroup;
 class Instance {
 public:
   Instance(Pth pth);
   Pth pth_;
-  std::set<RigidGroup*> rig_groups_;
+  std::map<Qth,RigidGroup*> rig_groups_;
+  std::map<Jth,Frame*>      visible_kfraems_; 
 };
 
 class Mappoint;
 class Frame {
 public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   Frame(const Jth id, const cv::Mat vis_rgb=cv::Mat());
+  ~Frame();
 
-  void ExtractKeypoints(const cv::Mat gray, ORB_SLAM2::ORBextractor* extractor);
+  int GetIndex(const Mappoint* mp) const;
+  void ExtractAndNormalizeKeypoints(const cv::Mat gray,
+                                    const Camera* camera,
+                                    ORB_SLAM2::ORBextractor* extractor);
   void SetInstances(const std::map<Pth, ShapePtr>& shapes,
                     const std::map<Pth, Instance*>& instances
                     );
   void SetMeasuredDepths(const cv::Mat depth);
+
+  std::set<int> SearchRadius(const Eigen::Vector2d& uv, double radius) const;
+  std::vector<std::vector<int> > SearchRadius(const flann::Matrix<double>& points,
+                                              double radius) const;
 
   const cv::Mat GetRgb() const { return rgb_; }
   const std::vector<cv::KeyPoint>& GetKeypoints()      const { return keypoints_; }
@@ -49,16 +59,25 @@ public:
   const std::vector<Instance*>&    GetInstances()      const { return instances_; }
   const std::vector<float>&        GetMeasuredDepths() const { return measured_depths_; }
   std::vector<Instance*>&          GetInstances() { return instances_; }
-  std::vector<Mappoint*>&          GetMappoints() { return mappoints_; }
+  void SetMappoint(Mappoint* mp, int kpt_index);
+  const Eigen::Vector3d& GetNormalizedPoint(int index) const { return normalized_[index]; }
 
   void ReduceMem();
+  const cv::Mat GetDescription(int i) const;
+  const cv::KeyPoint& GetKeypoint(int i) const {  return keypoints_.at(i); }
   const Jth GetId() const { return id_; }
+
 private:
   std::vector<cv::KeyPoint>    keypoints_;
+  EigenVector<Eigen::Vector3d> normalized_;
   std::vector<Mappoint*>       mappoints_;
   std::vector<Instance*>       instances_; // 사실 Pth가 Qth를 가리켜야속편한데, 이거때문에 어려워짐.
   std::vector<float>           measured_depths_;
   cv::Mat descriptions_;
+  flann::Matrix<double> flann_keypoints_;
+  flann::Index<flann::L2<double> >* flann_kdtree_;
+  std::map<const Mappoint*, int> mappoints_index_;
+
   cv::Mat rgb_;
   const Jth id_;
 };
@@ -72,21 +91,24 @@ Instance 사이의 ... 사이의...  필요없다.
 
 class Mappoint {
 public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   Mappoint(Ith id,
-           const std::map<Qth,RigidGroup*>& visible_rigs,
+           const std::set<Qth>& ref_rigs, 
            Frame* ref, 
            float invd);
   const Ith& GetId() const { return id_; }
 
   void SetInvD(float invd);
   float GetDepth() const;
-  cv::Mat GetDescription() const; // ref에서의 desc, kpt
-  cv::KeyPoint GetKeypoint() const;
+
+  cv::Mat GetDescription() const; // ref에서의 desc
   int GetIndex() const { return id_; }
   Frame* GetRefFrame() const { return ref_; }
 
   const std::map<Qth, std::set<Frame*> >& GetKeyframes() const { return keyframes_; }
   const std::set<Frame*>& GetKeyframes(Qth qth) const { return keyframes_.at(qth); }
+
+  Eigen::Vector3d GetXr() const; // xyz pos in ref coordinate
 
 public:
   static std::map<Qth, size_t> n_;
@@ -106,24 +128,20 @@ public:
   void IncludeInstance(Instance* ins);
   Instance* GetBgInstance() const { return bg_instance_; }
   const Qth& GetId() const { return id_; }
+  void SetLatestKeyframe(Frame* kf) { latest_kf_ = kf; }
+  Frame* GetLatestKeyframe() const { return latest_kf_; }
 private:
+  Frame* latest_kf_;
   const Qth id_;
   Instance*const bg_instance_;
   std::map<Pth, Instance*> excluded_instances_;
   std::map<Pth, Instance*> included_instances_; // TODO Need?
 };
 
-/*
- argmin sig(s(p,q)^) [ Xc(j) - Tcq(j)^ Xq(i∈p)^ ]
- Xq(i∈p)^ : q th group coordinate에서 본 'i'th mappoint의 좌표.
-  -> 일시적으로, 하나의 'i'th mappoint가 여러개의 3D position을 가질 수 있다.
-  -> Instance 의 모양이 group마다 바뀐다는 모순이 생길순 있지만, 이런 경우가 적으므로,
-    사소한 연결때문에 group을 넘나드는 SE(3)사이의 covariance를 늘릴 필요는 없다.( solver dimmension)
- SE(3) 의 dimmension을 줄일려고( n(G) dim, 1iter -> 1dim, n(G) iter ) 
- binary로 group member 가지치기 들어가기.
- */
+class Mapper;
 class Pipeline {
 public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   Pipeline(const Camera* camera,
            ORB_SLAM2::ORBextractor*const extractor
           );
@@ -134,22 +152,26 @@ public:
            const cv::Mat vis_rgb=cv::Mat());
 
 private:
-  std::map<Qth,bool> NeedKeyframe(Frame* frame,
-                                RigidGroup* new_rig) const;
+  std::map<Qth,bool> NeedKeyframe(Frame* frame) const;
   // j -> q -> (p) -> i
   std::map<Qth, std::map<Jth, Frame*> >       keyframes_;  // jth {c}amera와 keypointt<->'i'th mappoint correspondence
-  Frame* prev_frame_;
+  // Tcq(j) : {c}amera <- {q}th group for 'j'th frame
+  // Jth-1 for 'latest frame - regardless whether keyframe
+  EigenMap<Qth, EigenMap<Jth, g2o::SE3Quat> > kf_Tcqs_;    
+  Frame*                      prev_frame_;
+  EigenMap<Qth, g2o::SE3Quat> prev_Tcqs_; // Qth별 가장 최근에 관찰된 Tcq
+  std::set<Qth>               prev_rigs_;
 
-  EigenMap<Qth, EigenMap<Jth, g2o::SE3Quat> > Tcqs_;       // Tcq(j) : {c}amera <- {q}th group for 'j'th frame
   std::map<Qth, RigidGroup*>                  qth2rig_groups_;
   std::map<Pth, Instance*>                    pth2instances_;
   std::map<Ith, Mappoint* >                   ith2mappoints_;
 
   const Camera*const camera_;
   ORB_SLAM2::ORBextractor*const extractor_;
+  std::shared_ptr<Mapper> mapper_;
 };
 
 
-} // namespace seg
+} // namespace seg
 
 #endif

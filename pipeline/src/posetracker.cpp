@@ -34,12 +34,12 @@ const float deltaMono = sqrt(5.991); // TODO Why?
 const float thHuber3D = sqrt(7.815);
 using BlockSolver_8_3 = g2o::BlockSolverPL<8, 3>;
 
-StandardPoseTracker::StandardPoseTracker(StandardMethod* method)
+BasicPoseTracker::BasicPoseTracker(StandardMethod* method)
 : method_(method) {
 
 }
 
-void StandardPoseTracker::Track(const std::set<Mappoint*>& mappoints,
+void BasicPoseTracker::Track(const std::set<Mappoint*>& mappoints,
                                 const void* predict,
                                 void* estimation,
                                 int n_iter,
@@ -50,7 +50,7 @@ void StandardPoseTracker::Track(const std::set<Mappoint*>& mappoints,
   RetriveEstimation(estimation, frame);
 }
 
-void StandardPoseTracker::EstimatePose(const std::set<Mappoint*>& mappoints,
+void BasicPoseTracker::EstimatePose(const std::set<Mappoint*>& mappoints,
                                        const void* predict,
                                        void* estimation,
                                        int n_iter,
@@ -70,7 +70,7 @@ void StandardPoseTracker::EstimatePose(const std::set<Mappoint*>& mappoints,
   return;
 }
 
-void StandardPoseTracker::InitializeGraph(const std::set<Mappoint*>& mappoints,
+void BasicPoseTracker::InitializeGraph(const std::set<Mappoint*>& mappoints,
                                           const void* predict,
                                           const Frame* frame,
                                           g2o::SparseOptimizer& optimizer,
@@ -174,7 +174,7 @@ std::list<std::pair<size_t, Mappoint*> > PhotometricErrorFilter::GetOutlier(cons
 }
 
 IndirectPoseTracker::IndirectPoseTracker(const std::vector<float>& inv_scales_sigma2)
-  : StandardPoseTracker(new IndirectStereoMethod(inv_scales_sigma2) )
+  : BasicPoseTracker(new IndirectStereoMethod(inv_scales_sigma2) )
 {
 }
 
@@ -248,7 +248,7 @@ void IndirectPoseTracker::SetMeasurement(const Frame* frame, Mappoint* mp, g2o::
 }
 
 BrightenDirectPoseTracker::BrightenDirectPoseTracker(double min_search_radius)
-  : StandardPoseTracker(new DirectStereoMethod ),
+  : BasicPoseTracker(new DirectStereoMethod ),
     min_search_radius_(min_search_radius)
 {
 }

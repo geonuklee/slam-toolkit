@@ -22,6 +22,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 */
 
 #include "camera.h"
+#include "common.h"
 
 bool Camera::IsInImage(const Eigen::Vector2d& uv) const {
   if(uv.x() < 0.)
@@ -45,6 +46,19 @@ Camera::Camera(const Eigen::Matrix<double,3,3>& K,
   if(D_.rows() < 4)
     throw std::invalid_argument("Need 4 distortion param");
   invK_ = K.inverse();
+  /*
+  // nu, nv for init rectification.
+  nu_ = cv::Mat::zeros(height,width, CV_32FC1);
+  nv_ = cv::Mat::zeros(height,width, CV_32FC1);
+  for(int r=0; r<nu_.rows; r++){
+    for(int c=0; c<nv_.cols; c++){
+      Eigen::Vector2d uv(c,r);
+      Eigen::Vector2d nuv = NormalizedUndistort(uv).head<2>();
+      nu_.at<float>(r,c) = (float) nuv[0];
+      nv_.at<float>(r,c) = (float) nuv[1];
+    }
+  }
+  */
 }
 
 Eigen::Vector2d Distort(const Eigen::VectorXd& D,

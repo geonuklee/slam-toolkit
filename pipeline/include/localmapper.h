@@ -31,9 +31,9 @@ class Mappoint;
 
 #include <g2o/core/sparse_optimizer.h>
 
-class StandardLocalMapper{
+class BasicLocalMapper{
 public:
-  StandardLocalMapper(const std::shared_ptr<StandardMethod> method);
+  BasicLocalMapper(const std::shared_ptr<StandardMethod> method);
 
   void InitializeGraph(const PipelineMap* map, Frame* curr_frame,
                            g2o::SparseOptimizer& optimizer,

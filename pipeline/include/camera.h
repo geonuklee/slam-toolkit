@@ -50,13 +50,16 @@ public:
   virtual std::string GetType() const { return "mono"; }
 
 protected:
-
   const int width_;
   const int height_;
 
   const Eigen::Matrix<double,3,3> K_;
   Eigen::Matrix<double,3,3> invK_;
   const Eigen::VectorXd D_;
+  /*
+  cv::Mat nu_;
+  cv::Mat nv_;
+  */
 };
 
 class StereoCamera : public Camera {

@@ -64,10 +64,10 @@ private:
 // 지금은 잘 관리해서 쓰지만, 자동적인 안전장치가 필요.
 // 임의의 pose type, frame type에 대처하는 posetracker의 빌드시간 절약을 위해 template 대신 void* 를 사용.
 class StandardMethod;
-class StandardPoseTracker {
+class BasicPoseTracker {
 public:
-  StandardPoseTracker(StandardMethod* method);
-  virtual ~StandardPoseTracker() {}
+  BasicPoseTracker(StandardMethod* method);
+  virtual ~BasicPoseTracker() {}
 
   // Update pose
   virtual void Track(const std::set<Mappoint*>& mappoints,
@@ -107,7 +107,7 @@ protected:
 };
 
 
-class IndirectPoseTracker : public StandardPoseTracker {
+class IndirectPoseTracker : public BasicPoseTracker {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
@@ -130,7 +130,7 @@ protected:
 };
 
 
-class BrightenDirectPoseTracker : public StandardPoseTracker {
+class BrightenDirectPoseTracker : public BasicPoseTracker {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 

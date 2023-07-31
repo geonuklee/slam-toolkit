@@ -63,8 +63,8 @@ add_executable(example_segmentation ${src}
   ../pipeline/src/orb_extractor.cpp
 )
 #set_target_properties(example_segmentation PROPERTIES UNITY_BUILD_MODE BATCH UNITY_BUILD_BATCH_SIZE 10)
-set_source_files_properties(src/debug.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization 
-set_source_files_properties(src/segslam.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization 
+set_source_files_properties(src/debug.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
+set_source_files_properties(src/optimizer.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
 
 target_link_libraries(example_segmentation
 ${OpenCV_LIBS}
