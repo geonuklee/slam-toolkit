@@ -5,37 +5,18 @@
 #include "orb_extractor.h"
 #include "seg.h"
 #include "util.h"
+#include <opencv2/core.hpp>
 #include <opencv2/core/types.hpp>
 #include <opencv2/imgproc.hpp>
 #include <queue>
+#include <string>
 #include <vector>
-
-/*
-std::vector<cv::Scalar> colors = {
-  CV_RGB(0,180,0),
-  CV_RGB(0,100,0),
-  CV_RGB(255,0,255),
-  CV_RGB(100,0,255),
-  CV_RGB(100,0,100),
-  CV_RGB(0,0,180),
-  CV_RGB(0,0,100),
-  CV_RGB(255,255,0),
-  CV_RGB(100,255,0),
-  CV_RGB(100,100,0),
-  CV_RGB(100,0,0),
-  CV_RGB(0,255,255),
-  CV_RGB(0,100,255),
-  CV_RGB(0,255,100),
-  CV_RGB(0,100,100)
-};
-*/
 
 namespace seg {
 
-RigidGroup::RigidGroup(Qth qth)
+RigidGroup::RigidGroup(Qth qth, Frame* first_frame)
 : id_(qth),
-  bg_instance_(new Instance(-1)),
-  latest_kf_(nullptr)
+  bg_instance_(new Instance(-1))
 {
   IncludeInstance(bg_instance_);
 }
@@ -64,6 +45,19 @@ Frame::~Frame() {
     delete flann_kdtree_;
 }
 
+bool Frame::IsInFrame(const Camera* camera, const Eigen::Vector2d& uv) const {
+  double width = camera->GetWidth();
+  double height = camera->GetHeight();
+  if( uv.y() < 20. )
+    return false;
+  if( uv.x() < 20. )
+    return false;
+  if( width-uv.x() < 20. )
+    return false;
+  if( height - uv.y() < 50. ) // 땅바닥에서 결과가 너무 안좋았다.
+    return false;
+  return true;
+}
 int Frame::GetIndex(const Mappoint* mp) const {
   if(mappoints_index_.count(mp))
     return mappoints_index_.at(mp);
@@ -170,43 +164,49 @@ const cv::Mat Frame::GetDescription(int i) const {
   return desc;
 }
 
-Mappoint::Mappoint(Ith id,
-                   const std::set<Qth>& ref_rigs, 
-                   Frame* ref)
-  : ref_(ref),
-  id_(id)
+Mappoint::Mappoint(Ith id, Instance* ins)
+  : id_(id), ins_(ins)
 {
 }
-/*
-float Mappoint::GetDepth() const {
-  return 1./invd_;
+
+void Mappoint::AddReferenceKeyframe(const Qth& qth, Frame* ref) {
+  ref_[qth] = ref;
 }
-void Mappoint::SetInvD(float invd){
-  invd_ = std::max<float>(1e-5, invd);
-  return;
-}
-*/
-void Mappoint::SetXr(const Eigen::Vector3d& Xr) {
-  Xr_ = Xr;
+void Mappoint::SetXr(const Qth& qth, const Eigen::Vector3d& Xr) {
+  Xr_[qth] = std::shared_ptr<Eigen::Vector3d>(new Eigen::Vector3d(Xr));
   return;
 }
 
-const Eigen::Vector3d& Mappoint::GetXr() const {
-  return Xr_;
+const Eigen::Vector3d& Mappoint::GetXr(const Qth& qth) const {
+  return *Xr_.at(qth);
 }
 
+void Mappoint::SetXq(Qth qth, const Eigen::Vector3d& Xq) {
+  Xq_[qth] = std::shared_ptr<Eigen::Vector3d>(new Eigen::Vector3d(Xq));
+}
+
+const Eigen::Vector3d& Mappoint::GetXq(Qth qth) {
+  if(!Xq_.count(qth) ){
+    //Frame* ref = ref_.at(qth);
+    //const auto Tqc = ref->GetTcq(qth).inverse();
+    //Xq_[qth] = Tqc * (*Xr_.at(qth));
+  }
+  return *Xq_.at(qth);
+}
 
 cv::Mat Mappoint::GetDescription() const {
-  int kpt_idx = ref_->GetIndex(this);
-  return ref_->GetDescription(kpt_idx);
+  Frame* ref = ref_.begin()->second;
+  int kpt_idx = ref->GetIndex(this);
+  return ref->GetDescription(kpt_idx);
 }
 
 void RigidGroup::IncludeInstance(Instance* ins) {
   ins->rig_groups_[id_] = this;
-  included_instances_[ins->pth_] = ins;
+  included_instances_[ins->GetId()] = ins;
   return;
 }
 
+#if 0
 cv::Mat VisualizeMatches(const Frame* frame, const std::map<int, Mappoint*>& matches){
   cv::Mat dst = frame->GetRgb().clone();
   const auto& keypoints = frame->GetKeypoints();
@@ -219,17 +219,19 @@ cv::Mat VisualizeMatches(const Frame* frame, const std::map<int, Mappoint*>& mat
     Mappoint* mpt = matches.at(n);
     Frame* ref = mpt->GetRefFrame();
     const cv::Point2f& pt0 = ref->GetKeypoint( ref->GetIndex(mpt) ).pt;
+    std::string msg = std::to_string( ref->GetId() );
+    cv::putText(dst, msg, pt0, cv::FONT_HERSHEY_SIMPLEX, .5, CV_RGB(0,255,0) );
     cv::circle(dst, pt, 3, CV_RGB(0,0,255), -1);
     cv::line(dst, pt0, pt, CV_RGB(0,255,0), 1);
   }
   return dst;
 }
+#endif
 
 std::map<int, Mappoint*> ProjectionMatch(const Camera* camera,
                                          const std::set<Mappoint*>& mappoints,
-                                         const g2o::SE3Quat& predicted_Tcq,
-                                         const EigenMap<Jth, g2o::SE3Quat> & kf_Tcqs,
-                                         const Frame* curr_frame,
+                                         const Frame* curr_frame, // With predicted Tcq
+                                         const Qth qth,
                                          double search_radius) {
   std::map<int, Mappoint*> matches;
   const double best12_threshold = 0.5;
@@ -243,15 +245,15 @@ std::map<int, Mappoint*> ProjectionMatch(const Camera* camera,
       continue;
     }
 
-    const Eigen::Vector3d Xr = mp->GetXr();
-    const g2o::SE3Quat& Trq = kf_Tcqs.at(mp->GetRefFrame()->GetId());
-    const Eigen::Vector3d Xc = predicted_Tcq * Trq.inverse() * Xr;
+    const Eigen::Vector3d Xr = mp->GetXr(qth);
+    Frame* ref = mp->GetRefFrame(qth);
+    const g2o::SE3Quat& Trq = ref->GetTcq(qth);
+    const Eigen::Vector3d Xc = curr_frame->GetTcq(qth) * Trq.inverse() * Xr;
     if(Xc.z() < 0.)
       continue;
     Eigen::Vector2d uv = camera->Project(Xc);
-    // 이거 체크해야할까? 밖으로 넘어가도, radius만 만족하면..
-    //if(!curr_frame->IsInFrame(uv)) 
-    //  continue;
+    if(!curr_frame->IsInFrame(camera,uv))  //  땅바닥 제외
+      continue;
     ptr_projections[2*n]   = uv[0];
     ptr_projections[2*n+1] = uv[1];
     key_table[n++] = mp;
@@ -357,10 +359,16 @@ RigidGroup* SupplyRigGroup(Frame* frame,
     }
   }
   float ng_ratio = (float)n / (float) N;
+  // TODO 제대로 n(qth) > 1 에서 문제없는것 확인하고 삭제.
+#if 0
   if(ng_ratio < .2)
     return nullptr;
+#else
+  if(frame->GetId() > 0)
+    return nullptr;
+#endif
   static Qth nRiggroups = 0;
-  RigidGroup* rig = new RigidGroup(nRiggroups++);
+  RigidGroup* rig = new RigidGroup(nRiggroups++, frame);
   rig_groups[rig->GetId()] = rig;
   for(Instance* ins : nongroup_instances)
     rig->IncludeInstance(ins);
@@ -405,44 +413,6 @@ std::vector< std::pair<Qth, size_t> > CountRigPoints(Frame* frame,
   return sorted_results;
 }
 
-void SupplyMappoints(Frame *ref_frame,
-                     const std::set<Qth>& ref_rigs,
-                     const EigenMap<Qth, EigenMap<Jth, g2o::SE3Quat> >& kf_Tcqs,   
-                     std::map<Ith, Mappoint*>& ith2mappoints
-                     ) {
-  const auto& keypoints = ref_frame->GetKeypoints();
-  const auto& instances = ref_frame->GetInstances();
-  const auto& depths    = ref_frame->GetMeasuredDepths();
-  const auto& mappoints = ref_frame->GetMappoints();
-  /*
-    현재 frame에서 관찰되는 (모든 잠재적 연결가능성있는) Qth를 모두 받기
-     - 이거 나중에는 dominant group 과만 연결하는 쪽으로 가야할 순 있지만,. 일단은.
-  */
-  for(size_t n=0; n<keypoints.size(); n++){
-    if(mappoints[n])
-      continue;
-    // depth값이 관찰되지 않는 uv only point를 구분해서 처리하면 SLAM 결과가 더 정확할텐데..
-    float z = depths[n];
-    if(z < 1e-5) // No depth too far
-      z = 1e+3;
-    const cv::KeyPoint& kpt = keypoints[n];
-    Instance* ins = instances[n];
-    assert(ins);
-    static Ith nMappoints = 0;
-    auto ptr = new Mappoint(nMappoints++, ref_rigs, ref_frame);
-    Eigen::Vector3d Xr = z*ref_frame->GetNormalizedPoint(n);
-    ptr->SetXr(Xr);
-    for(Qth qth : ref_rigs){
-      const g2o::SE3Quat& Trq = kf_Tcqs.at(qth).at(ref_frame->GetId());
-      const Eigen::Vector3d Xq = Trq.inverse()*Xr;
-      ptr->SetXq(qth, Xq);
-    }
-    ref_frame->SetMappoint(ptr, n);
-    ith2mappoints[ptr->GetId()] = ptr;
-  }
-  return;
-}
-
 void GetMappoints4Qth(Frame* frame,
                       const Qth& qth,
                       std::set<Mappoint*>& _mappoints
@@ -459,6 +429,13 @@ void GetMappoints4Qth(Frame* frame,
       continue;
     if(!ins->rig_groups_.count(qth))
       continue;
+    const auto& keyframes = mpt->GetKeyframes();
+    if(!keyframes.count(qth))
+      continue;
+    if(!keyframes.at(qth).count(frame))
+      continue;
+    mpt->GetXr(qth);
+
     _mappoints.insert(mpt);
   }
   return;
@@ -476,13 +453,17 @@ void GetNeighbors(Frame* keyframe,
       neighbor_keyframes[nkf->GetId()] = nkf;
   }
   // 3. '2'의 nkf에서 보이는 mappoints
-  for(auto it_nkf : neighbor_keyframes){
-    GetMappoints4Qth(it_nkf.second, qth, neighbor_mappoints);
+  int n = 0;
+  for(auto it_nkf = neighbor_keyframes.rbegin(); it_nkf != neighbor_keyframes.rend(); it_nkf++){
+    if(++n > 3) // N keyframe 이상 보이지 않은 mappoint는 제외.
+      break;
+    GetMappoints4Qth(it_nkf->second, qth, neighbor_mappoints);
   }
   return;
 }
 
-std::map<Qth,bool> Pipeline::NeedKeyframe(Frame* frame) const {
+std::map<Qth,bool> Pipeline::FrameNeedsToBeKeyframe(Frame* frame,
+                                                        RigidGroup* rig_new) const {
   const auto& keypoints = frame->GetKeypoints();
   const auto& mappoints = frame->GetMappoints();
   const auto& instances = frame->GetInstances();
@@ -500,8 +481,11 @@ std::map<Qth,bool> Pipeline::NeedKeyframe(Frame* frame) const {
   }
 
   std::map<Qth,bool> need_keyframes;
+  const Qth qth_new = rig_new? rig_new->GetId() : 0;
   for(auto it : n_mappoints){
     const Qth& qth = it.first;
+    if(qth==qth_new) // 다음 if(rig_new에서 'frame'이 qth의 kf로 추가 된다.
+      continue;
     float valid_matches_ratio = ((float) it.second.first) / ((float)it.second.second);
     if(valid_matches_ratio < .5){
       need_keyframes[qth] = true;
@@ -518,7 +502,7 @@ std::map<Qth,bool> Pipeline::NeedKeyframe(Frame* frame) const {
   return need_keyframes;
 }
 
-void AddKeyframesAtMappoints(Frame* keyframe) {
+void AddKeyframesAtMappoints(Frame* keyframe, RigidGroup* rig_new) {
   // ins->rig_qth 가 일하는 mappoint에 한해서 mpt->AddKeyframe(qth, frame)
   const auto& mappoints = keyframe->GetMappoints();
   const auto& instances = keyframe->GetInstances();
@@ -526,12 +510,63 @@ void AddKeyframesAtMappoints(Frame* keyframe) {
     Mappoint* mpt = mappoints[n];
     if(!mpt)
       continue;
-    Instance* ins = instances[n];
-    if(!ins)
-      continue;
-    for(auto it_rig : ins->rig_groups_)
-      mpt->AddKeyframe(it_rig.first, keyframe);
+    for(auto it_ref : mpt->GetRefFrames() ){
+      //if(it_rig.second == rig_new)
+      //  continue;
+      mpt->AddKeyframe(it_ref.first, keyframe);
+      mpt->GetXq(it_ref.first);
+    }
   }
+  return;
+}
+
+void Pipeline::SupplyMappoints(Frame* frame,
+                               RigidGroup* rig_new) {
+  const auto& keypoints = frame->GetKeypoints();
+  const auto& instances = frame->GetInstances();
+  const auto& depths    = frame->GetMeasuredDepths();
+  const auto& mappoints = frame->GetMappoints();
+  /*
+    현재 frame에서 관찰되는 (모든 잠재적 연결가능성있는) Qth를 모두 받기
+     - 이거 나중에는 dominant group 과만 연결하는 쪽으로 가야할 순 있지만,. 일단은.
+  */
+  const auto& Tcqs = frame->GetTcqs();
+  for(size_t n=0; n<keypoints.size(); n++){
+    // depth값이 관찰되지 않는 uv only point를 구분해서 처리하면 SLAM 결과가 더 정확할텐데..
+    float z = depths[n];
+    if(z < 1e-5) // No depth too far
+      z = 1e+5;
+    const cv::KeyPoint& kpt = keypoints[n];
+    Instance* ins = instances[n];
+    Eigen::Vector3d Xr = z*frame->GetNormalizedPoint(n);
+
+    if(Mappoint* mp = mappoints[n]){
+      if(rig_new){
+        // 기존 mp에 대해, 새로운 rig_new를 위한  Xr, Xq를 입력
+        const Qth& qth = rig_new->GetId();
+        mp->SetXr(qth, Xr);
+        mp->AddReferenceKeyframe(qth, frame);
+        const Eigen::Vector3d Xq = frame->GetTcq(qth).inverse()*Xr;
+        mp->SetXq(qth, Xq);
+      }
+      continue;
+    }
+    static Ith nMappoints = 0;
+    Mappoint* mp = new Mappoint(nMappoints++, ins);
+    for(auto it_Tcq : Tcqs){
+      mp->SetXr(it_Tcq.first, Xr);
+      mp->AddReferenceKeyframe(it_Tcq.first, frame);
+      const Eigen::Vector3d Xq = it_Tcq.second->inverse()*Xr;
+      mp->SetXq(it_Tcq.first, Xq);
+    }
+    frame->SetMappoint(mp, n);
+    ith2mappoints_[mp->GetId()] = mp;
+  }
+
+  if(rig_new)
+    keyframes_[rig_new->GetId()][frame->GetId()] = frame;
+  AddKeyframesAtMappoints(frame, rig_new); // Call after supply mappoints
+  every_keyframes_.insert(frame->GetId());
   return;
 }
 
@@ -540,12 +575,9 @@ void Pipeline::Put(const cv::Mat gray,
                    const std::map<Pth, ShapePtr>& shapes,
                    const cv::Mat vis_rgb)
 {
+  const bool fill_bg_with_dominant = true;
   const float search_radius = 30.;
-  /*
-  *[ ] 3) 기존 mappoint 와 matching,
-    * Matching은 qth고려 없이 가능한가? rprj 참고하려면 필요는 한데..
-  *[ ] 4) qth group 별로 LBA
-  */
+
   for(auto it_shape : shapes){
     const Pth& pth = it_shape.first;
     if(pth2instances_.count(pth) )
@@ -559,114 +591,70 @@ void Pipeline::Put(const cv::Mat gray,
   frame->SetInstances(shapes, pth2instances_);
   frame->SetMeasuredDepths(depth);
 
-  // nullptr if no new rigid group
-  RigidGroup* rig_new = nullptr;
-  if(frame->GetId() == 0) // TODO 제거 
-    rig_new = SupplyRigGroup(frame, qth2rig_groups_);
-
-  bool fill_bg_with_dominant = true;
-  std::vector<std::pair<Qth,size_t> > rig_counts 
-    = CountRigPoints(frame, fill_bg_with_dominant, qth2rig_groups_);
-  std::set<Qth> curr_rigs;
-  for(auto it : rig_counts)
-    curr_rigs.insert(it.first);
-  //Qth qth_dominant = rig_counts.begin()->first; // Future work : rigid_tree를 만들어 부모 자식관계로 관리할때 사용
-
-  EigenMap<Qth, g2o::SE3Quat> current_Tcq;
+  RigidGroup* rig_new = SupplyRigGroup(frame, qth2rig_groups_);
+  std::vector<std::pair<Qth,size_t> > rig_counts;
+  std::set<Qth> curr_rigs; {
+    rig_counts  = CountRigPoints(frame, fill_bg_with_dominant, qth2rig_groups_);
+    for(auto it : rig_counts)
+      curr_rigs.insert(it.first);
+    //Qth qth_dominant = rig_counts.begin()->first; // Future work : rigid_tree를 만들어 부모 자식관계로 관리할때 사용
+  }
   if(rig_new)
-    current_Tcq[rig_new->GetId()] = g2o::SE3Quat();
+    frame->SetTcq(rig_new->GetId(), g2o::SE3Quat() );
 
-  if(frame->GetId() == 0){
+  if(!prev_frame_){
     const Qth& qth = rig_new->GetId();
-    kf_Tcqs_[qth][frame->GetId()]   = current_Tcq.at(qth);
-    qth2rig_groups_.at(qth)->SetLatestKeyframe(frame);
-    SupplyMappoints(frame, curr_rigs, kf_Tcqs_, ith2mappoints_);
-    AddKeyframesAtMappoints(frame); // Call after supply mappoints
-    keyframes_[qth][frame->GetId()] = frame;
-
+    SupplyMappoints(frame, rig_new);
     prev_frame_ = frame;
-    for(auto it : current_Tcq)
-      prev_Tcqs_[it.first] = it.second;
-    prev_rigs_ = curr_rigs;
     return;
+  } else {
+    // intiial pose prediction
+    const auto& Tcqs = prev_frame_->GetTcqs();
+    for(auto it : Tcqs)
+      frame->SetTcq(it.first, *it.second);
   }
 
   for(auto q_it : rig_counts){
     const Qth& qth = q_it.first;
-    if(prev_Tcqs_.count(qth))
-      current_Tcq[qth] = prev_Tcqs_.at(qth);
-    else
-      assert( qth == rig_new->GetId() );
-  }
-
-  for(auto q_it : rig_counts){
-    const Qth& qth = q_it.first;
-    g2o::SE3Quat Tcq = current_Tcq.at(qth);
     RigidGroup* rig  = qth2rig_groups_.at(qth);
-    Frame* latest_kf = rig->GetLatestKeyframe();
-    if(!latest_kf) {
-      assert(rig == rig_new);
+    if(rig == rig_new)
       continue;
-    }
-
-    std::cout << "F#" << frame->GetId() << " Tqc 0.t() = " << Tcq.inverse().translation().transpose() << std::endl;
+    Frame* latest_kf = keyframes_.at(qth).rbegin()->second;
     std::set<Mappoint*>     neighbor_mappoints;
     std::map<Jth, Frame* >  neighbor_frames;
     GetNeighbors(latest_kf, qth, neighbor_mappoints, neighbor_frames);
-    std::map<int, Mappoint*> matches = ProjectionMatch(camera_, neighbor_mappoints, 
-                                                       Tcq, kf_Tcqs_.at(qth), frame, search_radius);
-    for(auto it : matches)
-      frame->SetMappoint(it.second, it.first);
-    //std::cout << "l_kf#" << latest_kf->GetId() << ", n(nkf)= " << neighbor_frames.size() << ", n(mpt)" << neighbor_mappoints.size() << std::endl;
-    if(qth == 0){
-      printf("curr F# %d neighbor keyframes = {", frame->GetId());
-      for(auto it_kf : neighbor_frames)
-        printf("#%d, ", it_kf.first);
-      printf("}\n");
-      cv::Mat dst = VisualizeMatches(frame, matches);
-      cv::imshow("matches", dst);
-    }
-    bool verbose = qth==0;
-    mapper_->ComputeLBA(camera_, qth, neighbor_mappoints, neighbor_frames,
-                        frame, kf_Tcqs_[qth], Tcq, verbose);
-    current_Tcq[qth] = Tcq;
-  }
-  /*
-  cv::Mat dst = VisualizeMatches(frame, matches);
-  cv::imshow("matches", dst);
-    cv::waitKey(0);
-    */
-    //std::cout << "curr f#" <<  frame->GetId() << " q#" << qth << ", Tqc = " << Tcq.inverse().translation().transpose() << std::endl;
-  //std::cout << "Qth dominant = " << qth_dominant << std::endl;
-  if(frame->GetId() > 1){
-    std::map<Qth,bool> need_keyframes = NeedKeyframe(frame); // 판정은 current로, kf 승경은 prev로 
-    bool is_kf = false;
-    for(auto it : need_keyframes){
-      const Qth& qth = it.first;
-      const bool& is_kf4qth = it.second;
-      if(!is_kf4qth)
+    std::map<int, Mappoint*> matches = ProjectionMatch(camera_,
+                                                       neighbor_mappoints, 
+                                                       frame,
+                                                       qth,
+                                                       search_radius);
+    for(auto it : matches){
+      if(frame->GetMappoint(it.first)) // 이전에 이미 matching이 된 keypoint
         continue;
-      kf_Tcqs_[qth][prev_frame_->GetId()]   = prev_Tcqs_.at(qth);
-      qth2rig_groups_.at(qth)->SetLatestKeyframe(prev_frame_);
-      keyframes_[qth][prev_frame_->GetId()] = prev_frame_;
-      is_kf = true;
+      frame->SetMappoint(it.second, it.first);
     }
-    if(is_kf){
-      SupplyMappoints(prev_frame_, prev_rigs_, kf_Tcqs_, ith2mappoints_);
-      AddKeyframesAtMappoints(prev_frame_); // Call after supply mappoints
-    }
-    else
-      delete prev_frame_;
+    bool verbose = true;
+    mapper_->ComputeLBA(camera_, qth, neighbor_mappoints, neighbor_frames,
+                        frame, verbose);
   }
-  prev_frame_ = frame;
-  for(auto it : current_Tcq)
-    prev_Tcqs_[it.first] = it.second;
-  prev_rigs_ = curr_rigs;
+
+  // if(frame->GetId() > 10){
+  //   std::cout << "terminate for frame" << std::endl;
+  //   cv::waitKey();
+  //   exit(1);
+  // }
 
   {
-    cv::Mat dst =  visualize_frame(frame);
-    cv::imshow("slam frame", dst);
+    std::map<Qth,bool> need_keyframe = FrameNeedsToBeKeyframe(frame, rig_new);
+    for(auto it : need_keyframe){
+      if(!it.second)
+        continue;
+      keyframes_[it.first][frame->GetId()] = frame;
+      SupplyMappoints(frame, rig_new);
+    }
   }
+
+  prev_frame_ = frame;
   return;
 }
 

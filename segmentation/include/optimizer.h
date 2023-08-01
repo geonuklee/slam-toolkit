@@ -26,14 +26,13 @@ public:
                   const std::set<Mappoint*>& neighbor_mappoints,
                   const std::map<Jth, Frame*>& neighobor_frames,
                   Frame* curr_frame,
-                  EigenMap<Jth, g2o::SE3Quat> & kf_Tcqs,
-                  g2o::SE3Quat& curr_Tcq,
                   bool verbose
                  );
 private:
-  g2o::OptimizableGraph::Vertex* CreatePoseVertex(g2o::SparseOptimizer& optimizer,
-                                                  Frame* frame,
-                                                  const g2o::SE3Quat& Tcq);
+  g2o::OptimizableGraph::Vertex* CreatePoseVertex(const Qth& qth,
+                                                  g2o::SparseOptimizer& optimizer,
+                                                  Frame* frame);
+
   g2o::OptimizableGraph::Vertex* CreateStructureVertex(Qth qth,
                                                        g2o::SparseOptimizer& optimizer,
                                                        Mappoint* mpt);

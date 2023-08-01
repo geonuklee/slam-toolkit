@@ -25,21 +25,22 @@ SegFrame에서는 이를 instance별로 묶고, instance들을 묶은 RigidGroup
 */
 class Frame;
 class RigidGroup;
+class Mappoint;
 class Instance {
 public:
   Instance(Pth pth);
-  Pth pth_;
   std::map<Qth,RigidGroup*> rig_groups_;
-  std::map<Jth,Frame*>      visible_kfraems_; 
+  const Pth& GetId() const { return pth_; }
+private:
+  const Pth pth_;
 };
 
-class Mappoint;
 class Frame {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   Frame(const Jth id, const cv::Mat vis_rgb=cv::Mat());
   ~Frame();
-
+  bool IsInFrame(const Camera* camera, const Eigen::Vector2d& uv) const;
   int GetIndex(const Mappoint* mp) const;
   void ExtractAndNormalizeKeypoints(const cv::Mat gray,
                                     const Camera* camera,
@@ -55,6 +56,7 @@ public:
 
   const cv::Mat GetRgb() const { return rgb_; }
   const std::vector<cv::KeyPoint>& GetKeypoints()      const { return keypoints_; }
+  Mappoint* GetMappoint(int index)                     const { return mappoints_[index]; }
   const std::vector<Mappoint*>&    GetMappoints()      const { return mappoints_; }
   const std::vector<Instance*>&    GetInstances()      const { return instances_; }
   const std::vector<float>&        GetMeasuredDepths() const { return measured_depths_; }
@@ -68,6 +70,10 @@ public:
   const float& GetDepth(int i) const { return measured_depths_.at(i); }
   const Jth GetId() const { return id_; }
 
+  void SetTcq(const Qth& qth, const g2o::SE3Quat& Tcq) { Tcq_[qth] = std::shared_ptr<g2o::SE3Quat>(new g2o::SE3Quat(Tcq)); }
+  const g2o::SE3Quat& GetTcq(const Qth& qth) const { return *Tcq_.at(qth); }
+  const std::map<Qth, std::shared_ptr<g2o::SE3Quat> >& GetTcqs() const { return Tcq_; }
+
 private:
   std::vector<cv::KeyPoint>    keypoints_;
   EigenVector<Eigen::Vector3d> normalized_;
@@ -79,6 +85,7 @@ private:
   flann::Index<flann::L2<double> >* flann_kdtree_;
   std::map<const Mappoint*, int> mappoints_index_;
 
+  std::map<Qth, std::shared_ptr<g2o::SE3Quat> > Tcq_;
   cv::Mat rgb_;
   const Jth id_;
 };
@@ -93,56 +100,52 @@ Instance 사이의 ... 사이의...  필요없다.
 class Mappoint {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-  Mappoint(Ith id,
-           const std::set<Qth>& ref_rigs, 
-           Frame* ref);
+  Mappoint(Ith id, Instance* ins);
+  Instance* GetInstance() const { return ins_; }
   const Ith& GetId() const { return id_; }
-
-  /*
-  void SetInvD(float invd);
-  float GetDepth() const;
-  */
-
+  //int GetIndex() const { return id_; } // TODO 중복 삭제.
   cv::Mat GetDescription() const; // ref에서의 desc
-  int GetIndex() const { return id_; }
-  Frame* GetRefFrame() const { return ref_; }
+  Frame* GetRefFrame(const Qth& qth) const { return ref_.at(qth); }
+  const std::map<Qth,Frame*>& GetRefFrames() const { return ref_; }
+  bool HasEstimate4Rig(const Qth& qth) const { return ref_.count(qth); }
 
   void AddKeyframe(Qth qth, Frame* frame) { keyframes_[qth].insert(frame); }
   const std::map<Qth, std::set<Frame*> >& GetKeyframes() const { return keyframes_; }
   const std::set<Frame*>& GetKeyframes(Qth qth) const { return keyframes_.at(qth); }
 
   // Ref coordinate에서 본 Xr. Depth Camera의 Measurement
-  void SetXr(const Eigen::Vector3d& Xr);
-  const Eigen::Vector3d& GetXr() const;
+  void AddReferenceKeyframe(const Qth& qth, Frame* ref);
+  void SetXr(const Qth& qth, const Eigen::Vector3d& Xr);
+  const Eigen::Vector3d& GetXr(const Qth& qth) const;
 
   // Qth rigid coordinate 에 맵핑된 결과값.
-  void SetXq(Qth qth, const Eigen::Vector3d& Xq) { Xq_[qth] = Xq; }
-  const Eigen::Vector3d& GetXq(Qth qth) const { return Xq_.at(qth); }
+  void SetXq(Qth qth, const Eigen::Vector3d& Xq);
+  const Eigen::Vector3d& GetXq(Qth qth);
 
 public:
   static std::map<Qth, size_t> n_;
 
 private:
-  Frame* ref_;
   const Ith id_;
+  Instance*const ins_;
 
+  // TODO 더이상 ins가 Qth를 포함하지 않을경우 제외해야하는데, 모순이다.
+  std::map<Qth, Frame*> ref_;
   std::map<Qth, std::set<Frame*> > keyframes_; // GetNeighbors에 필요
-  Eigen::Vector3d Xr_; // Measurement
-  EigenMap<Qth, Eigen::Vector3d> Xq_; // rig마다 독립된 Mapping값을 가진다.
+  std::map<Qth, std::shared_ptr<Eigen::Vector3d> >Xr_; // Measurement
+  std::map<Qth, std::shared_ptr<Eigen::Vector3d> >Xq_; // rig마다 독립된 Mapping값을 가진다.
 };
 
 struct RigidGroup {
   // Instance의 묶음 
 public:
-  RigidGroup(Qth qth);
+  RigidGroup(Qth qth, Frame* first_frame);
   ~RigidGroup();
   void IncludeInstance(Instance* ins);
   Instance* GetBgInstance() const { return bg_instance_; }
   const Qth& GetId() const { return id_; }
-  void SetLatestKeyframe(Frame* kf) { latest_kf_ = kf; }
-  Frame* GetLatestKeyframe() const { return latest_kf_; }
+  const std::map<Pth, Instance*>& GetIncludedInstances() const { return included_instances_; }
 private:
-  Frame* latest_kf_;
   const Qth id_;
   Instance*const bg_instance_;
   std::map<Pth, Instance*> excluded_instances_;
@@ -163,16 +166,18 @@ public:
            const cv::Mat vis_rgb=cv::Mat());
 
 private:
-  std::map<Qth,bool> NeedKeyframe(Frame* frame) const;
+  void SupplyMappoints(Frame* frame, RigidGroup* rig_new);
+  void AddNewKeyframesMappoints(Frame* frame,
+                                RigidGroup* rig_new);
+
+  std::map<Qth,bool> FrameNeedsToBeKeyframe(Frame* frame,
+                                                RigidGroup* rig_new) const;
   // j -> q -> (p) -> i
   std::map<Qth, std::map<Jth, Frame*> >       keyframes_;  // jth {c}amera와 keypointt<->'i'th mappoint correspondence
-  // Tcq(j) : {c}amera <- {q}th group for 'j'th frame
-  // Jth-1 for 'latest frame - regardless whether keyframe
-  EigenMap<Qth, EigenMap<Jth, g2o::SE3Quat> > kf_Tcqs_;    
-  Frame*                      prev_frame_;
-  EigenMap<Qth, g2o::SE3Quat> prev_Tcqs_; // Qth별 가장 최근에 관찰된 Tcq
-  std::set<Qth>               prev_rigs_;
+  std::set<Jth>                         every_keyframes_;
 
+  // Tcq(j) : {c}amera <- {q}th group for 'j'th frame
+  Frame*                      prev_frame_;
   std::map<Qth, RigidGroup*>                  qth2rig_groups_;
   std::map<Pth, Instance*>                    pth2instances_;
   std::map<Ith, Mappoint* >                   ith2mappoints_;
