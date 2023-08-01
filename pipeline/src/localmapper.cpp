@@ -136,7 +136,7 @@ void BasicLocalMapper::Optimize(const PipelineMap* map, Frame* curr_frame, int n
    optimizer.initializeOptimization();
    optimizer.optimize(n_iter);
 
-   // Retrive
+   // Retrieve
    //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
    map->Lock();
    for(auto it_poses : v_poses){

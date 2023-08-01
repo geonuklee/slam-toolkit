@@ -65,6 +65,7 @@ public:
   void ReduceMem();
   const cv::Mat GetDescription(int i) const;
   const cv::KeyPoint& GetKeypoint(int i) const {  return keypoints_.at(i); }
+  const float& GetDepth(int i) const { return measured_depths_.at(i); }
   const Jth GetId() const { return id_; }
 
 private:
@@ -94,30 +95,40 @@ public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   Mappoint(Ith id,
            const std::set<Qth>& ref_rigs, 
-           Frame* ref, 
-           float invd);
+           Frame* ref);
   const Ith& GetId() const { return id_; }
 
+  /*
   void SetInvD(float invd);
   float GetDepth() const;
+  */
 
   cv::Mat GetDescription() const; // ref에서의 desc
   int GetIndex() const { return id_; }
   Frame* GetRefFrame() const { return ref_; }
 
+  void AddKeyframe(Qth qth, Frame* frame) { keyframes_[qth].insert(frame); }
   const std::map<Qth, std::set<Frame*> >& GetKeyframes() const { return keyframes_; }
   const std::set<Frame*>& GetKeyframes(Qth qth) const { return keyframes_.at(qth); }
 
-  Eigen::Vector3d GetXr() const; // xyz pos in ref coordinate
+  // Ref coordinate에서 본 Xr. Depth Camera의 Measurement
+  void SetXr(const Eigen::Vector3d& Xr);
+  const Eigen::Vector3d& GetXr() const;
+
+  // Qth rigid coordinate 에 맵핑된 결과값.
+  void SetXq(Qth qth, const Eigen::Vector3d& Xq) { Xq_[qth] = Xq; }
+  const Eigen::Vector3d& GetXq(Qth qth) const { return Xq_.at(qth); }
 
 public:
   static std::map<Qth, size_t> n_;
 
 private:
   Frame* ref_;
-  std::map<Qth, std::set<Frame*> > keyframes_;
   const Ith id_;
-  float invd_;
+
+  std::map<Qth, std::set<Frame*> > keyframes_; // GetNeighbors에 필요
+  Eigen::Vector3d Xr_; // Measurement
+  EigenMap<Qth, Eigen::Vector3d> Xq_; // rig마다 독립된 Mapping값을 가진다.
 };
 
 struct RigidGroup {

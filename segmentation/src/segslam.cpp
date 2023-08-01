@@ -172,36 +172,27 @@ const cv::Mat Frame::GetDescription(int i) const {
 
 Mappoint::Mappoint(Ith id,
                    const std::set<Qth>& ref_rigs, 
-                   Frame* ref, 
-                   float invd)
+                   Frame* ref)
   : ref_(ref),
   id_(id)
 {
-  for(Qth qth : ref_rigs)
-    keyframes_[qth].insert(ref);
-  SetInvD(invd);
 }
-
+/*
 float Mappoint::GetDepth() const {
   return 1./invd_;
 }
-
 void Mappoint::SetInvD(float invd){
-  /*
-  if(invd < 1e-5){
-    // Ignore too smal inverse depth depth which cause NaN error.
-    invd = 1e-5;
-  }
-  invd_ = invd;
-  */
   invd_ = std::max<float>(1e-5, invd);
   return;
 }
+*/
+void Mappoint::SetXr(const Eigen::Vector3d& Xr) {
+  Xr_ = Xr;
+  return;
+}
 
-Eigen::Vector3d Mappoint::GetXr() const {
-  size_t kpt_idx = ref_->GetIndex(this);
-  Eigen::Vector3d Xr = 1./invd_ * ref_->GetNormalizedPoint(kpt_idx);
-  return Xr;
+const Eigen::Vector3d& Mappoint::GetXr() const {
+  return Xr_;
 }
 
 
@@ -416,6 +407,7 @@ std::vector< std::pair<Qth, size_t> > CountRigPoints(Frame* frame,
 
 void SupplyMappoints(Frame *ref_frame,
                      const std::set<Qth>& ref_rigs,
+                     const EigenMap<Qth, EigenMap<Jth, g2o::SE3Quat> >& kf_Tcqs,   
                      std::map<Ith, Mappoint*>& ith2mappoints
                      ) {
   const auto& keypoints = ref_frame->GetKeypoints();
@@ -429,14 +421,22 @@ void SupplyMappoints(Frame *ref_frame,
   for(size_t n=0; n<keypoints.size(); n++){
     if(mappoints[n])
       continue;
-    // depth값이 관찰되지 않는 uv only point를 구분해서 처리하면 SLAM 결과가 더 정확할텐데
-    // 근데 이건 LBA g2o graph 만드는 단계에서 판정이 가능.
-    float z = std::max<float>(1e-5, depths[n]);
+    // depth값이 관찰되지 않는 uv only point를 구분해서 처리하면 SLAM 결과가 더 정확할텐데..
+    float z = depths[n];
+    if(z < 1e-5) // No depth too far
+      z = 1e+3;
     const cv::KeyPoint& kpt = keypoints[n];
     Instance* ins = instances[n];
     assert(ins);
     static Ith nMappoints = 0;
-    auto ptr = new Mappoint(nMappoints++, ref_rigs, ref_frame, 1./z);
+    auto ptr = new Mappoint(nMappoints++, ref_rigs, ref_frame);
+    Eigen::Vector3d Xr = z*ref_frame->GetNormalizedPoint(n);
+    ptr->SetXr(Xr);
+    for(Qth qth : ref_rigs){
+      const g2o::SE3Quat& Trq = kf_Tcqs.at(qth).at(ref_frame->GetId());
+      const Eigen::Vector3d Xq = Trq.inverse()*Xr;
+      ptr->SetXq(qth, Xq);
+    }
     ref_frame->SetMappoint(ptr, n);
     ith2mappoints[ptr->GetId()] = ptr;
   }
@@ -483,7 +483,6 @@ void GetNeighbors(Frame* keyframe,
 }
 
 std::map<Qth,bool> Pipeline::NeedKeyframe(Frame* frame) const {
-  std::map<Qth,bool> need_keyframes;
   const auto& keypoints = frame->GetKeypoints();
   const auto& mappoints = frame->GetMappoints();
   const auto& instances = frame->GetInstances();
@@ -500,12 +499,9 @@ std::map<Qth,bool> Pipeline::NeedKeyframe(Frame* frame) const {
     }
   }
 
+  std::map<Qth,bool> need_keyframes;
   for(auto it : n_mappoints){
     const Qth& qth = it.first;
-    if(need_keyframes.count(qth)){
-      assert(b_keyframes.at(qth) == true);
-      continue;
-    }
     float valid_matches_ratio = ((float) it.second.first) / ((float)it.second.second);
     if(valid_matches_ratio < .5){
       need_keyframes[qth] = true;
@@ -522,12 +518,29 @@ std::map<Qth,bool> Pipeline::NeedKeyframe(Frame* frame) const {
   return need_keyframes;
 }
 
+void AddKeyframesAtMappoints(Frame* keyframe) {
+  // ins->rig_qth 가 일하는 mappoint에 한해서 mpt->AddKeyframe(qth, frame)
+  const auto& mappoints = keyframe->GetMappoints();
+  const auto& instances = keyframe->GetInstances();
+  for(size_t n=0; n<mappoints.size(); n++) {
+    Mappoint* mpt = mappoints[n];
+    if(!mpt)
+      continue;
+    Instance* ins = instances[n];
+    if(!ins)
+      continue;
+    for(auto it_rig : ins->rig_groups_)
+      mpt->AddKeyframe(it_rig.first, keyframe);
+  }
+  return;
+}
+
 void Pipeline::Put(const cv::Mat gray,
                    const cv::Mat depth,
                    const std::map<Pth, ShapePtr>& shapes,
                    const cv::Mat vis_rgb)
 {
-  camera_->GetK();
+  const float search_radius = 30.;
   /*
   *[ ] 3) 기존 mappoint 와 matching,
     * Matching은 qth고려 없이 가능한가? rprj 참고하려면 필요는 한데..
@@ -547,7 +560,9 @@ void Pipeline::Put(const cv::Mat gray,
   frame->SetMeasuredDepths(depth);
 
   // nullptr if no new rigid group
-  RigidGroup* rig_new = SupplyRigGroup(frame, qth2rig_groups_);
+  RigidGroup* rig_new = nullptr;
+  if(frame->GetId() == 0) // TODO 제거 
+    rig_new = SupplyRigGroup(frame, qth2rig_groups_);
 
   bool fill_bg_with_dominant = true;
   std::vector<std::pair<Qth,size_t> > rig_counts 
@@ -560,6 +575,22 @@ void Pipeline::Put(const cv::Mat gray,
   EigenMap<Qth, g2o::SE3Quat> current_Tcq;
   if(rig_new)
     current_Tcq[rig_new->GetId()] = g2o::SE3Quat();
+
+  if(frame->GetId() == 0){
+    const Qth& qth = rig_new->GetId();
+    kf_Tcqs_[qth][frame->GetId()]   = current_Tcq.at(qth);
+    qth2rig_groups_.at(qth)->SetLatestKeyframe(frame);
+    SupplyMappoints(frame, curr_rigs, kf_Tcqs_, ith2mappoints_);
+    AddKeyframesAtMappoints(frame); // Call after supply mappoints
+    keyframes_[qth][frame->GetId()] = frame;
+
+    prev_frame_ = frame;
+    for(auto it : current_Tcq)
+      prev_Tcqs_[it.first] = it.second;
+    prev_rigs_ = curr_rigs;
+    return;
+  }
+
   for(auto q_it : rig_counts){
     const Qth& qth = q_it.first;
     if(prev_Tcqs_.count(qth))
@@ -568,55 +599,46 @@ void Pipeline::Put(const cv::Mat gray,
       assert( qth == rig_new->GetId() );
   }
 
-  /* Inprogress
-    * matching 후 LBA (epipolar부터) 수행
-  */
-
   for(auto q_it : rig_counts){
     const Qth& qth = q_it.first;
-    g2o::SE3Quat Tcq = current_Tcq.at(qth); // initial Tcq
+    g2o::SE3Quat Tcq = current_Tcq.at(qth);
     RigidGroup* rig  = qth2rig_groups_.at(qth);
     Frame* latest_kf = rig->GetLatestKeyframe();
     if(!latest_kf) {
       assert(rig == rig_new);
       continue;
     }
+
+    std::cout << "F#" << frame->GetId() << " Tqc 0.t() = " << Tcq.inverse().translation().transpose() << std::endl;
     std::set<Mappoint*>     neighbor_mappoints;
     std::map<Jth, Frame* >  neighbor_frames;
     GetNeighbors(latest_kf, qth, neighbor_mappoints, neighbor_frames);
-
-    const float search_radius = 30.;
     std::map<int, Mappoint*> matches = ProjectionMatch(camera_, neighbor_mappoints, 
                                                        Tcq, kf_Tcqs_.at(qth), frame, search_radius);
     for(auto it : matches)
       frame->SetMappoint(it.second, it.first);
-    mapper_->ComputeLBA(neighbor_mappoints, neighbor_frames, frame, kf_Tcqs_[qth], Tcq);
-
-    /*
-    cv::Mat dst = VisualizeMatches(frame, matches);
-    cv::imshow("matches", dst);
+    //std::cout << "l_kf#" << latest_kf->GetId() << ", n(nkf)= " << neighbor_frames.size() << ", n(mpt)" << neighbor_mappoints.size() << std::endl;
+    if(qth == 0){
+      printf("curr F# %d neighbor keyframes = {", frame->GetId());
+      for(auto it_kf : neighbor_frames)
+        printf("#%d, ", it_kf.first);
+      printf("}\n");
+      cv::Mat dst = VisualizeMatches(frame, matches);
+      cv::imshow("matches", dst);
+    }
+    bool verbose = qth==0;
+    mapper_->ComputeLBA(camera_, qth, neighbor_mappoints, neighbor_frames,
+                        frame, kf_Tcqs_[qth], Tcq, verbose);
+    current_Tcq[qth] = Tcq;
+  }
+  /*
+  cv::Mat dst = VisualizeMatches(frame, matches);
+  cv::imshow("matches", dst);
     cv::waitKey(0);
     */
-
-    std::cout << "curr f#" <<  frame->GetId() << std::endl;
-    std::cout << "l_kf#" << latest_kf->GetId() << ", n(nkf)= " << neighbor_frames.size() << ", n(mpt)" << neighbor_mappoints.size() << std::endl;
-    assert(frame->Id() == 1);
-    std::cout << "Exit : 2D-3D correspondence matching is done" << std::endl;
-    exit(1);
-
-    // * [ ] 여기서 LBA를 수행
-    //neighbor_frames[frame->GetId()] = frame; // 아직 keyframe이 아닌 frame도 LBA대상.
-  }
-
+    //std::cout << "curr f#" <<  frame->GetId() << " q#" << qth << ", Tqc = " << Tcq.inverse().translation().transpose() << std::endl;
   //std::cout << "Qth dominant = " << qth_dominant << std::endl;
-  if(frame->GetId() == 0){
-    const Qth& qth = rig_new->GetId();
-    kf_Tcqs_[qth][frame->GetId()]   = current_Tcq.at(qth);
-    keyframes_[qth][frame->GetId()] = frame;
-    qth2rig_groups_.at(qth)->SetLatestKeyframe(frame);
-    SupplyMappoints(frame, curr_rigs, ith2mappoints_);
-  }
-  else if(frame->GetId() > 1) {
+  if(frame->GetId() > 1){
     std::map<Qth,bool> need_keyframes = NeedKeyframe(frame); // 판정은 current로, kf 승경은 prev로 
     bool is_kf = false;
     for(auto it : need_keyframes){
@@ -625,12 +647,14 @@ void Pipeline::Put(const cv::Mat gray,
       if(!is_kf4qth)
         continue;
       kf_Tcqs_[qth][prev_frame_->GetId()]   = prev_Tcqs_.at(qth);
-      keyframes_[qth][prev_frame_->GetId()] = prev_frame_;
       qth2rig_groups_.at(qth)->SetLatestKeyframe(prev_frame_);
+      keyframes_[qth][prev_frame_->GetId()] = prev_frame_;
       is_kf = true;
     }
-    if(is_kf)
-      SupplyMappoints(prev_frame_, prev_rigs_, ith2mappoints_);
+    if(is_kf){
+      SupplyMappoints(prev_frame_, prev_rigs_, kf_Tcqs_, ith2mappoints_);
+      AddKeyframesAtMappoints(prev_frame_); // Call after supply mappoints
+    }
     else
       delete prev_frame_;
   }

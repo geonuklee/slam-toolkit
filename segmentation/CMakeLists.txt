@@ -65,6 +65,7 @@ add_executable(example_segmentation ${src}
 #set_target_properties(example_segmentation PROPERTIES UNITY_BUILD_MODE BATCH UNITY_BUILD_BATCH_SIZE 10)
 set_source_files_properties(src/debug.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
 set_source_files_properties(src/optimizer.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
+set_source_files_properties(src/segslam.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
 
 target_link_libraries(example_segmentation
 ${OpenCV_LIBS}
@@ -74,9 +75,12 @@ ${PROJECT_SOURCE_DIR}/../thirdparty/DBoW2/lib/libDBoW2.so
 optimized g2o_core
 optimized g2o_stuff
 optimized g2o_types_sba
+#optimized g2o_types_slam3d
+
 debug g2o_core_d
 debug g2o_stuff_d
 debug g2o_types_sba_d
+#optimized g2o_types_slam3d_d
 stdc++fs
 )
 
