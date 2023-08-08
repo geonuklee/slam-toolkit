@@ -24,7 +24,7 @@ SegFrame에서는 이를 instance별로 묶고, instance들을 묶은 RigidGroup
 '
 */
 class Frame;
-class RigidGroup;
+struct RigidGroup;
 class Mappoint;
 class Instance {
 public:
@@ -141,10 +141,13 @@ struct RigidGroup {
 public:
   RigidGroup(Qth qth, Frame* first_frame);
   ~RigidGroup();
-  void IncludeInstance(Instance* ins);
+  bool IncludeInstance(Instance* ins);
+  bool ExcludeInstance(Instance* ins);
   Instance* GetBgInstance() const { return bg_instance_; }
   const Qth& GetId() const { return id_; }
   const std::map<Pth, Instance*>& GetIncludedInstances() const { return included_instances_; }
+  const std::map<Pth, Instance*>& GetExcludedInstances() const { return excluded_instances_; }
+
 private:
   const Qth id_;
   Instance*const bg_instance_;
@@ -169,15 +172,17 @@ private:
   void SupplyMappoints(Frame* frame, RigidGroup* rig_new);
   void AddNewKeyframesMappoints(Frame* frame,
                                 RigidGroup* rig_new);
-
   std::map<Qth,bool> FrameNeedsToBeKeyframe(Frame* frame,
                                                 RigidGroup* rig_new) const;
+  void UpdateRigGroups(const std::set<Qth>& curr_rigs, Frame* frame) const;
+
   // j -> q -> (p) -> i
   std::map<Qth, std::map<Jth, Frame*> >       keyframes_;  // jth {c}amera와 keypointt<->'i'th mappoint correspondence
   std::set<Jth>                         every_keyframes_;
 
   // Tcq(j) : {c}amera <- {q}th group for 'j'th frame
   Frame*                      prev_frame_;
+  std::set<Qth>               prev_rigs_;
   std::map<Qth, RigidGroup*>                  qth2rig_groups_;
   std::map<Pth, Instance*>                    pth2instances_;
   std::map<Ith, Mappoint* >                   ith2mappoints_;

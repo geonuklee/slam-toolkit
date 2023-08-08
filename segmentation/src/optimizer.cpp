@@ -42,7 +42,7 @@ g2o::OptimizableGraph::Vertex* Mapper::CreateStructureVertex(Qth qth,
 }
 
 
-void Mapper::ComputeLBA(const Camera* camera,
+std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
                         Qth qth,
                         const std::set<Mappoint*>& neighbor_mappoints,
                         const std::map<Jth, Frame*>& neighbor_keyframes,
@@ -83,10 +83,6 @@ void Mapper::ComputeLBA(const Camera* camera,
 
   std::map<Jth, g2o::OptimizableGraph::Vertex*> v_poses;
   std::map<Mappoint*, g2o::OptimizableGraph::Vertex*> v_mappoints;
-  /*
-  TODO 판정결과의 visualization.
-  Instance, RigidGroup에 결과반영.
-  */
   std::map<Pth, VertexSwitchLinear*>  v_instances;
   std::map<Pth, size_t>               mp_counts;
   std::map<g2o::OptimizableGraph::Edge*, std::pair<Frame*,Mappoint*> > measurment_edges;
@@ -104,7 +100,7 @@ void Mapper::ComputeLBA(const Camera* camera,
   for(auto it_pth : mp_counts){
     if(it_pth.second < 5)
       continue;
-    const double info = 1e-6; // TODO 타당한 inform 추론.
+    const double info = 1e-4; // TODO 타당한 inform 추론.
     auto sw_vertex = new VertexSwitchLinear();
     sw_vertex->setId(optimizer.vertices().size() );
     sw_vertex->setEstimate(.5);
@@ -163,13 +159,12 @@ void Mapper::ComputeLBA(const Camera* camera,
 
       if(edge)
         optimizer.addEdge(edge);
-      //g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
-      //const float deltaMono = sqrt(5.991); // TODO Why? ORB_SLAM2
-      //rk->setDelta(0.0001*deltaMono);
-      //edge->setRobustKernel(rk);
+      g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
+      const float deltaMono = sqrt(5.991); // TODO Why? ORB_SLAM2
+      rk->setDelta(0.0001*deltaMono);
+      edge->setRobustKernel(rk);
     }
   }
-  std::cout << "edge ratio = " << na << "vs" << nb << std::endl;
   if(!v_poses.empty()){
     g2o::OptimizableGraph::Vertex* v_oldest = v_poses.begin()->second;
     v_oldest->setFixed(true);
@@ -190,7 +185,6 @@ void Mapper::ComputeLBA(const Camera* camera,
   const Jth curr_jth = curr_frame->GetId();
   int n_pose = 0;
   int N_pose = v_poses.size();
-  verbose = false;
   if(verbose)
     std::cout << "At Q#" << qth << " curr F#"<< curr_frame->GetId() <<"--------------------" << std::endl;
   for(auto it_poses : v_poses){
@@ -216,46 +210,15 @@ void Mapper::ComputeLBA(const Camera* camera,
   }
   //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
-  if(verbose)
-    printf("Update Pose(%d/%d), Structure(%d/%d)\n", n_pose, N_pose, n_structure, N_structure);
-  if(qth == 0){
-    /*
-     * [ ] TODO Visualization
-    */
-    std::cout << "Switch state = ";
-    for(auto it : v_instances){
-      const Pth& pth = it.first;
-      VertexSwitchLinear* v_ins = it.second;
-      std::cout <<  "(" << pth << ":" << v_ins->estimate() << ")";
-    }
-    std::cout << std::endl;
-
-    Frame* frame = curr_frame; // Visualize given frame.
-    cv::Mat dst = frame->GetRgb().clone();
-    const auto& keypoints = frame->GetKeypoints();
-    const auto& mappoints = frame->GetMappoints();
-    const auto& instances = frame->GetInstances();
-    for(size_t n=0; n<keypoints.size(); n++){
-      Instance* ins = instances[n];
-      Mappoint* mpt = mappoints[n];
-      const cv::Point2f& pt = keypoints[n].pt;
-      bool outlier = false;
-      if(ins){
-        const Pth& pth = ins->GetId();
-        if(v_instances.count(pth)){
-          VertexSwitchLinear* v_sw = v_instances.at(pth);
-          if(v_sw->estimate() < .5)
-            outlier = true;
-        }
-      }
-      cv::Scalar c = outlier?CV_RGB(255,0,0) : CV_RGB(0,255,0);
-      cv::circle(dst, pt, 3, c, -1);
-    }
-
-    cv::imshow("Switch states", dst);
+  if(verbose){
+    printf("Update Pose(%d/%d), Structure(%d/%d), SwEdges(%d,%d)\n",
+           n_pose, N_pose, n_structure, N_structure, na, na+nb);
   }
 
-  return;
+  std::map<Pth, float> switch_state; // posterior for inlier.
+  for(auto it : v_instances)
+    switch_state[it.first] = it.second->estimate();
+  return switch_state;
 }
 
 } // namespace seg

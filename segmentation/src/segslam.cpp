@@ -1,4 +1,5 @@
 #include "segslam.h"
+#include "Eigen/src/Core/Matrix.h"
 #include "camera.h"
 #include "frame.h"
 #include "optimizer.h"
@@ -100,6 +101,7 @@ std::vector<std::vector<int> > Frame::SearchRadius(const flann::Matrix<double>& 
 void Frame::ExtractAndNormalizeKeypoints(const cv::Mat gray,
                                          const Camera* camera,
                                          ORB_SLAM2::ORBextractor* extractor) {
+  // TODO keypoint extraction 개선.
   extractor->extract(gray, cv::noArray(), keypoints_, descriptions_);
   mappoints_.resize(keypoints_.size(), nullptr);
   instances_.resize(keypoints_.size(), nullptr);
@@ -200,10 +202,26 @@ cv::Mat Mappoint::GetDescription() const {
   return ref->GetDescription(kpt_idx);
 }
 
-void RigidGroup::IncludeInstance(Instance* ins) {
+bool RigidGroup::ExcludeInstance(Instance* ins) {
+  const Pth pth = ins->GetId();
+  bool count = included_instances_.count(pth);
+  if(count) 
+    included_instances_.erase(pth);
+  if(ins->rig_groups_.count(id_))
+    ins->rig_groups_.erase(id_);
+  else
+   count = false;;
+  excluded_instances_[pth] = ins;
+  return count;
+}
+
+bool RigidGroup::IncludeInstance(Instance* ins) {
+  const Pth pth = ins->GetId();
+  if(excluded_instances_.count(pth) )
+    return false;
   ins->rig_groups_[id_] = this;
-  included_instances_[ins->GetId()] = ins;
-  return;
+  included_instances_[pth] = ins;
+  return true;
 }
 
 #if 0
@@ -343,19 +361,33 @@ cv::Mat visualize_frame(Frame* frame) {
   }
   return dst;
 }
+  
+void Pipeline::UpdateRigGroups(const std::set<Qth>& curr_rigs, Frame* frame) const {
+  std::set<Instance*> nongroup_instances;
+  for(Instance* ipt : frame->GetInstances() ){
+    if(!ipt)
+      continue;
+    if(ipt->rig_groups_.empty())
+      nongroup_instances.insert(ipt);
+  }
+  for(const Qth& qth : curr_rigs){
+    RigidGroup* rig = qth2rig_groups_.at(qth);    
+    for(Instance* ins : nongroup_instances)
+      rig->IncludeInstance(ins);
+  }
+  return;
+}
 
 RigidGroup* SupplyRigGroup(Frame* frame,
-                    std::map<Qth, RigidGroup*>& rig_groups) {
+                           std::map<Qth, RigidGroup*>& rig_groups) {
   size_t N = 0;
   size_t n = 0;
-  std::set<Instance*> nongroup_instances;
   for(Instance* ipt : frame->GetInstances() ){
     if(!ipt)
       continue;
     N++;
     if(ipt->rig_groups_.empty()){
       n++;
-      nongroup_instances.insert(ipt);
     }
   }
   float ng_ratio = (float)n / (float) N;
@@ -370,21 +402,39 @@ RigidGroup* SupplyRigGroup(Frame* frame,
   static Qth nRiggroups = 0;
   RigidGroup* rig = new RigidGroup(nRiggroups++, frame);
   rig_groups[rig->GetId()] = rig;
+  /*
+  TODO UpdateRigGroups 으로 대체.
+  std::set<Instance*> nongroup_instances;
+  for(Instance* ipt : frame->GetInstances() ){
+    if(!ipt)
+      continue;
+    N++;
+    if(ipt->rig_groups_.empty()){
+      n++;
+      nongroup_instances.insert(ipt);
+    }
+  }
   for(Instance* ins : nongroup_instances)
     rig->IncludeInstance(ins);
+  */
   std::cout << "Add new group! #" << rig->GetId() << std::endl;
   return rig;
 }
 
 std::vector< std::pair<Qth, size_t> > CountRigPoints(Frame* frame,
+                                                     const Camera* camera,
                                                      bool fill_bg_with_dominant,
                                                      const std::map<Qth,RigidGroup*> qth2rig_groups
                                                      ){
   std::map<Qth, size_t> num_points; {
     const auto& instances = frame->GetInstances();
+    const auto& keypoints = frame->GetKeypoints();
     for(size_t n=0; n<instances.size(); n++){
       Instance* ins = instances[n];
       if(!ins)
+        continue;
+      const cv::Point2f& pt = keypoints[n].pt;
+      if(! frame->IsInFrame(camera, Eigen::Vector2d(pt.x, pt.y) ) )
         continue;
       for(auto it_rig : ins->rig_groups_)
         num_points[it_rig.first]++;
@@ -455,7 +505,7 @@ void GetNeighbors(Frame* keyframe,
   // 3. '2'의 nkf에서 보이는 mappoints
   int n = 0;
   for(auto it_nkf = neighbor_keyframes.rbegin(); it_nkf != neighbor_keyframes.rend(); it_nkf++){
-    if(++n > 3) // N keyframe 이상 보이지 않은 mappoint는 제외.
+    if(++n > 5) // N keyframe 이상 보이지 않은 mappoint는 제외.
       break;
     GetMappoints4Qth(it_nkf->second, qth, neighbor_mappoints);
   }
@@ -570,15 +620,199 @@ void Pipeline::SupplyMappoints(Frame* frame,
   return;
 }
 
+cv::Mat VisualizeSwitchStates(const RigidGroup* rig,
+                              const Frame* frame,
+                              const std::map<Pth, float>& switch_states,
+                              const std::map<Jth, Frame* >& neighbor_frames,
+                              const std::map<Pth,ShapePtr>& curr_shapes) {
+  const Qth qth = rig->GetId();
+  const float switch_threshold = .5;
+  const cv::Mat rgb = frame->GetRgb();
+  cv::Mat dst_frame; {
+    cv::Mat dst_fill  = rgb.clone();
+    for(auto it : curr_shapes){
+      ShapePtr ptr = it.second;
+      std::vector< std::vector<cv::Point> > cnts;
+      cnts.resize(1);
+      cnts[0].reserve(ptr->outerior_.size() );
+      for( auto pt: ptr->outerior_)
+        cnts[0].push_back(cv::Point(pt.x,pt.y));
+      const auto& color0 = colors.at(it.first % colors.size() );
+      cv::drawContours(dst_fill, cnts, 0, color0, -1);
+    }
+    cv::addWeighted(rgb, 1.,
+                    dst_fill, .5,
+                    1., dst_frame);
+    for(auto it : curr_shapes){
+      ShapePtr ptr = it.second;
+      std::vector< std::vector<cv::Point> > cnts;
+      cnts.resize(1);
+      cnts[0].reserve(ptr->outerior_.size() );
+      for( auto pt: ptr->outerior_)
+        cnts[0].push_back(cv::Point(pt.x,pt.y));
+      const auto& color0 = colors.at(it.first % colors.size() );
+      cv::drawContours(dst_frame, cnts, 0, color0, 2);
+    }
+  }
+
+  cv::Mat dst_texts = cv::Mat::zeros( rgb.rows, 400, CV_8UC3); {
+    int fontFace = cv::FONT_HERSHEY_SIMPLEX;
+    double fontScale = .5;
+    int thickness = 1;
+    int baseline=0;
+    int y = 0;
+    cv::rectangle(dst_texts,cv::Rect(0,0,dst_texts.cols, dst_texts.rows),CV_RGB(255,255,255),-1);
+    for(auto it_kf : neighbor_frames){
+      const Jth& jth = it_kf.first;
+      Frame* kf = it_kf.second;
+      const auto t = kf->GetTcq(qth).inverse().translation();
+      char text[100];
+      sprintf(text,"F#%2d,  (%4.3f, %4.3f, %4.3f)", kf->GetId(), t[0], t[1], t[2] );
+      auto size = cv::getTextSize(text, fontFace, fontScale, thickness, &baseline);
+      y += size.height+2;
+      cv::putText(dst_texts, text, cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
+    }
+
+    y+= 10;
+    std::ostringstream buffer;
+    buffer << "Include> ";
+    for(auto it : rig->GetIncludedInstances()){
+      const Pth& pth = it.first;
+      buffer << pth << ", ";
+      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
+      if(size.width < dst_texts.cols - 10)
+        continue;
+      y += size.height+2;
+      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
+      buffer.str("");
+    }
+    if(!buffer.str().empty()){
+      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
+      y += size.height+2;
+      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
+    }
+    y+= 3;
+    buffer.str("");
+    buffer << "Exclude> ";
+    for(auto it : rig->GetExcludedInstances()){
+      const Pth& pth = it.first;
+      buffer << pth << ", ";
+      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
+      if(size.width < dst_texts.cols - 10)
+        continue;
+      y += size.height+2;
+      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
+      buffer.str("");
+    }
+    if(!buffer.str().empty()){
+      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
+      y += size.height+2;
+      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
+    }
+
+    y+= 10;
+    buffer.str("");
+    buffer << "Pth:Switch state> ";
+    for(auto it : switch_states){
+      buffer << "(" << it.first <<  ":" << std::fixed << std::setprecision(3) << it.second << "), ";
+      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
+      if(size.width < dst_texts.cols - 100)
+        continue;
+      y += size.height+2;
+      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
+      buffer.str("");
+    }
+    if(!buffer.str().empty()){
+      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
+      y += size.height+2;
+      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
+    }
+  }
+
+  const auto& keypoints = frame->GetKeypoints();
+  const auto& mappoints = frame->GetMappoints();
+  const auto& instances = frame->GetInstances();
+  for(size_t n=0; n<keypoints.size(); n++){
+    Instance* ins = instances[n];
+    Mappoint* mp = mappoints[n];
+    const cv::Point2f& pt = keypoints[n].pt;
+    cv::Scalar c; int thickness;
+    bool b_circle = true;
+    if(mp){
+      thickness = -1;
+      if(!ins)
+        c = CV_RGB(120,120,120);
+      else{
+        const Pth& pth = ins->GetId();
+        bool outlier = switch_states.count(pth) ?  switch_states.at(pth) < switch_threshold :  false;
+        c = outlier?CV_RGB(255,0,0) : CV_RGB(0,255,0);
+        const Pth& pth0 = mp->GetInstance()->GetId();
+        b_circle = pth == pth0;
+      }
+    }
+    else {
+      thickness = 1;
+      c = CV_RGB(120,120,120);
+    }
+
+    if(b_circle)
+      cv::circle(dst_frame, pt, 4, c, thickness);
+    else{
+      const float hw = 6.;
+      cv::Rect rec(pt.x-hw, pt.y-hw, 2*hw, 2*hw);
+      cv::rectangle(dst_frame, rec, c, 2);
+    }
+  }
+  {
+    int fontFace = cv::FONT_HERSHEY_SIMPLEX;
+    double fontScale = .3;
+    int fontThick = 1;
+    int baseline=0;
+    for(auto it : curr_shapes){
+      ShapePtr ptr = it.second;
+      const auto& bb = ptr->outerior_bb_;
+      const auto& color0 = colors.at(it.first % colors.size() );
+      const std::string txt = "#" + std::to_string(it.first);
+      int baseline=0;
+      auto size = cv::getTextSize(txt, fontFace, fontScale, fontThick, &baseline);
+      cv::Point cp(bb.x+.5*bb.width, bb.y+.5*bb.height);
+      cv::Point dpt(.5*size.width, .5*size.height);
+      cv::rectangle(dst_frame, cp-dpt-cv::Point(0,3*baseline), cp+dpt, CV_RGB(255,255,255), -1);
+      cv::putText(dst_frame, txt, cp-dpt,fontFace, fontScale, color0, fontThick);
+    }
+  }
+
+  cv::Mat dst = cv::Mat::zeros(std::max<int>(dst_frame.rows, dst_texts.rows),
+                               dst_frame.cols + dst_texts.cols,
+                               CV_8UC3);
+
+  {
+    cv::Rect rect(0, 0, dst_frame.cols, dst_frame.rows);
+    cv::Mat roi(dst, rect);
+    dst_frame.copyTo(roi);
+    cv::rectangle(dst, rect, CV_RGB(0,0,0), 2);
+  }
+  {
+    cv::Rect rect(dst_frame.cols,0,
+                  dst_texts.cols, dst_texts.rows);
+    cv::Mat roi(dst, rect);
+    dst_texts.copyTo(roi);
+    cv::rectangle(dst, rect, CV_RGB(0,0,0), 2);
+  }
+
+  return dst;
+}
+                           
+
 void Pipeline::Put(const cv::Mat gray,
                    const cv::Mat depth,
-                   const std::map<Pth, ShapePtr>& shapes,
+                   const std::map<Pth, ShapePtr>& curr_shapes,
                    const cv::Mat vis_rgb)
 {
   const bool fill_bg_with_dominant = true;
   const float search_radius = 30.;
 
-  for(auto it_shape : shapes){
+  for(auto it_shape : curr_shapes){
     const Pth& pth = it_shape.first;
     if(pth2instances_.count(pth) )
       continue;
@@ -586,33 +820,39 @@ void Pipeline::Put(const cv::Mat gray,
   }
 
   static Jth nFrames = 0;
-  Frame* frame = new Frame(nFrames++, vis_rgb);
-  frame->ExtractAndNormalizeKeypoints(gray, camera_, extractor_);
-  frame->SetInstances(shapes, pth2instances_);
-  frame->SetMeasuredDepths(depth);
+  Frame* curr_frame = new Frame(nFrames++, vis_rgb);
+  curr_frame->ExtractAndNormalizeKeypoints(gray, camera_, extractor_);
+  curr_frame->SetInstances(curr_shapes, pth2instances_);
+  curr_frame->SetMeasuredDepths(depth);
 
-  RigidGroup* rig_new = SupplyRigGroup(frame, qth2rig_groups_);
+  RigidGroup* rig_new = SupplyRigGroup(curr_frame, qth2rig_groups_);
+  std::set<Qth> curr_rigs_pred = prev_rigs_;
+  if(rig_new){
+    curr_rigs_pred.insert(rig_new->GetId());
+    curr_frame->SetTcq(rig_new->GetId(), g2o::SE3Quat() );
+  }
+  if(!prev_frame_){
+    const Qth& qth = rig_new->GetId();
+    SupplyMappoints(curr_frame, rig_new);
+    UpdateRigGroups(curr_rigs_pred, curr_frame);
+    prev_frame_ = curr_frame;
+    return;
+  }
+  // curr_frame의 instnace 중, 속한 group이 없는 ins는 기존 모든 rig_new + prev_rigs에 포함시킨다.
+  UpdateRigGroups(curr_rigs_pred, curr_frame);
+
   std::vector<std::pair<Qth,size_t> > rig_counts;
   std::set<Qth> curr_rigs; {
-    rig_counts  = CountRigPoints(frame, fill_bg_with_dominant, qth2rig_groups_);
+    rig_counts  = CountRigPoints(curr_frame, camera_, fill_bg_with_dominant, qth2rig_groups_);
     for(auto it : rig_counts)
       curr_rigs.insert(it.first);
     //Qth qth_dominant = rig_counts.begin()->first; // Future work : rigid_tree를 만들어 부모 자식관계로 관리할때 사용
   }
-  if(rig_new)
-    frame->SetTcq(rig_new->GetId(), g2o::SE3Quat() );
 
-  if(!prev_frame_){
-    const Qth& qth = rig_new->GetId();
-    SupplyMappoints(frame, rig_new);
-    prev_frame_ = frame;
-    return;
-  } else {
-    // intiial pose prediction
-    const auto& Tcqs = prev_frame_->GetTcqs();
-    for(auto it : Tcqs)
-      frame->SetTcq(it.first, *it.second);
-  }
+  // intiial pose prediction
+  const auto& Tcqs = prev_frame_->GetTcqs();
+  for(auto it : Tcqs)
+    curr_frame->SetTcq(it.first, *it.second);
 
   for(auto q_it : rig_counts){
     const Qth& qth = q_it.first;
@@ -623,19 +863,36 @@ void Pipeline::Put(const cv::Mat gray,
     std::set<Mappoint*>     neighbor_mappoints;
     std::map<Jth, Frame* >  neighbor_frames;
     GetNeighbors(latest_kf, qth, neighbor_mappoints, neighbor_frames);
-    std::map<int, Mappoint*> matches = ProjectionMatch(camera_,
-                                                       neighbor_mappoints, 
-                                                       frame,
-                                                       qth,
-                                                       search_radius);
+    std::map<int, Mappoint*> matches = ProjectionMatch(camera_, neighbor_mappoints, curr_frame, qth, search_radius);
     for(auto it : matches){
-      if(frame->GetMappoint(it.first)) // 이전에 이미 matching이 된 keypoint
+      if(curr_frame->GetMappoint(it.first)) // 이전에 이미 matching이 된 keypoint
         continue;
-      frame->SetMappoint(it.second, it.first);
+      curr_frame->SetMappoint(it.second, it.first);
     }
     bool verbose = true;
-    mapper_->ComputeLBA(camera_, qth, neighbor_mappoints, neighbor_frames,
-                        frame, verbose);
+    std::map<Pth,float> switch_states\
+      = mapper_->ComputeLBA(camera_, qth, neighbor_mappoints, neighbor_frames, curr_frame, verbose);
+    for(auto it : switch_states){
+      if(it.second > .5)
+        continue;
+      Instance* ins = pth2instances_.at( it.first );
+      rig->ExcludeInstance(ins);
+    }
+
+    /* 
+     * [ ] 3D visualization
+     * Mappoint가 가리키는 instance가 많이 겹치는 새로운 ins에 대해, 병합처리가 필요할것은데??
+     - Mappoint의 instance는 생성될 시점의 ID를 가지더라도, 현재의 instance ID는 다를 수 있다.
+     주어진 shape에 해당 instance가 없다면 matching이 가장 많은 케이스와 연결해야,. 적절한 visualzation 가능.
+     *  Futureworks? : SupplyRigGroup을 frame당 한번만 하는게 타당한가? LBA에서 필터링 하고나서 소속없는 instance 모두 모아서 새로 만드는거 반복해야하지 않냐?
+     - 일단은 Compute LBA 반복하다가, lba 결과물의 rigid body의 크기가 일정값 이하가 될때 반복 종료하는것으로 대충 끝내기.
+     - 나머지 '자잘' 한것은 그냥 독립된 instance로 취급.
+     - '자잘' 한것은 일단 medain length tracking으로 관찰하다가 일정프레임 이상 유지되면 병합.
+     * [ ] keypoint extraction 분포 개선 - 그냥 tracking 좋은 feature 추출에만 집중해서.
+     */
+    cv::Mat dst = VisualizeSwitchStates(rig, curr_frame, switch_states, neighbor_frames, curr_shapes);
+    cv::imshow("segslam", dst);
+
   }
 
   // if(frame->GetId() > 10){
@@ -644,17 +901,23 @@ void Pipeline::Put(const cv::Mat gray,
   //   exit(1);
   // }
 
-  {
-    std::map<Qth,bool> need_keyframe = FrameNeedsToBeKeyframe(frame, rig_new);
+  if(true){ // Mappoint 보충이 매 프레임미다 있어야 한다는게 타당한가?
+#if 0
+    std::map<Qth,bool> need_keyframe = FrameNeedsToBeKeyframe(curr_frame, rig_new);
     for(auto it : need_keyframe){
       if(!it.second)
         continue;
-      keyframes_[it.first][frame->GetId()] = frame;
-      SupplyMappoints(frame, rig_new);
+      keyframes_[it.first][curr_frame->GetId()] = curr_frame;
     }
+    SupplyMappoints(curr_frame, rig_new);
+#else
+    // TODO 제대로 된 keyframe 선택
+    keyframes_[0][curr_frame->GetId()] = curr_frame;
+    SupplyMappoints(curr_frame, rig_new);
+#endif
   }
-
-  prev_frame_ = frame;
+  prev_frame_ = curr_frame;
+  prev_rigs_ = curr_rigs;
   return;
 }
 

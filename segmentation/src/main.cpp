@@ -88,6 +88,8 @@ int TestWaymodataset(int argc, char** argv) {
                                     nlevels, initial_fast_th, min_fast_th);
   seg::Pipeline pipeline(camera, &extractor);
 
+  bool visualize_segment = false;
+
   //std::cout << "Intrinsic = \n" << camera->GetK() << std::endl;
   const EigenMap<int, g2o::SE3Quat>& Tcws = dataset.GetTcws();
   bool stop = 0==std::stoi(start);
@@ -99,7 +101,8 @@ int TestWaymodataset(int argc, char** argv) {
     const cv::Mat depth = dataset.GetDepthImage(i);
     cv::Mat gray;
     cv::cvtColor(rgb,gray,cv::COLOR_BGR2GRAY);
-    const std::map<seg::Pth, ShapePtr>& shapes = segmentor.Put(gray, depth, *camera, rgb);
+    const std::map<seg::Pth, ShapePtr>& shapes = segmentor.Put(gray, depth, *camera, 
+                                                               visualize_segment ? rgb : cv::Mat() );
     pipeline.Put(gray, depth, shapes, rgb);
 
     char c = cv::waitKey(stop?0:100);

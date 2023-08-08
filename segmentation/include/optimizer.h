@@ -21,7 +21,7 @@ class Mapper {
 public:
   Mapper();
   ~Mapper();
-  void ComputeLBA(const Camera* camera,
+  std::map<Pth, float> ComputeLBA(const Camera* camera,
                   Qth qth,
                   const std::set<Mappoint*>& neighbor_mappoints,
                   const std::map<Jth, Frame*>& neighobor_frames,
