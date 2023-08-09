@@ -84,8 +84,11 @@ int TestWaymodataset(int argc, char** argv) {
   int nlevels = 8;
   int initial_fast_th = 20;
   int min_fast_th = 7;
-  ORB_SLAM2::ORBextractor extractor(nfeatures, scale_factor,
-                                    nlevels, initial_fast_th, min_fast_th);
+#if 1
+  seg::CvFeatureDescriptor extractor;
+#else
+  seg::OrbSlam2FeatureDescriptor extractor(nfeatures, scale_factor, nlevels, initial_fast_th, min_fast_th);
+#endif
   seg::Pipeline pipeline(camera, &extractor);
 
   bool visualize_segment = false;

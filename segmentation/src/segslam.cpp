@@ -7,6 +7,7 @@
 #include "seg.h"
 #include "util.h"
 #include <opencv2/core.hpp>
+#include <opencv2/core/mat.hpp>
 #include <opencv2/core/types.hpp>
 #include <opencv2/imgproc.hpp>
 #include <queue>
@@ -14,6 +15,46 @@
 #include <vector>
 
 namespace seg {
+
+OrbSlam2FeatureDescriptor::OrbSlam2FeatureDescriptor(int nfeatures, float scale_factor, int nlevels, int initial_fast_th, int min_fast_th)
+  : FeatureDescriptor()
+{
+  auto ptr = new ORB_SLAM2::ORBextractor(nfeatures, scale_factor, nlevels, initial_fast_th, min_fast_th);
+  extractor_ = std::shared_ptr<ORB_SLAM2::ORBextractor>(ptr);
+}
+
+void OrbSlam2FeatureDescriptor::Extract(const cv::Mat gray, cv::InputArray mask, std::vector<cv::KeyPoint>& keypoints, cv::Mat& descriptors) {
+  extractor_->extract(gray, mask, keypoints, descriptors);
+  return;
+}
+
+double OrbSlam2FeatureDescriptor::GetDistance(const cv::Mat& desc0, const cv::Mat& desc1) const {
+  return ORB_SLAM2::ORBextractor::DescriptorDistance(desc0, desc1);
+}
+
+CvFeatureDescriptor::CvFeatureDescriptor() 
+  : FeatureDescriptor() {
+  int 	nfeatures = 2000;
+  float scaleFactor = 1.2f;
+  int 	nlevels = 3;
+  int 	edgeThreshold = 15;
+  int 	firstLevel = 0;
+  int 	WTA_K = 2;
+  int 	scoreType = cv::ORB::HARRIS_SCORE;
+  int 	patchSize = 31;
+  int 	fastThreshold = 15;
+  orb_ = cv::ORB::create(nfeatures,scaleFactor,nlevels,edgeThreshold,firstLevel,WTA_K,scoreType,patchSize,fastThreshold);
+}
+
+void CvFeatureDescriptor::Extract(const cv::Mat gray, cv::InputArray mask, std::vector<cv::KeyPoint>& keypoints, cv::Mat& descriptors) {
+  orb_->detect(gray, keypoints);
+  orb_->compute(gray, keypoints, descriptors);
+  return;
+}
+
+double CvFeatureDescriptor::GetDistance(const cv::Mat& desc0, const cv::Mat& desc1) const {
+  return ORB_SLAM2::ORBextractor::DescriptorDistance(desc0, desc1);
+}
 
 RigidGroup::RigidGroup(Qth qth, Frame* first_frame)
 : id_(qth),
@@ -100,9 +141,12 @@ std::vector<std::vector<int> > Frame::SearchRadius(const flann::Matrix<double>& 
 
 void Frame::ExtractAndNormalizeKeypoints(const cv::Mat gray,
                                          const Camera* camera,
-                                         ORB_SLAM2::ORBextractor* extractor) {
-  // TODO keypoint extraction 개선.
-  extractor->extract(gray, cv::noArray(), keypoints_, descriptions_);
+                                         FeatureDescriptor* extractor) {
+  /*
+  * [ ] TODO Inprogress keypoint extraction 개선.
+  * 적어도 땅바닥은 static으로 만들자...
+  */
+  extractor->Extract(gray, cv::noArray(), keypoints_, descriptions_);
   mappoints_.resize(keypoints_.size(), nullptr);
   instances_.resize(keypoints_.size(), nullptr);
   measured_depths_.resize(keypoints_.size(), 0.f);
@@ -111,7 +155,6 @@ void Frame::ExtractAndNormalizeKeypoints(const cv::Mat gray,
     const auto& pt = keypoints_[n].pt;
     normalized_[n] = camera->NormalizedUndistort(Eigen::Vector2d(pt.x,pt.y));
   }
-
   // ref : https://github.com/mariusmuja/flann/blob/master/examples/flann_example.cpp
   flann_keypoints_
     = flann::Matrix<double>(new double[2*keypoints_.size()], keypoints_.size(), 2);
@@ -247,6 +290,7 @@ cv::Mat VisualizeMatches(const Frame* frame, const std::map<int, Mappoint*>& mat
 #endif
 
 std::map<int, Mappoint*> ProjectionMatch(const Camera* camera,
+                                         const FeatureDescriptor* extractor,
                                          const std::set<Mappoint*>& mappoints,
                                          const Frame* curr_frame, // With predicted Tcq
                                          const Qth qth,
@@ -290,7 +334,7 @@ std::map<int, Mappoint*> ProjectionMatch(const Camera* camera,
     int champ1 = -1;
     for(int idx : each_search){
       cv::Mat desc1 = curr_frame->GetDescription(idx);
-      double dist = ORB_SLAM2::ORBextractor::DescriptorDistance(desc0, desc1);
+      double dist = extractor->GetDistance(desc0,desc1);
       //if(std::abs(kpt0.angle - kpt.angle) > 40.)
       //  continue;
       //if(kpt0.octave != kpt.octave)
@@ -325,7 +369,7 @@ std::map<int, Mappoint*> ProjectionMatch(const Camera* camera,
 }
 
 Pipeline::Pipeline(const Camera* camera,
-                   ORB_SLAM2::ORBextractor*const extractor
+                   FeatureDescriptor*const extractor
                   )
   : camera_(camera),
   prev_frame_(nullptr),
@@ -434,7 +478,7 @@ std::vector< std::pair<Qth, size_t> > CountRigPoints(Frame* frame,
       if(!ins)
         continue;
       const cv::Point2f& pt = keypoints[n].pt;
-      if(! frame->IsInFrame(camera, Eigen::Vector2d(pt.x, pt.y) ) )
+      if(! frame->IsInFrame(camera, Eigen::Vector2d(pt.x, pt.y) ) ) // 화면 구석에만 몰린 instance와 rig group은 tracking에서 제외한다.
         continue;
       for(auto it_rig : ins->rig_groups_)
         num_points[it_rig.first]++;
@@ -811,6 +855,7 @@ void Pipeline::Put(const cv::Mat gray,
 {
   const bool fill_bg_with_dominant = true;
   const float search_radius = 30.;
+  const float switch_threshold = .5;
 
   for(auto it_shape : curr_shapes){
     const Pth& pth = it_shape.first;
@@ -863,7 +908,7 @@ void Pipeline::Put(const cv::Mat gray,
     std::set<Mappoint*>     neighbor_mappoints;
     std::map<Jth, Frame* >  neighbor_frames;
     GetNeighbors(latest_kf, qth, neighbor_mappoints, neighbor_frames);
-    std::map<int, Mappoint*> matches = ProjectionMatch(camera_, neighbor_mappoints, curr_frame, qth, search_radius);
+    std::map<int, Mappoint*> matches = ProjectionMatch(camera_, extractor_, neighbor_mappoints, curr_frame, qth, search_radius);
     for(auto it : matches){
       if(curr_frame->GetMappoint(it.first)) // 이전에 이미 matching이 된 keypoint
         continue;
@@ -873,7 +918,7 @@ void Pipeline::Put(const cv::Mat gray,
     std::map<Pth,float> switch_states\
       = mapper_->ComputeLBA(camera_, qth, neighbor_mappoints, neighbor_frames, curr_frame, verbose);
     for(auto it : switch_states){
-      if(it.second > .5)
+      if(it.second > switch_threshold)
         continue;
       Instance* ins = pth2instances_.at( it.first );
       rig->ExcludeInstance(ins);
@@ -888,18 +933,11 @@ void Pipeline::Put(const cv::Mat gray,
      - 일단은 Compute LBA 반복하다가, lba 결과물의 rigid body의 크기가 일정값 이하가 될때 반복 종료하는것으로 대충 끝내기.
      - 나머지 '자잘' 한것은 그냥 독립된 instance로 취급.
      - '자잘' 한것은 일단 medain length tracking으로 관찰하다가 일정프레임 이상 유지되면 병합.
-     * [ ] keypoint extraction 분포 개선 - 그냥 tracking 좋은 feature 추출에만 집중해서.
      */
     cv::Mat dst = VisualizeSwitchStates(rig, curr_frame, switch_states, neighbor_frames, curr_shapes);
     cv::imshow("segslam", dst);
 
   }
-
-  // if(frame->GetId() > 10){
-  //   std::cout << "terminate for frame" << std::endl;
-  //   cv::waitKey();
-  //   exit(1);
-  // }
 
   if(true){ // Mappoint 보충이 매 프레임미다 있어야 한다는게 타당한가?
 #if 0

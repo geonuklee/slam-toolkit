@@ -1,12 +1,12 @@
 #ifndef SEG_FRAME_
 #define SEG_FRAME_
 #include <flann/flann.hpp> // include it before opencv
+#include <opencv2/core/mat.hpp>
+#include "orb_extractor.h"
 #include "stdafx.h"
 #include "seg.h"
 
-namespace ORB_SLAM2{
-  class ORBextractor;
-}
+namespace ORB_SLAM2{ class ORBextractor; }
 
 class Camera;
 class DepthCamera; // TODO 'depth' camera only?
@@ -35,6 +35,31 @@ private:
   const Pth pth_;
 };
 
+class FeatureDescriptor {
+public:
+  virtual void Extract(const cv::Mat gray, cv::InputArray mask, std::vector<cv::KeyPoint>& keypoints, cv::Mat& descriptors) = 0;
+  virtual double GetDistance(const cv::Mat& desc0, const cv::Mat& desc1) const = 0;
+};
+
+class OrbSlam2FeatureDescriptor : public FeatureDescriptor {
+public:
+  OrbSlam2FeatureDescriptor(int nfeatures, float scale_factor, int nlevels, int initial_fast_th, int min_fast_th);
+  void Extract(const cv::Mat gray, cv::InputArray mask, std::vector<cv::KeyPoint>& keypoints, cv::Mat& descriptors);
+  inline double GetDistance(const cv::Mat& desc0, const cv::Mat& desc1) const;
+private:
+  std::shared_ptr<ORB_SLAM2::ORBextractor> extractor_;
+};
+
+class CvFeatureDescriptor : public FeatureDescriptor {
+public:
+  CvFeatureDescriptor();
+  void Extract(const cv::Mat gray, cv::InputArray mask, std::vector<cv::KeyPoint>& keypoints, cv::Mat& descriptors);
+  inline double GetDistance(const cv::Mat& desc0, const cv::Mat& desc1) const;
+private:
+  cv::Ptr<cv::ORB> orb_;
+};
+
+
 class Frame {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -44,7 +69,7 @@ public:
   int GetIndex(const Mappoint* mp) const;
   void ExtractAndNormalizeKeypoints(const cv::Mat gray,
                                     const Camera* camera,
-                                    ORB_SLAM2::ORBextractor* extractor);
+                                    FeatureDescriptor* extractor);
   void SetInstances(const std::map<Pth, ShapePtr>& shapes,
                     const std::map<Pth, Instance*>& instances
                     );
@@ -160,7 +185,7 @@ class Pipeline {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   Pipeline(const Camera* camera,
-           ORB_SLAM2::ORBextractor*const extractor
+           FeatureDescriptor*const extractor
           );
   ~Pipeline();
   void Put(const cv::Mat gray,
@@ -188,7 +213,7 @@ private:
   std::map<Ith, Mappoint* >                   ith2mappoints_;
 
   const Camera*const camera_;
-  ORB_SLAM2::ORBextractor*const extractor_;
+  FeatureDescriptor*const extractor_;
   std::shared_ptr<Mapper> mapper_;
 };
 
