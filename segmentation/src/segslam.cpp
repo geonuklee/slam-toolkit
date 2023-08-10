@@ -218,6 +218,7 @@ const Eigen::Vector3d& Mappoint::GetXq(Qth qth) {
 }
 
 cv::Mat Mappoint::GetDescription() const {
+  // TODO ref? latest? with Qth?
   Frame* ref = ref_.begin()->second;
   int kpt_idx = ref->GetIndex(this);
   return ref->GetDescription(kpt_idx);
@@ -327,7 +328,7 @@ std::map<int, Mappoint*> ProjectionMatch(const Camera* camera,
 Pipeline::Pipeline(const Camera* camera,
                    FeatureDescriptor*const extractor
                   )
-  : camera_(camera), prev_frame_(nullptr), extractor_(extractor), mapper_(new Mapper()) {
+  : camera_(camera), prev_frame_(nullptr), prev_dominant_qth_(-1), extractor_(extractor), mapper_(new Mapper()) {
 }
 
 Pipeline::~Pipeline() {
@@ -381,6 +382,7 @@ RigidGroup* SupplyRigGroup(Frame* frame,
 std::vector< std::pair<Qth, size_t> > CountRigPoints(Frame* frame,
                                                      const Camera* camera,
                                                      bool fill_bg_with_dominant,
+                                                     Qth prev_dominant_qth,
                                                      const std::map<Qth,RigidGroup*> qth2rig_groups
                                                      ){
   std::map<Qth, size_t> num_points; {
@@ -406,7 +408,7 @@ std::vector< std::pair<Qth, size_t> > CountRigPoints(Frame* frame,
               { return a.second > b.second; }
            );
   if(fill_bg_with_dominant){
-    Qth dominant = sorted_results.begin()->first;
+    Qth dominant = sorted_results.empty() ? prev_dominant_qth : sorted_results.begin()->first;
     RigidGroup* dominant_rig = qth2rig_groups.at(dominant);
     auto& instances = frame->GetInstances();
     for(size_t n=0; n<instances.size(); n++){
@@ -552,7 +554,6 @@ void Pipeline::SupplyMappoints(Frame* frame,
     const int n = kpt.class_id;
 #else
   for(size_t n=0; n<keypoints.size(); n++){
-    // depth값이 관찰되지 않는 uv only point를 구분해서 처리하면 SLAM 결과가 더 정확할텐데..
     const cv::KeyPoint& kpt = keypoints[n];
 #endif
     float z = depths[n];
@@ -601,6 +602,21 @@ cv::Mat VisualizeStates(const RigidGroup* rig,
   const cv::Mat rgb = frame->GetRgb();
   cv::Mat dst_frame; {
     cv::Mat dst_fill  = rgb.clone();
+#if 1
+    for(auto it : rig->GetExcludedInstances()){
+      const Pth& pth = it.first;
+      if(!curr_shapes.count(pth))
+        continue;
+      ShapePtr s_ptr = curr_shapes.at(pth);
+      std::vector< std::vector<cv::Point> > cnts;
+      cnts.resize(1);
+      cnts[0].reserve(s_ptr->outerior_.size() );
+      for( auto pt: s_ptr->outerior_)
+        cnts[0].push_back(cv::Point(pt.x,pt.y));
+      cv::drawContours(dst_fill, cnts, 0, CV_RGB(255,0,0), -1);
+    }
+    cv::addWeighted(rgb, .5, dst_fill, .5, 1., dst_frame);
+#else
     for(auto it : curr_shapes) {
       const Pth& pth = it.first;
       bool sparse = density_scores.count(pth) ? density_scores.at(pth) < 1. : true;
@@ -617,17 +633,8 @@ cv::Mat VisualizeStates(const RigidGroup* rig,
       cnts[0].reserve(s_ptr->outerior_.size() );
       for( auto pt: s_ptr->outerior_)
         cnts[0].push_back(cv::Point(pt.x,pt.y));
-      /*
-      TODO contour 채우는 색상.
-      * [x] density score가 1. 이하인 sparse인 경우 - 파랑(안정될때까진 체크는필요)
-      * [x] vertes state - dynamics인 경우 - shade
-                            rigid인 경우   - 투명
-      */
-      //const auto& color0 = colors.at(it.first % colors.size() );
       if(!sparse && !dynamics)
         cv::drawContours(dst_fill, cnts, 0, CV_RGB(255,0,0), -1);
-      //else
-      //  cv::drawContours(dst_fill, cnts, 0, CV_RGB(0,0,255), -1);
     }
     cv::addWeighted(rgb, .5,
                     dst_fill, .5,
@@ -642,6 +649,7 @@ cv::Mat VisualizeStates(const RigidGroup* rig,
       const auto& color0 = colors.at(it.first % colors.size() );
       cv::drawContours(dst_frame, cnts, 0, color0, 2);
     }
+#endif
   }
 
   cv::Mat dst_texts = cv::Mat::zeros( rgb.rows, 400, CV_8UC3); {
@@ -771,22 +779,6 @@ cv::Mat VisualizeStates(const RigidGroup* rig,
       const Pth& pth = it.first;
       ShapePtr ptr = it.second;
       const auto& bb = ptr->outerior_bb_;
-      /*
-      const auto& color0 = colors.at(pth % colors.size() );
-      std::string txt = "#" + std::to_string(pth);
-      if(density_scores.count(pth) ){
-        std::ostringstream oss;
-        oss << std::fixed << std::setprecision(2) << density_scores.at(pth);
-        txt += " : "+ oss.str();
-      }
-      int baseline=0;
-      auto size = cv::getTextSize(txt, fontFace, fontScale, fontThick, &baseline);
-      cv::Point cp(bb.x+.5*bb.width, bb.y+.5*bb.height);
-      cv::Point dpt(.5*size.width, .5*size.height);
-      cv::rectangle(dst_frame, cp-dpt-cv::Point(0,3*baseline), cp+dpt, CV_RGB(255,255,255), -1);
-      cv::putText(dst_frame, txt, cp-dpt,fontFace, fontScale, color0, fontThick);
-      TODO Bounding box 에서 순서대로 #Ith, d: desntiy score, s: switch score
-      */
       std::string msg[3];
       cv::Scalar txt_colors[3];
       msg[0] = "#" + std::to_string(pth);
@@ -857,6 +849,7 @@ cv::Mat VisualizeStates(const RigidGroup* rig,
 
 void Pipeline::Put(const cv::Mat gray,
                    const cv::Mat depth,
+                   const cv::Mat flow0,
                    const std::map<Pth, ShapePtr>& curr_shapes,
                    const cv::Mat vis_rgb)
 {
@@ -889,17 +882,21 @@ void Pipeline::Put(const cv::Mat gray,
     SupplyMappoints(curr_frame, rig_new);
     UpdateRigGroups(curr_rigs_pred, curr_frame);
     prev_frame_ = curr_frame;
+    prev_dominant_qth_ = qth;
     return;
   }
   // curr_frame의 instnace 중, 속한 group이 없는 ins는 기존 모든 rig_new + prev_rigs에 포함시킨다.
   UpdateRigGroups(curr_rigs_pred, curr_frame);
 
   std::vector<std::pair<Qth,size_t> > rig_counts;
+  Qth dominant_qth = -1;
   std::set<Qth> curr_rigs; {
-    rig_counts  = CountRigPoints(curr_frame, camera_, fill_bg_with_dominant, qth2rig_groups_);
+    rig_counts  = CountRigPoints(curr_frame, camera_, fill_bg_with_dominant, prev_dominant_qth_, qth2rig_groups_);
     for(auto it : rig_counts)
       curr_rigs.insert(it.first);
-    //Qth qth_dominant = rig_counts.begin()->first; // Future work : rigid_tree를 만들어 부모 자식관계로 관리할때 사용
+    if(rig_counts.empty())
+      rig_counts.push_back( std::make_pair(prev_dominant_qth_ , 0) );
+    dominant_qth = rig_counts.begin()->first; // Future work : rigid_tree를 만들어 부모 자식관계로 관리할때 사용
   }
 
   // intiial pose prediction
@@ -916,7 +913,12 @@ void Pipeline::Put(const cv::Mat gray,
     std::set<Mappoint*>     neighbor_mappoints;
     std::map<Jth, Frame* >  neighbor_frames;
     GetNeighbors(latest_kf, qth, neighbor_mappoints, neighbor_frames);
+
+    /*
+    TODO optical flow를 활용한 projection matching 봐완.
+    */
     std::map<int, Mappoint*> matches = ProjectionMatch(camera_, extractor_, neighbor_mappoints, curr_frame, qth, search_radius);
+
     for(auto it : matches){
       if(curr_frame->GetMappoint(it.first)) // 이전에 이미 matching이 된 keypoint
         continue;
@@ -970,6 +972,7 @@ void Pipeline::Put(const cv::Mat gray,
   }
   prev_frame_ = curr_frame;
   prev_rigs_ = curr_rigs;
+  prev_dominant_qth_ = dominant_qth;
   return;
 }
 

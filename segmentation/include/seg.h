@@ -26,8 +26,8 @@ public:
 class Segmentor {
 public:
   Segmentor();
-  const std::map<int, ShapePtr>& Put(cv::Mat gray, cv::Mat depth, const DepthCamera& camera, cv::Mat vis_rgb);
-  const std::map<int, ShapePtr>& Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera, cv::Mat vis_rgb);
+  const std::map<int, ShapePtr>& Put(cv::Mat gray, cv::Mat depth, const DepthCamera& camera, cv::Mat vis_rgb, cv::Mat& flow0);
+  const std::map<int, ShapePtr>& Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera, cv::Mat vis_rgb, cv::Mat& flow0);
 
 private:
 
@@ -35,7 +35,8 @@ private:
             cv::cuda::GpuMat g_gray,
             cv::Mat depth,
             const Camera& camera,
-            cv::Mat vis_rgb // for visualization
+            cv::Mat vis_rgb, // for visualization
+            cv::Mat& flow0
             );
 
 
@@ -69,7 +70,7 @@ void DistanceWatershed(const cv::Mat dist_fromedge,
 std::map<int, ShapePtr> ConvertMarker2Instances(const cv::Mat marker);
 std::map<int,int> TrackShapes(const std::map<int, ShapePtr>& local_shapes,
                               const cv::Mat& local_marker,
-                              const cv::Mat& flow,
+                              const cv::Mat& flow0,
                               const float min_iou,
                               std::map<int, ShapePtr>& global_shapes,
                               int& n_shapes);

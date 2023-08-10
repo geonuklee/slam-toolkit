@@ -180,27 +180,10 @@ bool Shape::HasCollision(const int& _x, const int& _y, bool check_contour) const
 
 std::map<int,int> TrackShapes(const std::map<int, ShapePtr>& local_shapes,
                               const cv::Mat& local_marker,
-                              const cv::Mat& flow,
+                              const cv::Mat& flow0,
                               const float min_iou,
                               std::map<int, ShapePtr>& global_shapes,
                               int& n_shapes) {
-  // Convert coordinate of flow
-  cv::Mat flow0;
-  if(!flow.empty()){
-    flow0 = cv::Mat::zeros(flow.rows,flow.cols,CV_32FC2);
-    for(int r1=0; r1<flow.rows; r1++){
-      for(int c1=0; c1<flow.cols; c1++){
-        // dpt01 : {1} coordinate에서 0->1 변위 벡터, 
-        const auto& dpt01 = flow.at<cv::Point2f>(r1,c1);
-        if(std::abs(dpt01.x)+std::abs(dpt01.y) < 1e-10)
-          continue;
-        cv::Point2f pt0(c1-dpt01.x, r1-dpt01.y);
-        if(pt0.x < 0 || pt0.y < 0 || pt0.x > flow.cols-1 || pt0.y > flow.rows-1)
-          continue;
-        flow0.at<cv::Point2f>(pt0) = dpt01;
-      }
-    }
-
     // Motion update
     for(auto git : global_shapes){
       ShapePtr ptr = git.second;
@@ -215,7 +198,6 @@ std::map<int,int> TrackShapes(const std::map<int, ShapePtr>& local_shapes,
       }
       ptr->UpdateBB();
     }
-  }
 
   // Sampling area
   std::map<int, size_t> g_areas;
@@ -649,7 +631,8 @@ const std::map<int, ShapePtr>& Segmentor::_Put(cv::Mat gray,
                cv::cuda::GpuMat g_gray,
                cv::Mat depth,
                const Camera& camera,
-               cv::Mat vis_rgb
+               cv::Mat vis_rgb,
+               cv::Mat& flow0
                ) {
   auto start = std::chrono::steady_clock::now();
   std::vector<cv::Point2f> corners = GetCorners(gray);
@@ -663,13 +646,25 @@ const std::map<int, ShapePtr>& Segmentor::_Put(cv::Mat gray,
   */
   const bool is_keyframe = true;
   cv::Mat flow;
-  if(!gray0_.empty())
-    GetFlow(g_gray); // Flow for tracking shape.
-#if 1
-#else
-  // Flow대신 ORB matcher 적용
-  IsKeyframe(flow,rgb);
-#endif
+  if(!gray0_.empty()){
+    // flow  : {1} coordinate의 0->1 flow
+    flow = GetFlow(g_gray); // Flow for tracking shape.
+    // flow0 : {0} coordinate의 0->1 flow
+    flow0 = cv::Mat::zeros(flow.rows,flow.cols,CV_32FC2);
+    for(int r1=0; r1<flow.rows; r1++){
+      for(int c1=0; c1<flow.cols; c1++){
+        // dpt01 : {1} coordinate에서 0->1 변위 벡터, 
+        const auto& dpt01 = flow.at<cv::Point2f>(r1,c1);
+        if(std::abs(dpt01.x)+std::abs(dpt01.y) < 1e-10)
+          continue;
+        cv::Point2f pt0(c1-dpt01.x, r1-dpt01.y);
+        if(pt0.x < 0 || pt0.y < 0 || pt0.x > flow.cols-1 || pt0.y > flow.rows-1)
+          continue;
+        // {0} coordinate에 0->1 변위벡터 맵핑.
+        flow0.at<cv::Point2f>(pt0) = dpt01;
+      }
+    }
+  }
   cv::Mat valid_depth = depth > 0.;
   cv::Mat filtered_depth;
   cv::erode(valid_depth,valid_depth,cv::Mat::ones(13,13,CV_32FC1) );
@@ -712,10 +707,8 @@ const std::map<int, ShapePtr>& Segmentor::_Put(cv::Mat gray,
   return global_shapes_;
 }
 
-const std::map<int, ShapePtr>& Segmentor::Put(cv::Mat gray, cv::Mat depth, const DepthCamera& camera,
-                    cv::Mat vis_rgb) {
+const std::map<int, ShapePtr>& Segmentor::Put(cv::Mat gray, cv::Mat depth, const DepthCamera& camera, cv::Mat vis_rgb, cv::Mat& flow0) {
   cv::cuda::GpuMat g_gray;
   g_gray.upload(gray);
-
-  return _Put(gray, g_gray, depth, camera, vis_rgb);
+  return _Put(gray, g_gray, depth, camera, vis_rgb, flow0);
 }

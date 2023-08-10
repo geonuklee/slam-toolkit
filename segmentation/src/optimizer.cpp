@@ -53,7 +53,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
   const double uv_info = 1.;
   const double invd_info = 1e+0;
 
-  const int n_iter = 5;
+  const int n_iter = 10;
   std::map<Jth, Frame*> frames = neighbor_keyframes;
   frames[curr_frame->GetId()] = curr_frame;
   /*

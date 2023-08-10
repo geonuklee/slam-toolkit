@@ -6,7 +6,7 @@
 #include "../include/seg.h"
 #include "../include/util.h"
 
-const std::map<int, ShapePtr>& Segmentor::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera, cv::Mat vis_rgb) {
+const std::map<int, ShapePtr>& Segmentor::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera, cv::Mat vis_rgb, cv::Mat& flow0) {
   if(camera.GetD().norm() > 1e-5){
     std::cerr << "Not support distorted image. Put rectified image" << std::endl;
     exit(1);
@@ -32,7 +32,7 @@ const std::map<int, ShapePtr>& Segmentor::Put(cv::Mat gray, cv::Mat gray_r, cons
       depth.at<float>(r,c) = base_line *  fx / disp;
     }
   }
-  return _Put(gray, g_gray, depth, camera, vis_rgb);
+  return _Put(gray, g_gray, depth, camera, vis_rgb, flow0);
 }
 
 

@@ -218,6 +218,7 @@ public:
   ~Pipeline();
   void Put(const cv::Mat gray,
            const cv::Mat depth,
+           const cv::Mat flow0,
            const std::map<Pth, ShapePtr>& shapes,
            const cv::Mat vis_rgb=cv::Mat());
 
@@ -236,6 +237,7 @@ private:
   // Tcq(j) : {c}amera <- {q}th group for 'j'th frame
   Frame*                      prev_frame_;
   std::set<Qth>               prev_rigs_;
+  Qth                         prev_dominant_qth_;
   std::map<Qth, RigidGroup*>                  qth2rig_groups_;
   std::map<Pth, Instance*>                    pth2instances_;
   std::map<Ith, Mappoint* >                   ith2mappoints_;
