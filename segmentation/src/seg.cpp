@@ -125,6 +125,7 @@ std::map<int, ShapePtr> ConvertMarker2Instances(const cv::Mat marker) {
     ShapePtr s_ptr = shapes[l];
     s_ptr->label_ = l;
     s_ptr->outerior_ = contour;
+    s_ptr->area_ = area;
   }
   for(auto it : shapes)
     it.second->UpdateBB();
@@ -285,6 +286,7 @@ std::map<int,int> TrackShapes(const std::map<int, ShapePtr>& local_shapes,
           g_ptr->stabilized_ = true;
         g_ptr->outerior_ = l_ptr->outerior_;
         g_ptr->outerior_bb_ = l_ptr->outerior_bb_;
+        g_ptr->area_ = l_ptr->area_;
         matches[lid] = gid;
         continue;
       }
@@ -299,8 +301,14 @@ std::map<int,int> TrackShapes(const std::map<int, ShapePtr>& local_shapes,
     */
     g_ptr->n_missing_++;
     g_ptr->n_belief_--;
+    // TODO parameterize
+#if 0
     if(g_ptr->n_missing_ > 2 ||  g_ptr->n_belief_ < 1)
       layoff_list.push_back(gid);
+#else
+    if(g_ptr->n_missing_ > 0 ||  g_ptr->n_belief_ < 1)
+      layoff_list.push_back(gid);
+#endif
 
   }
   for(int gid : layoff_list)

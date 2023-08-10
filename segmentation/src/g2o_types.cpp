@@ -6,12 +6,17 @@ namespace seg {
 
 const double MIN_NUM = 1e-10;
 
-EdgeSE3PointXYZDepth::EdgeSE3PointXYZDepth(const Param* param)
+EdgeSE3PointXYZDepth::EdgeSE3PointXYZDepth(const Param* param,
+                                           const double& uv_info,
+                                           const double& invd_info
+                                           )
   :param_(param),
   g2o::BaseBinaryEdge<3, g2o::Vector3, g2o::VertexSBAPointXYZ, g2o::VertexSE3Expmap>()
 {
-  information().setIdentity(3,3);
-  information()(2,2) = 1e-4; // inverted covariance for inverse depth
+  auto& info = information();
+  info.setZero();
+  info(0,0) = info(1,1) = uv_info;
+  info(2,2)             = invd_info;
 }
 
 void EdgeSE3PointXYZDepth::computeError() {
@@ -82,7 +87,9 @@ void EdgeSwitchPrior::computeError() {
   _error[0] = measurement() - s->x();
 }
 
-EdgeSwSE3PointXYZDepth::EdgeSwSE3PointXYZDepth(const Param* param)
+EdgeSwSE3PointXYZDepth::EdgeSwSE3PointXYZDepth(const Param* param,
+                                               const double& uv_info,
+                                               const double& invd_info)
 : param_(param) {
 #if 1
   resize(3);
@@ -92,10 +99,10 @@ EdgeSwSE3PointXYZDepth::EdgeSwSE3PointXYZDepth(const Param* param)
   _jacobianOplus[1].resize(3,3);
   _jacobianOplus[2].resize(3,1);
 #endif
-
-  information().setIdentity(3,3);
-  information()(2,2) = 1e-4; // inverted covariance for inverse depth
-  //information() *= 1e+4;
+  auto& info = information();
+  info.setZero();
+  info(0,0) = info(1,1) = uv_info;
+  info(2,2)             = invd_info;
 }
 
 void EdgeSwSE3PointXYZDepth::computeError() {

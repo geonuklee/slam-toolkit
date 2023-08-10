@@ -49,7 +49,11 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
                         Frame* curr_frame,
                         bool verbose
                        ) {
-  const int n_iter = 10;
+  // info : inverted covariance
+  const double uv_info = 1.;
+  const double invd_info = 1e+0;
+
+  const int n_iter = 5;
   std::map<Jth, Frame*> frames = neighbor_keyframes;
   frames[curr_frame->GetId()] = curr_frame;
   /*
@@ -63,14 +67,9 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
   */
   Param param(camera);
   g2o::SparseOptimizer optimizer;
-#if 1
   // Dynamic block size due to 6dim SE3, 1dim prior vertex.
   typedef g2o::BlockSolverPL<-1,-1> BlockSolver;
-#else
-  typedef g2o::BlockSolverPL<6,3> BlockSolver;
-#endif
-  std::unique_ptr<BlockSolver::LinearSolverType> linear_solver
-    = g2o::make_unique<g2o::LinearSolverEigen<BlockSolver::PoseMatrixType>>();
+  std::unique_ptr<BlockSolver::LinearSolverType> linear_solver = g2o::make_unique<g2o::LinearSolverEigen<BlockSolver::PoseMatrixType>>();
 
 #if 1
   g2o::OptimizationAlgorithm* solver \
@@ -86,6 +85,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
   std::map<Pth, VertexSwitchLinear*>  v_instances;
   std::map<Pth, size_t>               mp_counts;
   std::map<g2o::OptimizableGraph::Edge*, std::pair<Frame*,Mappoint*> > measurment_edges;
+  std::map<Pth, EdgeSwitchPrior*> prior_edges;
 
   for(Mappoint* mp : neighbor_mappoints){
     Instance* ins = mp->GetInstance();
@@ -100,19 +100,20 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
   for(auto it_pth : mp_counts){
     if(it_pth.second < 5)
       continue;
-    const double info = 1e-4; // TODO 타당한 inform 추론.
     auto sw_vertex = new VertexSwitchLinear();
     sw_vertex->setId(optimizer.vertices().size() );
-    sw_vertex->setEstimate(.5);
+    sw_vertex->setEstimate(1.);
     optimizer.addVertex(sw_vertex);
-    auto sw_prior_edge = new EdgeSwitchPrior(info);
+    auto sw_prior_edge = new EdgeSwitchPrior();
     sw_prior_edge->setMeasurement(1.);
     sw_prior_edge->setVertex(0, sw_vertex);
     optimizer.addEdge(sw_prior_edge);
     v_instances[it_pth.first] = sw_vertex;
+    prior_edges[it_pth.first] = sw_prior_edge;
   }
 
   int na = 0; int nb = 0;
+  std::map<Pth, double> swedges_parameter;
   for(auto it_frame : frames){
     Frame* frame = it_frame.second;
     Jth jth = it_frame.first;
@@ -139,16 +140,18 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
       g2o::OptimizableGraph::Edge* edge = nullptr;
       if(v_instances.count(pth) ){
         VertexSwitchLinear* v_ins = v_instances.at(pth);
-        auto ptr = new EdgeSwSE3PointXYZDepth(&param);
+        auto ptr = new EdgeSwSE3PointXYZDepth(&param, uv_info, invd_info);
         ptr->setVertex(0,v_mp);
         ptr->setVertex(1,v_pose);
         ptr->setVertex(2,v_ins);
         ptr->setMeasurement( uvi );
         edge = ptr;
         na++;
+        swedges_parameter[pth] += 1.;
+        //max_invds[pth] = std::max(max_invds[pth], uvi[2]);
       }
       else{
-        auto ptr = new EdgeSE3PointXYZDepth(&param);
+        auto ptr = new EdgeSE3PointXYZDepth(&param, uv_info, invd_info);
         ptr->setMeasurement( uvi );
         ptr->setVertex(0, v_mp);
         ptr->setVertex(1, v_pose);
@@ -157,25 +160,26 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
         nb++;
       }
 
-      if(edge)
-        optimizer.addEdge(edge);
+      assert(edge);
+      optimizer.addEdge(edge);
       g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
       const float deltaMono = sqrt(5.991); // TODO Why? ORB_SLAM2
       rk->setDelta(0.0001*deltaMono);
       edge->setRobustKernel(rk);
     }
   }
+
   if(!v_poses.empty()){
     g2o::OptimizableGraph::Vertex* v_oldest = v_poses.begin()->second;
     v_oldest->setFixed(true);
   }
 
-  /*
-  * [x] Measumenet Edge
-    - 먼저 switch edge 넣기전에 depth sensor를 고려한 measreument edge부터 넣어서
-      최소한 world tracking은 되는지부터 확인 먼저
-  * [x] Instance Switch edge
-  */
+  for(auto it_v_sw : prior_edges){
+    // Set Prior information
+    const double info = 1e-8 * swedges_parameter.at(it_v_sw.first);
+    it_v_sw.second->SetInfomation(info);
+  }
+
   optimizer.setVerbose(false);
   optimizer.initializeOptimization();
   optimizer.optimize(n_iter);

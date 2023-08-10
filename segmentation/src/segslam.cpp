@@ -34,7 +34,7 @@ double OrbSlam2FeatureDescriptor::GetDistance(const cv::Mat& desc0, const cv::Ma
 
 CvFeatureDescriptor::CvFeatureDescriptor() 
   : FeatureDescriptor() {
-  int 	nfeatures = 2000;
+  int 	nfeatures = 4000;
   float scaleFactor = 1.2f;
   int 	nlevels = 3;
   int 	edgeThreshold = 15;
@@ -142,10 +142,6 @@ std::vector<std::vector<int> > Frame::SearchRadius(const flann::Matrix<double>& 
 void Frame::ExtractAndNormalizeKeypoints(const cv::Mat gray,
                                          const Camera* camera,
                                          FeatureDescriptor* extractor) {
-  /*
-  * [ ] TODO Inprogress keypoint extraction 개선.
-  * 적어도 땅바닥은 static으로 만들자...
-  */
   extractor->Extract(gray, cv::noArray(), keypoints_, descriptions_);
   mappoints_.resize(keypoints_.size(), nullptr);
   instances_.resize(keypoints_.size(), nullptr);
@@ -169,9 +165,11 @@ void Frame::ExtractAndNormalizeKeypoints(const cv::Mat gray,
   return;
 } 
 
-void Frame::SetInstances(const std::map<Pth, ShapePtr>& shapes,
-                         const std::map<Pth, Instance*>& pth2instance
-                         ) {
+std::map<Pth,float> Frame::SetInstances(const std::map<Pth, ShapePtr>& shapes,
+                                  const std::map<Pth, Instance*>& pth2instance,
+                                  float density_threshold
+                                 ) {
+  std::map<Pth, std::set<int> > ins2nset;
   for(size_t n=0; n<keypoints_.size(); n++){
     const cv::KeyPoint& kpt = keypoints_[n];
     for(auto it_shape : shapes){
@@ -181,11 +179,29 @@ void Frame::SetInstances(const std::map<Pth, ShapePtr>& shapes,
       const auto& pt = kpt.pt;
       if(! s_ptr->HasCollision(pt.x, pt.y, true) )
         continue;
-      instances_[n] = pth2instance.at(it_shape.first);
+      ins2nset[it_shape.first].insert(n);
       break;
     }
   }
-  return;
+  std::map<Pth,float> density_scores;
+  //std::cout << "DenseScore = (";
+  for(auto it_nset : ins2nset){
+    const Pth& pth = it_nset.first;
+    ShapePtr shape = shapes.at(pth);
+    float dense = (float) it_nset.second.size() / shape->area_;
+    float score =  dense / density_threshold;
+    density_scores[pth] = score;
+    //std::cout << "(#" << pth << ":" << score <<"),";
+  }
+  //std::cout << std::endl;
+  for(auto it : density_scores){
+    if(it.second < 1.) // sparse instance는 keypoint에 할당하지 않는다.
+      continue;
+    const Pth& pth = it.first;
+    for(const int& n : ins2nset.at(pth) )
+      instances_[n] = pth2instance.at(pth);
+  }
+  return density_scores;
 }
 
 void Frame::SetMeasuredDepths(const cv::Mat depth) {
@@ -266,28 +282,6 @@ bool RigidGroup::IncludeInstance(Instance* ins) {
   included_instances_[pth] = ins;
   return true;
 }
-
-#if 0
-cv::Mat VisualizeMatches(const Frame* frame, const std::map<int, Mappoint*>& matches){
-  cv::Mat dst = frame->GetRgb().clone();
-  const auto& keypoints = frame->GetKeypoints();
-  for(int n=0; n<keypoints.size(); n++){
-    const auto& pt = keypoints.at(n).pt;
-    if( !matches.count(n) ){
-      cv::circle(dst, pt, 3, CV_RGB(255,0,0));
-      continue;
-    }
-    Mappoint* mpt = matches.at(n);
-    Frame* ref = mpt->GetRefFrame();
-    const cv::Point2f& pt0 = ref->GetKeypoint( ref->GetIndex(mpt) ).pt;
-    std::string msg = std::to_string( ref->GetId() );
-    cv::putText(dst, msg, pt0, cv::FONT_HERSHEY_SIMPLEX, .5, CV_RGB(0,255,0) );
-    cv::circle(dst, pt, 3, CV_RGB(0,0,255), -1);
-    cv::line(dst, pt0, pt, CV_RGB(0,255,0), 1);
-  }
-  return dst;
-}
-#endif
 
 std::map<int, Mappoint*> ProjectionMatch(const Camera* camera,
                                          const FeatureDescriptor* extractor,
@@ -371,39 +365,11 @@ std::map<int, Mappoint*> ProjectionMatch(const Camera* camera,
 Pipeline::Pipeline(const Camera* camera,
                    FeatureDescriptor*const extractor
                   )
-  : camera_(camera),
-  prev_frame_(nullptr),
-  extractor_(extractor),
-  mapper_(new Mapper())
-{
+  : camera_(camera), prev_frame_(nullptr), extractor_(extractor), mapper_(new Mapper()) {
 }
 
 Pipeline::~Pipeline() {
 
-}
-
-cv::Mat visualize_frame(Frame* frame) {
-  cv::Mat dst = frame->GetRgb().clone();
-  const auto& keypoints = frame->GetKeypoints();
-  const auto& instances = frame->GetInstances();
-  for(size_t n=0; n<keypoints.size(); n++){
-    const cv::KeyPoint& kpt = keypoints[n];
-    const Instance* ins = instances[n];
-    Qth qth = -1;
-    cv::Scalar color = CV_RGB(255,0,0);
-    if(ins){
-      // pth 를 visualization할꺼냐? 아니면 qth를 visualizatino할꺼냐?
-      if(!ins->rig_groups_.empty() ){
-        std::set<Qth> qths;
-        for(auto it_rig : ins->rig_groups_)
-          qths.insert(it_rig.first);
-        Qth qth = *qths.begin();
-        color = colors.at( qth % colors.size() );
-      }
-    }
-    cv::circle(dst, kpt.pt, 4, color, qth?1:-1);
-  }
-  return dst;
 }
   
 void Pipeline::UpdateRigGroups(const std::set<Qth>& curr_rigs, Frame* frame) const {
@@ -446,21 +412,6 @@ RigidGroup* SupplyRigGroup(Frame* frame,
   static Qth nRiggroups = 0;
   RigidGroup* rig = new RigidGroup(nRiggroups++, frame);
   rig_groups[rig->GetId()] = rig;
-  /*
-  TODO UpdateRigGroups 으로 대체.
-  std::set<Instance*> nongroup_instances;
-  for(Instance* ipt : frame->GetInstances() ){
-    if(!ipt)
-      continue;
-    N++;
-    if(ipt->rig_groups_.empty()){
-      n++;
-      nongroup_instances.insert(ipt);
-    }
-  }
-  for(Instance* ins : nongroup_instances)
-    rig->IncludeInstance(ins);
-  */
   std::cout << "Add new group! #" << rig->GetId() << std::endl;
   return rig;
 }
@@ -664,28 +615,47 @@ void Pipeline::SupplyMappoints(Frame* frame,
   return;
 }
 
-cv::Mat VisualizeSwitchStates(const RigidGroup* rig,
-                              const Frame* frame,
-                              const std::map<Pth, float>& switch_states,
-                              const std::map<Jth, Frame* >& neighbor_frames,
-                              const std::map<Pth,ShapePtr>& curr_shapes) {
+cv::Mat VisualizeStates(const RigidGroup* rig,
+                        const Frame* frame,
+                        const std::map<Pth,float>& density_scores,
+                        const std::map<Pth, float>& switch_states,
+                        const float& switch_threshold,
+                        const std::map<Jth, Frame* >& neighbor_frames,
+                        const std::map<Pth,ShapePtr>& curr_shapes) {
   const Qth qth = rig->GetId();
-  const float switch_threshold = .5;
   const cv::Mat rgb = frame->GetRgb();
   cv::Mat dst_frame; {
     cv::Mat dst_fill  = rgb.clone();
-    for(auto it : curr_shapes){
-      ShapePtr ptr = it.second;
+    for(auto it : curr_shapes) {
+      const Pth& pth = it.first;
+      bool sparse = density_scores.count(pth) ? density_scores.at(pth) < 1. : true;
+      bool dynamics = switch_states.count(pth) ? switch_states.at(pth) > switch_threshold : false;
+
+      ShapePtr s_ptr = it.second;
+      if(s_ptr->n_missing_ > 0)
+        continue;
+      if(s_ptr->n_belief_ < 2)
+        continue;
+
       std::vector< std::vector<cv::Point> > cnts;
       cnts.resize(1);
-      cnts[0].reserve(ptr->outerior_.size() );
-      for( auto pt: ptr->outerior_)
+      cnts[0].reserve(s_ptr->outerior_.size() );
+      for( auto pt: s_ptr->outerior_)
         cnts[0].push_back(cv::Point(pt.x,pt.y));
-      const auto& color0 = colors.at(it.first % colors.size() );
-      cv::drawContours(dst_fill, cnts, 0, color0, -1);
+      /*
+      TODO contour 채우는 색상.
+      * [x] density score가 1. 이하인 sparse인 경우 - 파랑(안정될때까진 체크는필요)
+      * [x] vertes state - dynamics인 경우 - shade
+                            rigid인 경우   - 투명
+      */
+      //const auto& color0 = colors.at(it.first % colors.size() );
+      if(!sparse && !dynamics)
+        cv::drawContours(dst_fill, cnts, 0, CV_RGB(255,0,0), -1);
+      //else
+      //  cv::drawContours(dst_fill, cnts, 0, CV_RGB(0,0,255), -1);
     }
-    cv::addWeighted(rgb, 1.,
-                    dst_fill, .5,
+    cv::addWeighted(rgb, .5,
+                    dst_fill, 1.,
                     1., dst_frame);
     for(auto it : curr_shapes){
       ShapePtr ptr = it.second;
@@ -722,6 +692,8 @@ cv::Mat VisualizeSwitchStates(const RigidGroup* rig,
     buffer << "Include> ";
     for(auto it : rig->GetIncludedInstances()){
       const Pth& pth = it.first;
+      if(!curr_shapes.count(pth))
+        continue;
       buffer << pth << ", ";
       auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
       if(size.width < dst_texts.cols - 10)
@@ -740,6 +712,8 @@ cv::Mat VisualizeSwitchStates(const RigidGroup* rig,
     buffer << "Exclude> ";
     for(auto it : rig->GetExcludedInstances()){
       const Pth& pth = it.first;
+      if(!curr_shapes.count(pth))
+        continue;
       buffer << pth << ", ";
       auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
       if(size.width < dst_texts.cols - 10)
@@ -806,23 +780,82 @@ cv::Mat VisualizeSwitchStates(const RigidGroup* rig,
       cv::Rect rec(pt.x-hw, pt.y-hw, 2*hw, 2*hw);
       cv::rectangle(dst_frame, rec, c, 2);
     }
+
+    if(mp){
+      Frame* ref = mp->GetRefFrame(qth);
+      const cv::Point2f& pt0 = ref->GetKeypoint( ref->GetIndex(mp) ).pt;
+      cv::line(dst_frame, pt0, pt, CV_RGB(255,255,0), 1);
+    }
   }
   {
     int fontFace = cv::FONT_HERSHEY_SIMPLEX;
     double fontScale = .3;
     int fontThick = 1;
-    int baseline=0;
+    int baseline = 0;
     for(auto it : curr_shapes){
+      const Pth& pth = it.first;
       ShapePtr ptr = it.second;
       const auto& bb = ptr->outerior_bb_;
-      const auto& color0 = colors.at(it.first % colors.size() );
-      const std::string txt = "#" + std::to_string(it.first);
+      /*
+      const auto& color0 = colors.at(pth % colors.size() );
+      std::string txt = "#" + std::to_string(pth);
+      if(density_scores.count(pth) ){
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(2) << density_scores.at(pth);
+        txt += " : "+ oss.str();
+      }
       int baseline=0;
       auto size = cv::getTextSize(txt, fontFace, fontScale, fontThick, &baseline);
       cv::Point cp(bb.x+.5*bb.width, bb.y+.5*bb.height);
       cv::Point dpt(.5*size.width, .5*size.height);
       cv::rectangle(dst_frame, cp-dpt-cv::Point(0,3*baseline), cp+dpt, CV_RGB(255,255,255), -1);
       cv::putText(dst_frame, txt, cp-dpt,fontFace, fontScale, color0, fontThick);
+      TODO Bounding box 에서 순서대로 #Ith, d: desntiy score, s: switch score
+      */
+      std::string msg[3];
+      cv::Scalar txt_colors[3];
+      msg[0] = "#" + std::to_string(pth);
+      for(int k=0; k<3;k++)
+        txt_colors[k] = CV_RGB(0,0,0);
+      msg[1] = "d: "; msg[2] = "s: ";
+      if(density_scores.count(pth) ){
+        std::ostringstream oss; oss << std::fixed << std::setprecision(2);
+        oss<< density_scores.at(pth);
+        msg[1] += oss.str();
+        if(density_scores.at(pth) < 1.)
+          txt_colors[1] = CV_RGB(255,0,0);
+      }
+      else
+        msg[1] += "-";
+      if(switch_states.count(pth) ){
+        std::ostringstream oss; oss << std::fixed << std::setprecision(2);
+        oss<< switch_states.at(pth);
+        msg[2] += oss.str();
+        if(switch_states.at(pth) < switch_threshold)
+          txt_colors[2] = CV_RGB(255,0,0);
+      }
+      else
+        msg[2] += "-";
+      int offset = 2;
+      int w, h;
+      w = h = 0;
+      for(int k=0; k<3; k++){
+        auto size = cv::getTextSize(msg[k], fontFace, fontScale, fontThick, &baseline);
+        h += size.height;
+        w = std::max(size.width, w);
+      }
+      cv::Point cp(bb.x+.5*bb.width, bb.y+.5*bb.height);
+      cv::Point dpt(.5*w, .5*h);
+      cv::rectangle(dst_frame, cp-dpt-cv::Point(0,3*baseline), cp+dpt, CV_RGB(255,255,255), -1);
+
+      int x = cp.x - .5*w;
+      int y = cp.y - .5*h;
+      for(int k=0;k<3;k++){
+        cv::putText(dst_frame, msg[k], cv::Point(x,y),fontFace, fontScale, txt_colors[k], fontThick);
+        auto size = cv::getTextSize(msg[k], fontFace, fontScale, fontThick, &baseline);
+        y += size.height+offset;
+      }
+
     }
   }
 
@@ -846,7 +879,6 @@ cv::Mat VisualizeSwitchStates(const RigidGroup* rig,
 
   return dst;
 }
-                           
 
 void Pipeline::Put(const cv::Mat gray,
                    const cv::Mat depth,
@@ -855,7 +887,8 @@ void Pipeline::Put(const cv::Mat gray,
 {
   const bool fill_bg_with_dominant = true;
   const float search_radius = 30.;
-  const float switch_threshold = .5;
+  const float switch_threshold = .3;
+  float density_threshold = 1. / 20. / 20.; // NxN pixel에 한개 이상의 feature point가 존재해야 dense instance
 
   for(auto it_shape : curr_shapes){
     const Pth& pth = it_shape.first;
@@ -867,7 +900,7 @@ void Pipeline::Put(const cv::Mat gray,
   static Jth nFrames = 0;
   Frame* curr_frame = new Frame(nFrames++, vis_rgb);
   curr_frame->ExtractAndNormalizeKeypoints(gray, camera_, extractor_);
-  curr_frame->SetInstances(curr_shapes, pth2instances_);
+  std::map<Pth,float> density_scores = curr_frame->SetInstances(curr_shapes, pth2instances_, density_threshold);
   curr_frame->SetMeasuredDepths(depth);
 
   RigidGroup* rig_new = SupplyRigGroup(curr_frame, qth2rig_groups_);
@@ -934,7 +967,13 @@ void Pipeline::Put(const cv::Mat gray,
      - 나머지 '자잘' 한것은 그냥 독립된 instance로 취급.
      - '자잘' 한것은 일단 medain length tracking으로 관찰하다가 일정프레임 이상 유지되면 병합.
      */
-    cv::Mat dst = VisualizeSwitchStates(rig, curr_frame, switch_states, neighbor_frames, curr_shapes);
+    cv::Mat dst = VisualizeStates(rig,
+                                  curr_frame,
+                                  density_scores,
+                                  switch_states,
+                                  switch_threshold,
+                                  neighbor_frames,
+                                  curr_shapes);
     cv::imshow("segslam", dst);
 
   }

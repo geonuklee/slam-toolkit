@@ -1,5 +1,6 @@
 #ifndef SEG_G2OTYPES_
 #define SEG_G2OTYPES_
+#include <g2o/config.h>
 #include <g2o/types/sba/types_six_dof_expmap.h>
 #include <g2o/core/base_multi_edge.h>
 
@@ -24,7 +25,9 @@ class EdgeSE3PointXYZDepth
 {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-    EdgeSE3PointXYZDepth(const Param* param);
+  EdgeSE3PointXYZDepth(const Param* param,
+                       const double& uv_info,
+                       const double& invd_info);
   void computeError();
   virtual void linearizeOplus();
   virtual bool read(std::istream& is) { return false; }
@@ -67,9 +70,9 @@ class EdgeSwitchPrior : public g2o::BaseUnaryEdge<1, double, VertexSwitchLinear>
 public:
   // Measurement가 double인데 EIGEN_MAKE_ALIGNED_OPERATOR_NEW가 필요한가 의문이지만,..
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-  EdgeSwitchPrior(const number_t& inform) {
-    information()(0,0) = inform;
+  EdgeSwitchPrior() {
   };
+  void SetInfomation(const number_t& info) { information()(0,0) = info; }
   void linearizeOplus();
   void computeError();
   virtual bool read(std::istream& is) { return false; }
@@ -80,7 +83,9 @@ public:
 // E=g2o::Vector3 : Measurement
 class EdgeSwSE3PointXYZDepth : public g2o::BaseMultiEdge<3, g2o::Vector3> {
 public:
-  EdgeSwSE3PointXYZDepth(const Param* param);
+  EdgeSwSE3PointXYZDepth(const Param* param,
+                         const double& uv_info,
+                         const double& invd_info);
   virtual bool read(std::istream& is) { return false; }
   virtual bool write(std::ostream& os) const { return false; }
   void computeError();

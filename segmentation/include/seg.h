@@ -13,9 +13,11 @@ public:
   int n_matching_;
   int n_belief_;
   bool stabilized_;
+  float area_;
   std::vector<cv::Point2f> outerior_;
   cv::Rect2f outerior_bb_;
-  Shape (): label_(-1), n_missing_(0), n_matching_(0), n_belief_(0), stabilized_(false) {
+  Shape (): label_(-1), n_missing_(0), n_matching_(0), n_belief_(0), stabilized_(false),
+  area_(-1.){
   }
   void UpdateBB();
   bool HasCollision(const int& x, const int& y, bool check_contour) const;

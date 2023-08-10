@@ -70,9 +70,10 @@ public:
   void ExtractAndNormalizeKeypoints(const cv::Mat gray,
                                     const Camera* camera,
                                     FeatureDescriptor* extractor);
-  void SetInstances(const std::map<Pth, ShapePtr>& shapes,
-                    const std::map<Pth, Instance*>& instances
-                    );
+  std::map<Pth,float> SetInstances(const std::map<Pth, ShapePtr>& shapes,
+                                   const std::map<Pth, Instance*>& instances,
+                                   float density_threshold
+                                  );
   void SetMeasuredDepths(const cv::Mat depth);
 
   std::set<int> SearchRadius(const Eigen::Vector2d& uv, double radius) const;
