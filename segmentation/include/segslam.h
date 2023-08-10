@@ -2,7 +2,6 @@
 #define SEG_FRAME_
 #include <flann/flann.hpp> // include it before opencv
 #include <opencv2/core/mat.hpp>
-#include "orb_extractor.h"
 #include "stdafx.h"
 #include "seg.h"
 
@@ -55,9 +54,37 @@ public:
   CvFeatureDescriptor();
   void Extract(const cv::Mat gray, cv::InputArray mask, std::vector<cv::KeyPoint>& keypoints, cv::Mat& descriptors);
   inline double GetDistance(const cv::Mat& desc0, const cv::Mat& desc1) const;
+
+  std::vector<cv::Mat> mvImagePyramid;
 private:
-  cv::Ptr<cv::ORB> orb_;
+  void ComputePyramid(cv::Mat image);
+  void ComputeKeyPointsOctTree(std::vector<std::vector<cv::KeyPoint> >& allKeypoints);
+  std::vector<cv::Point> pattern;
+  int nfeatures;
+  double scaleFactor;
+  int nlevels;
+  int iniThFAST;
+  int minThFAST; // TODO remove?
+  int min_kpt_distance;
+  std::vector<int> mnFeaturesPerLevel;
+  std::vector<int> umax;
+  std::vector<float> mvScaleFactor;
+  std::vector<float> mvInvScaleFactor;
+  std::vector<float> mvLevelSigma2;
+  std::vector<float> mvInvLevelSigma2;
 };
+
+// TODO vToDistributeKeys에 class_id로 keypoint id를 저장해놓고선, 이 함수의 결과물로
+// Mappoint를 화면 골고루에 뿌릴 준비를 한다.
+// min_distance : 특징점 사이의 최소거리.
+std::vector<cv::KeyPoint> DistributeQuadTree(const std::vector<cv::KeyPoint>& vToDistributeKeys,
+                                            const int &minX,
+                                            const int &maxX,
+                                            const int &minY,
+                                            const int &maxY,
+                                            const int &nFeaturesPerLevel,
+                                            const int &min_distance = 10
+                                           );
 
 
 class Frame {
@@ -118,7 +145,7 @@ private:
 
 
 /*
-class Instance 
+class Instance
 ShapePtr과 연결된 seg SLAM class.
 Instance 사이의 ... 사이의...  필요없다.
 */
@@ -163,7 +190,7 @@ private:
 };
 
 struct RigidGroup {
-  // Instance의 묶음 
+  // Instance의 묶음
 public:
   RigidGroup(Qth qth, Frame* first_frame);
   ~RigidGroup();

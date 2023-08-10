@@ -16,46 +16,6 @@
 
 namespace seg {
 
-OrbSlam2FeatureDescriptor::OrbSlam2FeatureDescriptor(int nfeatures, float scale_factor, int nlevels, int initial_fast_th, int min_fast_th)
-  : FeatureDescriptor()
-{
-  auto ptr = new ORB_SLAM2::ORBextractor(nfeatures, scale_factor, nlevels, initial_fast_th, min_fast_th);
-  extractor_ = std::shared_ptr<ORB_SLAM2::ORBextractor>(ptr);
-}
-
-void OrbSlam2FeatureDescriptor::Extract(const cv::Mat gray, cv::InputArray mask, std::vector<cv::KeyPoint>& keypoints, cv::Mat& descriptors) {
-  extractor_->extract(gray, mask, keypoints, descriptors);
-  return;
-}
-
-double OrbSlam2FeatureDescriptor::GetDistance(const cv::Mat& desc0, const cv::Mat& desc1) const {
-  return ORB_SLAM2::ORBextractor::DescriptorDistance(desc0, desc1);
-}
-
-CvFeatureDescriptor::CvFeatureDescriptor() 
-  : FeatureDescriptor() {
-  int 	nfeatures = 4000;
-  float scaleFactor = 1.2f;
-  int 	nlevels = 3;
-  int 	edgeThreshold = 15;
-  int 	firstLevel = 0;
-  int 	WTA_K = 2;
-  int 	scoreType = cv::ORB::HARRIS_SCORE;
-  int 	patchSize = 31;
-  int 	fastThreshold = 15;
-  orb_ = cv::ORB::create(nfeatures,scaleFactor,nlevels,edgeThreshold,firstLevel,WTA_K,scoreType,patchSize,fastThreshold);
-}
-
-void CvFeatureDescriptor::Extract(const cv::Mat gray, cv::InputArray mask, std::vector<cv::KeyPoint>& keypoints, cv::Mat& descriptors) {
-  orb_->detect(gray, keypoints);
-  orb_->compute(gray, keypoints, descriptors);
-  return;
-}
-
-double CvFeatureDescriptor::GetDistance(const cv::Mat& desc0, const cv::Mat& desc1) const {
-  return ORB_SLAM2::ORBextractor::DescriptorDistance(desc0, desc1);
-}
-
 RigidGroup::RigidGroup(Qth qth, Frame* first_frame)
 : id_(qth),
   bg_instance_(new Instance(-1))
@@ -143,6 +103,8 @@ void Frame::ExtractAndNormalizeKeypoints(const cv::Mat gray,
                                          const Camera* camera,
                                          FeatureDescriptor* extractor) {
   extractor->Extract(gray, cv::noArray(), keypoints_, descriptions_);
+  for(int i=0; i<keypoints_.size(); i++)
+    keypoints_[i].class_id = i; // For calling DistributeOctTree at SupplyMappoints
   mappoints_.resize(keypoints_.size(), nullptr);
   instances_.resize(keypoints_.size(), nullptr);
   measured_depths_.resize(keypoints_.size(), 0.f);
@@ -571,20 +533,33 @@ void Pipeline::SupplyMappoints(Frame* frame,
   const auto& instances = frame->GetInstances();
   const auto& depths    = frame->GetMeasuredDepths();
   const auto& mappoints = frame->GetMappoints();
+  std::vector<cv::KeyPoint> distributed_keypoints; {
+    const int nFeatures = .5*keypoints.size();
+    const int minX = 0;
+    const int minY = 0;
+    const int maxX = camera_->GetWidth();
+    const int maxY = camera_->GetHeight();
+    const int min_mpt_distance = 10.;
+    distributed_keypoints= DistributeQuadTree(keypoints,minX,maxX,minY,maxY,nFeatures, min_mpt_distance);
+  }
   /*
     현재 frame에서 관찰되는 (모든 잠재적 연결가능성있는) Qth를 모두 받기
      - 이거 나중에는 dominant group 과만 연결하는 쪽으로 가야할 순 있지만,. 일단은.
   */
   const auto& Tcqs = frame->GetTcqs();
+#if 1
+  for(const auto& kpt : distributed_keypoints){
+    const int n = kpt.class_id;
+#else
   for(size_t n=0; n<keypoints.size(); n++){
     // depth값이 관찰되지 않는 uv only point를 구분해서 처리하면 SLAM 결과가 더 정확할텐데..
+    const cv::KeyPoint& kpt = keypoints[n];
+#endif
     float z = depths[n];
     if(z < 1e-5) // No depth too far
       z = 1e+5;
-    const cv::KeyPoint& kpt = keypoints[n];
     Instance* ins = instances[n];
     Eigen::Vector3d Xr = z*frame->GetNormalizedPoint(n);
-
     if(Mappoint* mp = mappoints[n]){
       if(rig_new){
         // 기존 mp에 대해, 새로운 rig_new를 위한  Xr, Xq를 입력
@@ -655,7 +630,7 @@ cv::Mat VisualizeStates(const RigidGroup* rig,
       //  cv::drawContours(dst_fill, cnts, 0, CV_RGB(0,0,255), -1);
     }
     cv::addWeighted(rgb, .5,
-                    dst_fill, 1.,
+                    dst_fill, .5,
                     1., dst_frame);
     for(auto it : curr_shapes){
       ShapePtr ptr = it.second;
