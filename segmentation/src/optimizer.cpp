@@ -135,8 +135,12 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
         uvi[2] = 1. / z;
       else // If invalid depth = finite depth
         uvi[2] = MIN_NUM; // invd close too zero
-      // TODO 아,. 이거 역수야 했던것같은데? 
+#if 0
+      float cinfo = z * std::min(1.,  std::abs(uvi[0])+std::abs(uvi[1]) );
+#else
+      // TODO 아,. 이거 역수야 했던것같은데? 이게 왜 더 잘되지?
       float cinfo = 1e+1 * uvi[2] * (std::abs(uvi[0])+std::abs(uvi[1]) );
+#endif
       Instance* ins = mp->GetInstance();
       Pth pth = ins ? ins->GetId() : -1;
       g2o::OptimizableGraph::Edge* edge = nullptr;
