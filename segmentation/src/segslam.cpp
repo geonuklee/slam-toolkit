@@ -1,4 +1,5 @@
 #include "segslam.h"
+#include "Eigen/src/Core/Map.h"
 #include "Eigen/src/Core/Matrix.h"
 #include "camera.h"
 #include "frame.h"
@@ -60,10 +61,18 @@ bool Frame::IsInFrame(const Camera* camera, const Eigen::Vector2d& uv) const {
     return false;
   return true;
 }
+
 int Frame::GetIndex(const Mappoint* mp) const {
   if(mappoints_index_.count(mp))
     return mappoints_index_.at(mp);
   return -1;
+}
+
+void Frame::EraseMappoint(int index) {
+  Mappoint* mp = mappoints_[index];
+  mappoints_index_.erase(mp);
+  mappoints_[index] = nullptr;
+  return;
 }
 
 void Frame::SetMappoint(Mappoint* mp, int index) {
@@ -79,12 +88,12 @@ void Frame::SetMappoint(Mappoint* mp, int index) {
 }
 
 std::set<int> Frame::SearchRadius(const Eigen::Vector2d& uv, double radius) const {
-  flann::Matrix<double> quary((double*)uv.data(), 1, 2);
+  flann::Matrix<double> query((double*)uv.data(), 1, 2);
   std::set<int> inliers;
   std::vector<std::vector<int> > indices;
   std::vector<std::vector<double> > dists;
   const flann::SearchParams param;
-  flann_kdtree_->radiusSearch(quary, indices, dists, radius*radius, param);
+  flann_kdtree_->radiusSearch(query, indices, dists, radius*radius, param);
   for(int idx :  indices[0])
     inliers.insert(idx);
   return inliers;
@@ -92,9 +101,16 @@ std::set<int> Frame::SearchRadius(const Eigen::Vector2d& uv, double radius) cons
 
 std::vector<std::vector<int> > Frame::SearchRadius(const flann::Matrix<double>& points,
                                                    double radius) const {
-  std::vector<std::vector<int> > indices;
   std::vector<std::vector<double> > dists;
+  return this->SearchRadius(points, radius, dists);
+}
+
+std::vector<std::vector<int> > Frame::SearchRadius(const flann::Matrix<double>& points,
+                                                   double radius,
+                                                   std::vector<std::vector<double> >& dists
+                                                   ) const {
   const flann::SearchParams param;
+  std::vector<std::vector<int> > indices;
   flann_kdtree_->radiusSearch(points, indices, dists, radius*radius, param);
   return indices;
 }
@@ -217,11 +233,19 @@ const Eigen::Vector3d& Mappoint::GetXq(Qth qth) {
   return *Xq_.at(qth);
 }
 
-cv::Mat Mappoint::GetDescription() const {
-  // TODO ref? latest? with Qth?
-  Frame* ref = ref_.begin()->second;
-  int kpt_idx = ref->GetIndex(this);
-  return ref->GetDescription(kpt_idx);
+void Mappoint::GetFeature(const Qth& qth, bool latest, cv::Mat& description, cv::KeyPoint& kpt) const {
+  Frame* frame = nullptr;
+  if(qth < 0)
+    frame = ref_.begin()->second;
+  else
+    if(latest)
+      frame = *keyframes_.at(qth).rbegin();
+    else
+      frame = ref_.at(qth);
+  int kpt_idx = frame->GetIndex(this);
+  description = frame->GetDescription(kpt_idx);
+  kpt         = frame->GetKeypoint(kpt_idx);
+  return;
 }
 
 bool RigidGroup::ExcludeInstance(Instance* ins) {
@@ -246,13 +270,114 @@ bool RigidGroup::IncludeInstance(Instance* ins) {
   return true;
 }
 
-std::map<int, Mappoint*> ProjectionMatch(const Camera* camera,
-                                         const FeatureDescriptor* extractor,
-                                         const std::set<Mappoint*>& mappoints,
-                                         const Frame* curr_frame, // With predicted Tcq
-                                         const Qth qth,
-                                         double search_radius) {
-  std::map<int, Mappoint*> matches;
+std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
+                                                       const FeatureDescriptor* extractor,
+                                                       const cv::Mat& flow0,
+                                                       const Frame* prev_frame,
+                                                       Frame* curr_frame ) {
+  /*
+  1. prev_frame -> curr_frame matching이 가능한 kpt가 있는 경우 연결.
+  2. TODO keypoint가 충분하지 않은 instance에서는 보완이 된다.> 대응하는 kpt가 없는 경우를 모아, 해당 kpt와 desc를 추가로 생성.
+  - extractor가 pyramid를 유지해야, kpt.octav 참고해서 가져오겠다.
+  3. prev_frame 의 mp가 curr_frame에 연결 실패하는 경우의 정의
+  - desc distance가 ... 주변 kpt에 비해 최적이 아닌경우..
+  4. prev_frame의 mpt만 가지고서 PoseLBA 수행. (projection matching을 정확하게 하고자하면)
+  5. 그리고 나서, prev_frame에 없던 mpt만 projection matching 수행.
+  */
+  const double search_radius = 5.;
+  const double best12_threshold = .5;
+  cv::Mat dst = curr_frame->GetRgb().clone();
+  const auto& keypoints0 = prev_frame->GetKeypoints();
+  const auto& mappoints0 = prev_frame->GetMappoints();
+  double* ptr_queries = new double[2 * mappoints0.size()];
+  std::vector<int> vec_index0; vec_index0.reserve(mappoints0.size());
+  for(int n=0; n < mappoints0.size(); n++){
+    Mappoint* mp0 = mappoints0[n];
+    if(!mp0)
+      continue;
+    const cv::Point2f& pt0 = keypoints0[n].pt;
+    const auto& dpt01 = flow0.at<cv::Point2f>(pt0);
+    Eigen::Vector2d pt1(pt0.x+dpt01.x, pt0.y+dpt01.y);
+    if(!curr_frame->IsInFrame(camera,pt1))  //  땅바닥 제외
+      continue;
+    double* ptr = ptr_queries+ 2*vec_index0.size();
+    ptr[0] = pt1.x();
+    ptr[1] = pt1.y();
+    vec_index0.push_back(n);
+  }
+  flann::Matrix<double> queries(ptr_queries, vec_index0.size(), 2);
+  std::vector<std::vector<int> > batch_search = curr_frame->SearchRadius(queries, search_radius);
+  std::map<int, std::pair<Mappoint*, double> > matches;
+  const auto& keypoints1 = curr_frame->GetKeypoints();
+  const auto& mappoints1 = curr_frame->GetMappoints();
+  for(int i=0; i< batch_search.size(); i++){
+    const std::vector<int>& candidates = batch_search.at(i);
+    if(candidates.empty())
+      continue;
+    const int& n0 = vec_index0[i];
+    Mappoint* mp0 = mappoints0[n0];
+    const cv::KeyPoint& kpt0 = keypoints0[n0];
+    const cv::Mat desc0 = prev_frame->GetDescription(n0);
+    double dist0 = 1e+9;
+    double dist1 = dist0;
+    int champ0 = -1;
+    int champ1 = -1;
+    for(const int& n1 : candidates){
+      const cv::Mat desc1 = curr_frame->GetDescription(n1);
+      const cv::KeyPoint& kpt1 = keypoints1[n1];
+      double dist = extractor->GetDistance(desc0,desc1);
+      if(std::abs(kpt0.angle - kpt1.angle) > 40.)
+        continue;
+      if(kpt0.octave != kpt1.octave)
+        continue;
+      if(dist < dist0){
+        dist1 = dist0;
+        champ1 = champ0;
+        dist0 = dist;
+        champ0 = n1;
+      }
+      else if(dist < dist1){
+        dist1 = dist;
+        champ1 = n1;
+      }
+    }
+    if(champ0 < 0)
+      continue;
+    if(dist0 < dist1 * best12_threshold){
+      if(matches.count(champ0)){
+        // 이미 matching candidate가 있는 keypoint가 선택된 경우,
+        // 오차를 비교하고 교체 여부 결정
+        if(matches.at(champ0).second < dist0)
+          continue;
+      }
+      matches[champ0] = std::make_pair(mp0,dist0);
+    }
+  } // for batch_search.size
+
+  if(!dst.empty()){ // Visualization
+    for(auto it : matches){
+      const int& i1 = it.first;
+      const cv::Point2f& pt1 = curr_frame->GetKeypoint(i1).pt;
+      const int& i0 = prev_frame->GetIndex(it.second.first);
+      const cv::Point2f& pt0 = prev_frame->GetKeypoint(i0).pt;
+      cv::circle(dst, pt1, 3,  CV_RGB(255,0,0), 1);
+      cv::line(dst, pt0, pt1, CV_RGB(0,255,0), 3);
+    }
+    cv::imshow("flow match", dst);
+  }
+
+  delete[] ptr_queries;
+  return matches;
+}
+
+
+std::map<int, std::pair<Mappoint*,double> > ProjectionMatch(const Camera* camera,
+                                                            const FeatureDescriptor* extractor,
+                                                            const std::set<Mappoint*>& mappoints,
+                                                            const Frame* curr_frame, // With predicted Tcq
+                                                            const Qth qth,
+                                                            double search_radius) {
+  const bool use_latest_desc = true;
   const double best12_threshold = 0.5;
   double* ptr_projections = new double[2 * mappoints.size()];
   std::map<int, Mappoint*> key_table;
@@ -263,7 +388,6 @@ std::map<int, Mappoint*> ProjectionMatch(const Camera* camera,
       // LoopCloser::CombineNeighborMappoints()에서 발생하는 경우.
       continue;
     }
-
     const Eigen::Vector3d Xr = mp->GetXr(qth);
     Frame* ref = mp->GetRefFrame(qth);
     const g2o::SE3Quat& Trq = ref->GetTcq(qth);
@@ -278,12 +402,13 @@ std::map<int, Mappoint*> ProjectionMatch(const Camera* camera,
     key_table[n++] = mp;
   }
 
-  flann::Matrix<double> quaries(ptr_projections, n, 2);
-  std::vector<std::vector<int> > batch_search = curr_frame->SearchRadius(quaries, search_radius);
-  std::map<int, double> distances;
+  std::map<int, std::pair<Mappoint*,double> > matches;
+  flann::Matrix<double> queries(ptr_projections, n, 2);
+  std::vector<std::vector<int> > batch_search = curr_frame->SearchRadius(queries, search_radius);
   for(size_t key_mp = 0; key_mp < batch_search.size(); key_mp++){
-    Mappoint* quary_mp = key_table.at(key_mp);
-    cv::Mat desc0 = quary_mp->GetDescription();
+    Mappoint* query_mp = key_table.at(key_mp);
+    cv::Mat desc0; cv::KeyPoint kpt0;
+    query_mp->GetFeature(qth, use_latest_desc, desc0, kpt0);
     const std::vector<int>& each_search = batch_search.at(key_mp);
     double dist0 = 999999999.;
     double dist1 = dist0;
@@ -291,11 +416,12 @@ std::map<int, Mappoint*> ProjectionMatch(const Camera* camera,
     int champ1 = -1;
     for(int idx : each_search){
       cv::Mat desc1 = curr_frame->GetDescription(idx);
+      const cv::KeyPoint& kpt1 = curr_frame->GetKeypoint(idx);
       double dist = extractor->GetDistance(desc0,desc1);
-      //if(std::abs(kpt0.angle - kpt.angle) > 40.)
-      //  continue;
-      //if(kpt0.octave != kpt.octave)
-      //  continue;
+      if(std::abs(kpt0.angle - kpt1.angle) > 40.)
+        continue;
+      if(kpt0.octave != kpt1.octave)
+        continue;
       if(dist < dist0){
         dist1 = dist0;
         champ1 = champ0;
@@ -314,11 +440,10 @@ std::map<int, Mappoint*> ProjectionMatch(const Camera* camera,
       if(matches.count(champ0)){
         // 이미 matching candidate가 있는 keypoint가 선택된 경우,
         // 오차를 비교하고 교체 여부 결정
-        if(distances.at(champ0) < dist0)
+        if(matches.at(champ0).second < dist0)
           continue;
       }
-      matches[champ0] = quary_mp;
-      distances[champ0] = dist0;
+      matches[champ0] = std::make_pair(query_mp, dist0);
     }
   }
   delete[] ptr_projections;
@@ -573,6 +698,8 @@ void Pipeline::SupplyMappoints(Frame* frame,
       continue;
     }
     static Ith nMappoints = 0;
+    if(!ins)
+      throw -1;
     Mappoint* mp = new Mappoint(nMappoints++, ins);
     for(auto it_Tcq : Tcqs){
       mp->SetXr(it_Tcq.first, Xr);
@@ -877,14 +1004,6 @@ void Pipeline::Put(const cv::Mat gray,
     curr_rigs_pred.insert(rig_new->GetId());
     curr_frame->SetTcq(rig_new->GetId(), g2o::SE3Quat() );
   }
-  if(!prev_frame_){
-    const Qth& qth = rig_new->GetId();
-    SupplyMappoints(curr_frame, rig_new);
-    UpdateRigGroups(curr_rigs_pred, curr_frame);
-    prev_frame_ = curr_frame;
-    prev_dominant_qth_ = qth;
-    return;
-  }
   // curr_frame의 instnace 중, 속한 group이 없는 ins는 기존 모든 rig_new + prev_rigs에 포함시킨다.
   UpdateRigGroups(curr_rigs_pred, curr_frame);
 
@@ -898,12 +1017,23 @@ void Pipeline::Put(const cv::Mat gray,
       rig_counts.push_back( std::make_pair(prev_dominant_qth_ , 0) );
     dominant_qth = rig_counts.begin()->first; // Future work : rigid_tree를 만들어 부모 자식관계로 관리할때 사용
   }
+  if(!prev_frame_){
+    const Qth& qth = rig_new->GetId();
+    SupplyMappoints(curr_frame, rig_new);
+    prev_frame_ = curr_frame;
+    prev_dominant_qth_ = qth;
+    return;
+  }
 
   // intiial pose prediction
   const auto& Tcqs = prev_frame_->GetTcqs();
   for(auto it : Tcqs)
     curr_frame->SetTcq(it.first, *it.second);
 
+  //std::map<int, std::pair<Mappoint*, double> > flow_matches
+  //  = FlowMatch(camera_, extractor_, flow0, prev_frame_, curr_frame); // Optical flow를 기반으로한 feature matching은 Tcq가 필요없다.
+  //for(auto it : flow_matches)
+  //  curr_frame->SetMappoint(it.second.first, it.first);
   for(auto q_it : rig_counts){
     const Qth& qth = q_it.first;
     RigidGroup* rig  = qth2rig_groups_.at(qth);
@@ -913,16 +1043,20 @@ void Pipeline::Put(const cv::Mat gray,
     std::set<Mappoint*>     neighbor_mappoints;
     std::map<Jth, Frame* >  neighbor_frames;
     GetNeighbors(latest_kf, qth, neighbor_mappoints, neighbor_frames);
+    std::map<int, std::pair<Mappoint*, double> > proj_matches
+      = ProjectionMatch(camera_, extractor_, neighbor_mappoints, curr_frame, qth, search_radius);
 
-    /*
-    TODO optical flow를 활용한 projection matching 봐완.
-    */
-    std::map<int, Mappoint*> matches = ProjectionMatch(camera_, extractor_, neighbor_mappoints, curr_frame, qth, search_radius);
-
-    for(auto it : matches){
-      if(curr_frame->GetMappoint(it.first)) // 이전에 이미 matching이 된 keypoint
+    for(auto it : proj_matches){
+#if 0
+      // TODO flow match를 지우려면, it.first의 mp 뿐만 아니라, 다른 kpt에 매칭된 mp도 지워야한다.
+      if(flow_matches.count(it.first) ){
         continue;
-      curr_frame->SetMappoint(it.second, it.first);
+        //if( flow_matches.at(it.first).second < it.second.second )
+        //  continue; // 기존 matching을 유지한다.
+        //curr_frame->EraseMappoint(it.first); // 기존 matching을 지운다.
+      }
+#endif
+      curr_frame->SetMappoint(it.second.first, it.first);
     }
     bool verbose = true;
     std::map<Pth,float> switch_states\

@@ -135,12 +135,14 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
         uvi[2] = 1. / z;
       else // If invalid depth = finite depth
         uvi[2] = MIN_NUM; // invd close too zero
+      // TODO 아,. 이거 역수야 했던것같은데? 
+      float cinfo = 1e+1 * uvi[2] * (std::abs(uvi[0])+std::abs(uvi[1]) );
       Instance* ins = mp->GetInstance();
       Pth pth = ins ? ins->GetId() : -1;
       g2o::OptimizableGraph::Edge* edge = nullptr;
       if(v_instances.count(pth) ){
         VertexSwitchLinear* v_ins = v_instances.at(pth);
-        auto ptr = new EdgeSwSE3PointXYZDepth(&param, uv_info, invd_info);
+        auto ptr = new EdgeSwSE3PointXYZDepth(&param, cinfo*uv_info, invd_info);
         ptr->setVertex(0,v_mp);
         ptr->setVertex(1,v_pose);
         ptr->setVertex(2,v_ins);
@@ -148,10 +150,9 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
         edge = ptr;
         na++;
         swedges_parameter[pth] += 1.;
-        //max_invds[pth] = std::max(max_invds[pth], uvi[2]);
       }
       else{
-        auto ptr = new EdgeSE3PointXYZDepth(&param, uv_info, invd_info);
+        auto ptr = new EdgeSE3PointXYZDepth(&param, cinfo*uv_info, invd_info);
         ptr->setMeasurement( uvi );
         ptr->setVertex(0, v_mp);
         ptr->setVertex(1, v_pose);
@@ -176,7 +177,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
 
   for(auto it_v_sw : prior_edges){
     // Set Prior information
-    const double info = 1e-8 * swedges_parameter.at(it_v_sw.first);
+    const double info = 1e-6* swedges_parameter.at(it_v_sw.first);
     it_v_sw.second->SetInfomation(info);
   }
 

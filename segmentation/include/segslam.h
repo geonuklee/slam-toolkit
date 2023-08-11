@@ -104,8 +104,9 @@ public:
   void SetMeasuredDepths(const cv::Mat depth);
 
   std::set<int> SearchRadius(const Eigen::Vector2d& uv, double radius) const;
-  std::vector<std::vector<int> > SearchRadius(const flann::Matrix<double>& points,
-                                              double radius) const;
+  std::vector<std::vector<int> > SearchRadius(const flann::Matrix<double>& points, double radius) const;
+  std::vector<std::vector<int> > SearchRadius(const flann::Matrix<double>& points, double radius, 
+                                              std::vector<std::vector<double> >& dists) const;
 
   const cv::Mat GetRgb() const { return rgb_; }
   const std::vector<cv::KeyPoint>& GetKeypoints()      const { return keypoints_; }
@@ -115,6 +116,7 @@ public:
   const std::vector<float>&        GetMeasuredDepths() const { return measured_depths_; }
   std::vector<Instance*>&          GetInstances() { return instances_; }
   void SetMappoint(Mappoint* mp, int kpt_index);
+  void EraseMappoint(int index);
   const Eigen::Vector3d& GetNormalizedPoint(int index) const { return normalized_[index]; }
 
   void ReduceMem();
@@ -156,8 +158,8 @@ public:
   Mappoint(Ith id, Instance* ins);
   Instance* GetInstance() const { return ins_; }
   const Ith& GetId() const { return id_; }
-  //int GetIndex() const { return id_; } // TODO 중복 삭제.
-  cv::Mat GetDescription() const; // ref에서의 desc
+  void GetFeature(const Qth& qth, bool latest, cv::Mat& description, cv::KeyPoint& kpt) const; // ref에서의 desc
+
   Frame* GetRefFrame(const Qth& qth) const { return ref_.at(qth); }
   const std::map<Qth,Frame*>& GetRefFrames() const { return ref_; }
   bool HasEstimate4Rig(const Qth& qth) const { return ref_.count(qth); }
