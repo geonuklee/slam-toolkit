@@ -51,14 +51,15 @@ Frame::~Frame() {
 bool Frame::IsInFrame(const Camera* camera, const Eigen::Vector2d& uv) const {
   double width = camera->GetWidth();
   double height = camera->GetHeight();
-  const double ulr_boundary = 30.;
+  const double ulr_boundary = 50.;
+  const double b_boundary = 100.;
   if( uv.y() <  ulr_boundary )
     return false;
   if( uv.x() < ulr_boundary )
     return false;
   if( width-uv.x() < ulr_boundary )
     return false;
-  if( height - uv.y() < 50. ) // 땅바닥에서 결과가 너무 안좋았다.
+  if( height - uv.y() < b_boundary) // 땅바닥에서 결과가 너무 안좋았다.
     return false;
   return true;
 }
@@ -118,8 +119,9 @@ std::vector<std::vector<int> > Frame::SearchRadius(const flann::Matrix<double>& 
 
 void Frame::ExtractAndNormalizeKeypoints(const cv::Mat gray,
                                          const Camera* camera,
-                                         FeatureDescriptor* extractor) {
-  extractor->Extract(gray, cv::noArray(), keypoints_, descriptions_);
+                                         FeatureDescriptor* extractor,
+                                         const cv::Mat& mask) {
+  extractor->Extract(gray, mask, keypoints_, descriptions_);
   for(int i=0; i<keypoints_.size(); i++)
     keypoints_[i].class_id = i; // For calling DistributeOctTree at SupplyMappoints
   mappoints_.resize(keypoints_.size(), nullptr);
@@ -174,7 +176,7 @@ std::map<Pth,float> Frame::SetInstances(const std::map<Pth, ShapePtr>& shapes,
       if(kpt.octave == 0)
         dense += 1.f;
     }
-    dense /= shape->area_;
+    dense = dense<5. ? 0. : dense/shape->area_; // 최소 점의 개수도 고려.
 #else
     float dense = (float) it_nset.second.size() / shape->area_;
 #endif
@@ -330,6 +332,8 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
     for(const int& n1 : candidates){
       const cv::Mat desc1 = curr_frame->GetDescription(n1);
       const cv::KeyPoint& kpt1 = keypoints1[n1];
+      if(! curr_frame->IsInFrame(camera, Eigen::Vector2d(kpt1.pt.x, kpt1.pt.y)) )
+        continue;
       double dist = extractor->GetDistance(desc0,desc1);
       if(std::abs(kpt0.angle - kpt1.angle) > 40.)
         continue;
@@ -422,6 +426,8 @@ std::map<int, std::pair<Mappoint*,double> > ProjectionMatch(const Camera* camera
     for(int idx : each_search){
       cv::Mat desc1 = curr_frame->GetDescription(idx);
       const cv::KeyPoint& kpt1 = curr_frame->GetKeypoint(idx);
+      if(! curr_frame->IsInFrame(camera, Eigen::Vector2d(kpt1.pt.x, kpt1.pt.y)) )
+        continue;
       double dist = extractor->GetDistance(desc0,desc1);
       if(std::abs(kpt0.angle - kpt1.angle) > 40.)
         continue;
@@ -584,20 +590,21 @@ void GetNeighbors(Frame* keyframe,
                   const Qth& qth,
                   std::set<Mappoint*>   &neighbor_mappoints,
                   std::map<Jth, Frame*> &neighbor_keyframes) {
+  int min_jth = keyframe->GetId() - 15; // TODO frame 간격이 아니라 keyframe 간격
   // 1. frame에서 보이는 mappoints
   GetMappoints4Qth(keyframe, qth, neighbor_mappoints);
   // 2. '1'의 mappoint에서 보이는 nkf
   for(Mappoint* mpt : neighbor_mappoints){
-    for(Frame* nkf : mpt->GetKeyframes(qth) )
-      neighbor_keyframes[nkf->GetId()] = nkf;
+    for(Frame* nkf : mpt->GetKeyframes(qth) ){
+      const int& jth = nkf->GetId();
+      if(jth > min_jth)
+        neighbor_keyframes[jth] = nkf;
+    }
   }
+
   // 3. '2'의 nkf에서 보이는 mappoints
-  int n = 0;
-  for(auto it_nkf = neighbor_keyframes.rbegin(); it_nkf != neighbor_keyframes.rend(); it_nkf++){
-    if(++n > 5) // N keyframe 이상 보이지 않은 mappoint는 제외.
-      break;
+  for(auto it_nkf = neighbor_keyframes.rbegin(); it_nkf != neighbor_keyframes.rend(); it_nkf++)
     GetMappoints4Qth(it_nkf->second, qth, neighbor_mappoints);
-  }
   return;
 }
 
@@ -729,14 +736,23 @@ cv::Mat VisualizeStates(const RigidGroup* rig,
                         const std::map<Pth, float>& switch_states,
                         const float& switch_threshold,
                         const std::map<Jth, Frame* >& neighbor_frames,
-                        const std::map<Pth,ShapePtr>& curr_shapes) {
+                        const std::map<Pth,ShapePtr>& curr_shapes,
+                        const cv::Mat& outline_mask) {
   const Qth qth = rig->GetId();
   const cv::Mat rgb = frame->GetRgb();
   cv::Mat dst_frame; {
     cv::Mat dst_fill  = rgb.clone();
-    // Excluded instance 우선 그리기.
-    for(auto it : rig->GetExcludedInstances()){
-      const Pth& pth = it.first;
+    std::set<Pth> excluded;
+    for(auto it : rig->GetExcludedInstances())
+      excluded.insert(it.first);
+    for(auto it : switch_states){
+      if(it.second > switch_threshold)
+        continue;
+      excluded.insert(it.first);
+    }
+
+    for(auto it : excluded){
+      const Pth& pth = it;
       if(!curr_shapes.count(pth))
         continue;
       ShapePtr s_ptr = curr_shapes.at(pth);
@@ -748,6 +764,9 @@ cv::Mat VisualizeStates(const RigidGroup* rig,
       cv::drawContours(dst_fill, cnts, 0, CV_RGB(255,0,0), -1);
     }
     cv::addWeighted(rgb, .5, dst_fill, .5, 1., dst_frame);
+    cv::Mat dst_outline;
+    cv::cvtColor(outline_mask, dst_outline, cv::COLOR_GRAY2BGR);
+    cv::addWeighted(dst_frame, 1., dst_outline, .3, 1., dst_frame);
   }
 
   for(auto it : curr_shapes) {
@@ -775,37 +794,47 @@ cv::Mat VisualizeStates(const RigidGroup* rig,
     Instance* ins = instances[n];
     Mappoint* mp = mappoints[n];
     const cv::Point2f& pt = keypoints[n].pt;
+#if 0
     cv::Scalar c; int thickness;
     bool b_circle = true;
     if(mp){
       thickness = -1;
-      if(!ins)
-        c = CV_RGB(120,120,120);
-      else{
-        const Pth& pth = ins->GetId();
-        bool outlier = switch_states.count(pth) ?  switch_states.at(pth) < switch_threshold :  false;
-        c = outlier?CV_RGB(255,0,0) : CV_RGB(0,255,0);
-        const Pth& pth0 = mp->GetInstance()->GetId();
-        b_circle = pth == pth0;
-      }
+      const Pth& pth = ins ? ins->GetId() : -1;
+      const Pth& pth0 = mp->GetInstance()->GetId();
+      b_circle = pth == pth0;
+      const Jth jth0 = mp->GetRefFrame(0)->GetId(); // TODO 하드코딩이다.
+      if(frame->GetId() - jth0 > 1)
+        c = CV_RGB(0,255,0);
+      else
+        c = CV_RGB(255,255,0);
     }
     else {
       thickness = 1;
-      c = CV_RGB(120,120,120);
+      c = CV_RGB(255,0,0);
     }
 
-    if(b_circle)
+    if(b_circle){
       cv::circle(dst_frame, pt, 2, c, thickness);
+    }
     else{
       const float hw = 6.;
       cv::Rect rec(pt.x-hw, pt.y-hw, 2*hw, 2*hw);
       cv::rectangle(dst_frame, rec, c, 2);
     }
+#endif
 
     if(mp){
-      Frame* ref = mp->GetRefFrame(qth);
-      const cv::Point2f& pt0 = ref->GetKeypoint( ref->GetIndex(mp) ).pt;
-      cv::line(dst_frame, pt0, pt, CV_RGB(255,255,0), 1);
+      std::stringstream ss;
+      ss << std::hex << mp->GetId(); // Convert to hexadecimal
+      std::string msg = ss.str();
+      //cv::putText(dst_frame, msg, pt, cv::FONT_HERSHEY_SIMPLEX, .3, CV_RGB(255,255,255) );
+      const std::set<Frame*>& keyframes = mp->GetKeyframes(qth);
+      for(auto it = keyframes.rbegin(); it!=keyframes.rend(); it++){
+        const cv::Point2f& pt0 = (*it)->GetKeypoint( (*it)->GetIndex(mp) ).pt;
+        cv::circle(dst_frame, pt, 2, CV_RGB(255,255,0), -1);
+        cv::line(dst_frame, pt, pt0, CV_RGB(255,255,0),  1);
+        break;
+      }
     }
   }
   {
@@ -975,8 +1004,16 @@ void Pipeline::Put(const cv::Mat gray,
   float density_threshold = 1. / 40. / 40.; // octave==0d에서 NxN pixel에 한개 이상의 feature point가 존재해야 dense instance
   const bool verbose_flowmatch = false;
 
-
+  cv::Mat outline_mask = cv::Mat::zeros(gray.size(), CV_8UC1);
   for(auto it_shape : curr_shapes){
+    ShapePtr s_ptr = it_shape.second;
+    std::vector< std::vector<cv::Point> > cnts;
+    cnts.resize(1);
+    cnts[0].reserve(s_ptr->outerior_.size() );
+    for( auto pt: s_ptr->outerior_)
+      cnts[0].push_back(cv::Point(pt.x,pt.y));
+    cv::drawContours(outline_mask, cnts, 0, 255, 40);
+
     const Pth& pth = it_shape.first;
     if(pth2instances_.count(pth) )
       continue;
@@ -985,7 +1022,7 @@ void Pipeline::Put(const cv::Mat gray,
 
   static Jth nFrames = 0;
   Frame* curr_frame = new Frame(nFrames++, vis_rgb);
-  curr_frame->ExtractAndNormalizeKeypoints(gray, camera_, extractor_);
+  curr_frame->ExtractAndNormalizeKeypoints(gray, camera_, extractor_, outline_mask);
   std::map<Pth,float> density_scores = curr_frame->SetInstances(curr_shapes, pth2instances_, density_threshold);
   curr_frame->SetMeasuredDepths(depth);
 
@@ -995,6 +1032,9 @@ void Pipeline::Put(const cv::Mat gray,
     curr_rigs_pred.insert(rig_new->GetId());
     curr_frame->SetTcq(rig_new->GetId(), g2o::SE3Quat() );
   }
+  if(curr_frame->GetId() == 0)
+    prev_dominant_qth_ = rig_new->GetId();
+
   // curr_frame의 instnace 중, 속한 group이 없는 ins는 기존 모든 rig_new + prev_rigs에 포함시킨다.
   UpdateRigGroups(curr_rigs_pred, curr_frame);
 
@@ -1041,9 +1081,14 @@ void Pipeline::Put(const cv::Mat gray,
     std::set<Mappoint*>     neighbor_mappoints;
     std::map<Jth, Frame* >  neighbor_frames;
     GetNeighbors(latest_kf, qth, neighbor_mappoints, neighbor_frames);
+#if 0
+    /*
+    ProjectionMatch는 
+    flow로부터 motion update와 
+    pth0 != pth_curr 인 경우에 예외처리가 팔요해보인다.
+    */
     std::map<int, std::pair<Mappoint*, double> > proj_matches
       = ProjectionMatch(camera_, extractor_, neighbor_mappoints, curr_frame, qth, search_radius);
-
     for(auto it : proj_matches){
       const int& prj_n = it.first;
       Mappoint*const prj_mp = it.second.first;
@@ -1073,14 +1118,15 @@ void Pipeline::Put(const cv::Mat gray,
       }
       curr_frame->SetMappoint(prj_mp, prj_n);
     }
-    bool verbose = true;
+#endif
+    bool vis_verbose = true;
     std::map<Pth,float> switch_states\
-      = mapper_->ComputeLBA(camera_, qth, neighbor_mappoints, neighbor_frames, curr_frame, verbose);
+      = mapper_->ComputeLBA(camera_, qth, neighbor_mappoints, neighbor_frames, curr_frame, vis_verbose);
     for(auto it : switch_states){
       if(it.second > switch_threshold)
         continue;
       Instance* ins = pth2instances_.at( it.first );
-      rig->ExcludeInstance(ins);
+      rig->ExcludeInstance(ins); // TODO 활성화.
     }
     /* 
      * [ ] 3D visualization
@@ -1098,8 +1144,9 @@ void Pipeline::Put(const cv::Mat gray,
                                   switch_states,
                                   switch_threshold,
                                   neighbor_frames,
-                                  curr_shapes);
-    cv::imshow("segslam", dst);
+                                  curr_shapes,
+                                  outline_mask);
+    cv::imshow("segslam", dst); // TODO 
 
   }
 

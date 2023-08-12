@@ -9,6 +9,7 @@
 
 #include <g2o/core/robust_kernel_impl.h>
 #include <g2o/solvers/dense/linear_solver_dense.h>
+#include <opencv2/imgproc.hpp>
 
 
 namespace seg {
@@ -47,8 +48,14 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
                         const std::set<Mappoint*>& neighbor_mappoints,
                         const std::map<Jth, Frame*>& neighbor_keyframes,
                         Frame* curr_frame,
-                        bool verbose
+                        bool vis_verbose
                        ) {
+  cv::Mat vis_rgb, dst, vis_full;
+  if(vis_verbose){
+    vis_rgb = curr_frame->GetRgb().clone();
+    dst = cv::Mat::zeros(vis_rgb.size(), CV_8UC3);
+    vis_full = cv::Mat::zeros(dst.size(), CV_8UC1);
+  }
   // info : inverted covariance
   const double uv_info = 1.;
   const double invd_info = 1e+0;
@@ -98,8 +105,8 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
     v_mappoints[mp]  = v_mp;
   }
   for(auto it_pth : mp_counts){
-    if(it_pth.second < 5)
-      continue;
+    //if(it_pth.second < 5)
+    //  continue;
     auto sw_vertex = new VertexSwitchLinear();
     sw_vertex->setId(optimizer.vertices().size() );
     sw_vertex->setEstimate(1.);
@@ -135,11 +142,9 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
         uvi[2] = 1. / z;
       else // If invalid depth = finite depth
         uvi[2] = MIN_NUM; // invd close too zero
-#if 0
-      float cinfo = z * std::min(1.,  std::abs(uvi[0])+std::abs(uvi[1]) );
-#else
-      // TODO 아,. 이거 역수야 했던것같은데? 이게 왜 더 잘되지?
-      float cinfo = 1e+1 * uvi[2] * (std::abs(uvi[0])+std::abs(uvi[1]) );
+#if 1
+      //float cinfo = 1.;
+      float cinfo = 1e-2/std::max(MIN_NUM,uvi[0]*uvi[0]);
 #endif
       Instance* ins = mp->GetInstance();
       Pth pth = ins ? ins->GetId() : -1;
@@ -154,23 +159,39 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
         edge = ptr;
         na++;
         swedges_parameter[pth] += 1.;
+        optimizer.addEdge(edge);
+        //g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
+        //const float deltaMono = sqrt(5.991); // TODO Why? ORB_SLAM2
+        //rk->setDelta(0.0001*deltaMono);
+        //edge->setRobustKernel(rk);
       }
-      else{
-        auto ptr = new EdgeSE3PointXYZDepth(&param, cinfo*uv_info, invd_info);
+      {
+        auto ptr = new EdgeSE3PointXYZDepth(&param, uv_info, invd_info);
         ptr->setMeasurement( uvi );
         ptr->setVertex(0, v_mp);
         ptr->setVertex(1, v_pose);
         ptr->setMeasurement( uvi );
         edge = ptr;
         nb++;
+        optimizer.addEdge(edge);
+        //g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
+        //const float deltaMono = sqrt(5.991); // TODO Why? ORB_SLAM2
+        //rk->setDelta(0.0001*deltaMono);
+        //edge->setRobustKernel(rk);
       }
-
-      assert(edge);
-      optimizer.addEdge(edge);
-      g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
-      const float deltaMono = sqrt(5.991); // TODO Why? ORB_SLAM2
-      rk->setDelta(0.0001*deltaMono);
-      edge->setRobustKernel(rk);
+      const Ith& ith = mp->GetId();
+      if(!dst.empty() && jth == curr_frame->GetId()){
+        if(vis_full.at<uchar>(kpt.pt) > 100) // 글자가 너무 많은경우.
+          continue;
+        cv::circle(vis_full, kpt.pt, 10, 255, -1); // prevent overlaped texts
+        std::stringstream ss;
+        //ss << std::hex << ith; // Convert to hexadecimal
+        //ss << std::setprecision(3) << 1./std::max(uvi[0]*uvi[0], MIN_NUM);
+        ss << std::setprecision(3) << 1e-2/std::max(MIN_NUM,uvi[0]*uvi[0]);
+        std::string msg = ss.str();
+        cv::putText(dst, msg, kpt.pt, cv::FONT_HERSHEY_SIMPLEX, .3, CV_RGB(255,255,255) );
+        cv::circle(dst, kpt.pt, 2, CV_RGB(0,255,0),-1);
+      }
     }
   }
 
@@ -181,7 +202,8 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
 
   for(auto it_v_sw : prior_edges){
     // Set Prior information
-    const double info = 1e-6* swedges_parameter.at(it_v_sw.first);
+    //const double info = 1e-8* std::pow(swedges_parameter.at(it_v_sw.first),2);
+    const double info = 1e-4;
     it_v_sw.second->SetInfomation(info);
   }
 
@@ -194,18 +216,19 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
   const Jth curr_jth = curr_frame->GetId();
   int n_pose = 0;
   int N_pose = v_poses.size();
-  if(verbose)
+  bool txt_verbose = true;
+  if(txt_verbose)
     std::cout << "At Q#" << qth << " curr F#"<< curr_frame->GetId() <<"--------------------" << std::endl;
   for(auto it_poses : v_poses){
     g2o::VertexSE3Expmap* vertex = static_cast<g2o::VertexSE3Expmap*>(it_poses.second);
-    if(verbose)
+    if(txt_verbose)
       std::cout << "F#" << it_poses.first << ", " << vertex->estimate().inverse().translation().transpose() << std::endl;
     if(vertex->fixed())
       continue;
     frames[it_poses.first]->SetTcq(qth, vertex->estimate());
     n_pose++;
   }
-  if(verbose)
+  if(txt_verbose)
     std::cout << "---------------------" << std::endl;
   int n_structure = 0;
   int N_structure = v_mappoints.size();
@@ -218,8 +241,12 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
     mpt->SetXq(qth,vertex->estimate());
   }
   //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+  if(!dst.empty()){
+    cv::addWeighted(vis_rgb, .4, dst, 1., 1., dst);
+    cv::imshow("optimizer", dst);
+  }
 
-  if(verbose){
+  if(txt_verbose){
     printf("Update Pose(%d/%d), Structure(%d/%d), SwEdges(%d,%d)\n",
            n_pose, N_pose, n_structure, N_structure, na, na+nb);
   }

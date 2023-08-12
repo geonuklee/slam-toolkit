@@ -58,13 +58,12 @@ public:
   std::vector<cv::Mat> mvImagePyramid;
 private:
   void ComputePyramid(cv::Mat image);
-  void ComputeKeyPointsOctTree(std::vector<std::vector<cv::KeyPoint> >& allKeypoints);
+  void ComputeKeyPointsOctTree(std::vector<std::vector<cv::KeyPoint> >& allKeypoints, const cv::Mat& mask);
   std::vector<cv::Point> pattern;
   int nfeatures;
   double scaleFactor;
   int nlevels;
   int iniThFAST;
-  int minThFAST; // TODO remove?
   int min_kpt_distance;
   std::vector<int> mnFeaturesPerLevel;
   std::vector<int> umax;
@@ -83,7 +82,8 @@ std::vector<cv::KeyPoint> DistributeQuadTree(const std::vector<cv::KeyPoint>& vT
                                             const int &minY,
                                             const int &maxY,
                                             const int &nFeaturesPerLevel,
-                                            const int &min_distance = 10
+                                            const int &min_distance = 10,
+                                            const cv::Mat& mask = cv::Mat()
                                            );
 
 
@@ -96,7 +96,8 @@ public:
   int GetIndex(const Mappoint* mp) const;
   void ExtractAndNormalizeKeypoints(const cv::Mat gray,
                                     const Camera* camera,
-                                    FeatureDescriptor* extractor);
+                                    FeatureDescriptor* extractor,
+                                    const cv::Mat& mask);
   std::map<Pth,float> SetInstances(const std::map<Pth, ShapePtr>& shapes,
                                    const std::map<Pth, Instance*>& instances,
                                    float density_threshold

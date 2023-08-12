@@ -1,6 +1,9 @@
 #include "segslam.h"
 #include "orb_extractor.h"
+#include <opencv2/core/hal/interface.h>
 #include <opencv2/core/types.hpp>
+#include <opencv2/imgproc.hpp>
+#include <string>
 
 namespace seg {
 const int PATCH_SIZE = 31;
@@ -29,7 +32,6 @@ CvFeatureDescriptor::CvFeatureDescriptor()
   scaleFactor = 1.2f;
   nlevels = 3;
   iniThFAST = 30;
-  minThFAST = 15;
   min_kpt_distance = 10.; // For each level
   // ---------------------------------------------
   mvScaleFactor.resize(nlevels);
@@ -198,7 +200,8 @@ std::vector<cv::KeyPoint> DistributeQuadTree(const std::vector<cv::KeyPoint>& vT
                                             const int &minY,
                                             const int &maxY,
                                             const int &nFeaturesPerLevel,
-                                            const int &min_distance)
+                                            const int &min_distance,
+                                            const cv::Mat& mask)
 {
   const int double_of_min_distance= 2*min_distance;
   // Compute how many initial nodes   
@@ -371,7 +374,7 @@ std::vector<cv::KeyPoint> DistributeQuadTree(const std::vector<cv::KeyPoint>& vT
 }
 
 
-void CvFeatureDescriptor::ComputeKeyPointsOctTree(std::vector<std::vector<cv::KeyPoint> >& allKeypoints) {
+void CvFeatureDescriptor::ComputeKeyPointsOctTree(std::vector<std::vector<cv::KeyPoint> >& allKeypoints, const cv::Mat& mask) {
   const float W = 30;
   allKeypoints.resize(nlevels);
   for (int level = 0; level < nlevels; ++level) {
@@ -387,6 +390,7 @@ void CvFeatureDescriptor::ComputeKeyPointsOctTree(std::vector<std::vector<cv::Ke
     const int nRows = height/W;
     const int wCell = ceil(width/nCols);
     const int hCell = ceil(height/nRows);
+    const float& scale = mvScaleFactor[level];
     for(int i=0; i<nRows; i++) {
       const float iniY =minBorderY+i*hCell;
       float maxY = iniY+hCell+6;
@@ -407,8 +411,11 @@ void CvFeatureDescriptor::ComputeKeyPointsOctTree(std::vector<std::vector<cv::Ke
         //  cv::FAST(mvImagePyramid[level].rowRange(iniY,maxY).colRange(iniX,maxX), vKeysCell,minThFAST,true);
         if(!vKeysCell.empty()) {
           for(std::vector<cv::KeyPoint>::iterator vit=vKeysCell.begin(); vit!=vKeysCell.end();vit++) {
-            (*vit).pt.x+=j*wCell;
-            (*vit).pt.y+=i*hCell;
+            cv::Point2f& pt =vit->pt;
+            pt.x+=j*wCell;
+            pt.y+=i*hCell;
+            if(mask.at<uchar>(scale*(pt+cv::Point2f(minBorderX,minBorderY)) ) > 0) //  mask가 1 이상인 영역은 keypoint 제외
+              continue;
             vToDistributeKeys.push_back(*vit);
           }
         }
@@ -486,10 +493,11 @@ void CvFeatureDescriptor::Extract(const cv::Mat gray,
                                   std::vector<cv::KeyPoint>& _keypoints,
                                   cv::Mat& descriptors) {
   assert(gray.type() == CV_8UC1 );
+  cv::Mat _mask = mask.getMat();
   // Pre-compute the scale pyramid
   ComputePyramid(gray);
   std::vector < std::vector< cv::KeyPoint> > allKeypoints;
-  ComputeKeyPointsOctTree(allKeypoints); // level 별로 nfeatures 개수만큼 featur extraction.
+  ComputeKeyPointsOctTree(allKeypoints, _mask); // level 별로 nfeatures 개수만큼 featur extraction.
 #if 1
   int nkeypoints = 0;
   for (int level = 0; level < nlevels; ++level)
@@ -513,7 +521,7 @@ void CvFeatureDescriptor::Extract(const cv::Mat gray,
       offset += nkeypointsLevel;
       // Scale keypoint coordinates
       if (level != 0) {
-          float scale = mvScaleFactor[level]; //getScale(level, firstLevel, scaleFactor);
+          float scale = mvScaleFactor[level];
           for (std::vector<cv::KeyPoint>::iterator keypoint = scaled_keypoints.begin(),
                keypointEnd = scaled_keypoints.end(); keypoint != keypointEnd; ++keypoint)
               keypoint->pt *= scale;
