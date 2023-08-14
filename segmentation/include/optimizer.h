@@ -26,8 +26,11 @@ public:
                   const std::set<Mappoint*>& neighbor_mappoints,
                   const std::map<Jth, Frame*>& neighobor_frames,
                   Frame* curr_frame,
+                  const cv::Mat& gradx,
+                  const cv::Mat& grady,
+                  const cv::Mat& valid_grad,
                   bool vis_verbose
-                 );
+                  );
 private:
   g2o::OptimizableGraph::Vertex* CreatePoseVertex(const Qth& qth,
                                                   g2o::SparseOptimizer& optimizer,

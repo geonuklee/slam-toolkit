@@ -54,10 +54,10 @@ int TestKitti(int argc, char** argv) {
     std::cout << "F# " << i << std::endl;
     const cv::Mat rgb   = dataset.GetImage(i, cv::IMREAD_COLOR);
     const cv::Mat rgb_r = dataset.GetRightImage(i, cv::IMREAD_COLOR);
-    cv::Mat gray, gray_r, flow0;
+    cv::Mat gray, gray_r, flow0, gradx, grady, valid_grad;
     cv::cvtColor(rgb,gray,cv::COLOR_BGR2GRAY);
     cv::cvtColor(rgb_r,gray_r,cv::COLOR_BGR2GRAY);
-    segmentor.Put(gray, gray_r, *camera, rgb, flow0);
+    segmentor.Put(gray, gray_r, *camera, rgb, flow0, gradx, grady, valid_grad);
     char c = cv::waitKey(stop?0:1);
     if(c == 'q')
       break;
@@ -98,16 +98,17 @@ int TestWaymodataset(int argc, char** argv) {
   bool stop = 0==std::stoi(start);
   for(int i=0; i<dataset.Size(); i+=1){
     const auto Twc = Tcws.at(i).inverse();
-    //std::cout << "t=" << Twc.translation().transpose() << std::endl;
+    std::cout << i << ", gt t=" << Twc.translation().transpose() << std::endl;
     const cv::Mat rgb   = dataset.GetImage(i,cv::IMREAD_UNCHANGED);
     const cv::Mat depth = dataset.GetDepthImage(i);
-    cv::Mat gray, flow0;
+    cv::Mat gray, flow0, gradx, grady, valid_grad;
     cv::cvtColor(rgb,gray,cv::COLOR_BGR2GRAY);
     const std::map<seg::Pth, ShapePtr>& shapes = segmentor.Put(gray, depth, *camera, 
-                                                               visualize_segment ? rgb : cv::Mat(), flow0 );
-    // TODO segmentor에서 optical flow 획득.
-    pipeline.Put(gray, depth, flow0, shapes, rgb);
+                                                               visualize_segment ? rgb : cv::Mat(), flow0, gradx, grady, valid_grad);
+    pipeline.Put(gray, depth, flow0, shapes, gradx, grady, valid_grad, rgb);
 
+    if(i<1)
+      continue;
     char c = cv::waitKey(stop?0:100);
     if(c == 'q')
       break;

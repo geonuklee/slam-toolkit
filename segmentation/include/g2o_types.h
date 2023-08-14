@@ -36,9 +36,56 @@ public:
 
 private:
   const Param*const param_;
-  Eigen::Matrix<number_t,3,9,Eigen::ColMajor> J; // jacobian before projection
 };
 
+// D=2 : Measurement Dimmension
+// E=g2o::Vector2 : Measurement type
+// VertexXi=g2o::VertexSBAPointXYZ : First vertex node
+// VertexXj=g2o::VertexSE3Expmap : second vertex node
+class EdgeProjection
+  : public g2o::BaseBinaryEdge<2, g2o::Vector2, g2o::VertexSBAPointXYZ, g2o::VertexSE3Expmap>
+{
+public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    EdgeProjection(const Param* param,
+                   const double& uv_info);
+  void computeError();
+  virtual void linearizeOplus();
+  virtual bool read(std::istream& is) { return false; }
+  virtual bool write(std::ostream& os) const { return false; }
+private:
+  const Param*const param_;
+};
+
+class EdgeSwProjection
+  : public g2o::BaseMultiEdge<2, g2o::Vector2>
+{
+public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    EdgeSwProjection(const Param* param,
+                     const double& uv_info);
+  void computeError();
+  virtual void linearizeOplus();
+  virtual bool read(std::istream& is) { return false; }
+  virtual bool write(std::ostream& os) const { return false; }
+private:
+  const Param*const param_;
+};
+
+// D=3 : Dimenison
+// E=g2o::Vector3 : Measurement
+class EdgeSwSE3PointXYZDepth : public g2o::BaseMultiEdge<3, g2o::Vector3> {
+public:
+  EdgeSwSE3PointXYZDepth(const Param* param,
+                         const double& uv_info,
+                         const double& invd_info);
+  void computeError();
+  void linearizeOplus();
+  virtual bool read(std::istream& is) { return false; }
+  virtual bool write(std::ostream& os) const { return false; }
+private:
+  const Param*const param_;
+};
 
 /*
  * vertex_switchLinear.h
@@ -78,22 +125,6 @@ public:
   virtual bool read(std::istream& is) { return false; }
   virtual bool write(std::ostream& os) const { return false; }
 };
-
-// D=3 : Dimenison
-// E=g2o::Vector3 : Measurement
-class EdgeSwSE3PointXYZDepth : public g2o::BaseMultiEdge<3, g2o::Vector3> {
-public:
-  EdgeSwSE3PointXYZDepth(const Param* param,
-                         const double& uv_info,
-                         const double& invd_info);
-  virtual bool read(std::istream& is) { return false; }
-  virtual bool write(std::ostream& os) const { return false; }
-  void computeError();
-  void linearizeOplus();
-private:
-  const Param*const param_;
-};
-
 
 } // namespace seg
 

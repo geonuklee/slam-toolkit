@@ -1,4 +1,5 @@
 #include "optimizer.h"
+#include "Eigen/src/Core/Matrix.h"
 #include "g2o_types.h"
 #include "segslam.h"
 #include <g2o/core/block_solver.h>
@@ -48,19 +49,22 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
                         const std::set<Mappoint*>& neighbor_mappoints,
                         const std::map<Jth, Frame*>& neighbor_keyframes,
                         Frame* curr_frame,
+                        const cv::Mat& gradx,
+                        const cv::Mat& grady,
+                        const cv::Mat& valid_grad,
                         bool vis_verbose
-                       ) {
+                        ) {
   cv::Mat vis_rgb, dst, vis_full;
   if(vis_verbose){
     vis_rgb = curr_frame->GetRgb().clone();
     dst = cv::Mat::zeros(vis_rgb.size(), CV_8UC3);
     vis_full = cv::Mat::zeros(dst.size(), CV_8UC1);
   }
+  const double focal = camera->GetK()(0,0);
+  const double delta = 10./focal;
   // info : inverted covariance
-  const double uv_info = 1.;
-  const double invd_info = 1e+0;
 
-  const int n_iter = 10;
+  const int n_iter = 20;
   std::map<Jth, Frame*> frames = neighbor_keyframes;
   frames[curr_frame->GetId()] = curr_frame;
   /*
@@ -105,8 +109,8 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
     v_mappoints[mp]  = v_mp;
   }
   for(auto it_pth : mp_counts){
-    //if(it_pth.second < 5)
-    //  continue;
+    if(it_pth.second < 5)
+      continue;
     auto sw_vertex = new VertexSwitchLinear();
     sw_vertex->setId(optimizer.vertices().size() );
     sw_vertex->setEstimate(1.);
@@ -142,42 +146,62 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
         uvi[2] = 1. / z;
       else // If invalid depth = finite depth
         uvi[2] = MIN_NUM; // invd close too zero
+
+      const float& vg = valid_grad.at<uchar>(kpt.pt);
+      const float& gx = gradx.at<float>(kpt.pt);
+      const float& gy = grady.at<float>(kpt.pt);
+      bool valid_depth_measurment =  z > MIN_NUM && vg && std::abs(gx) < 2. ;
 #if 1
-      //float cinfo = 1.;
-      float cinfo = 1e-2/std::max(MIN_NUM,uvi[0]*uvi[0]);
+      //double cinfo = 1.;
+      double cinfo = 1e-2/std::max(MIN_NUM,uvi[0]);
+      const double uv_info = 1.;
+      const double invd_info = 100.;
+      // TODO inverse depth의 fisher information
 #endif
+
       Instance* ins = mp->GetInstance();
       Pth pth = ins ? ins->GetId() : -1;
       g2o::OptimizableGraph::Edge* edge = nullptr;
-      if(v_instances.count(pth) ){
-        VertexSwitchLinear* v_ins = v_instances.at(pth);
-        auto ptr = new EdgeSwSE3PointXYZDepth(&param, cinfo*uv_info, invd_info);
-        ptr->setVertex(0,v_mp);
-        ptr->setVertex(1,v_pose);
-        ptr->setVertex(2,v_ins);
-        ptr->setMeasurement( uvi );
-        edge = ptr;
-        na++;
-        swedges_parameter[pth] += 1.;
-        optimizer.addEdge(edge);
-        //g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
-        //const float deltaMono = sqrt(5.991); // TODO Why? ORB_SLAM2
-        //rk->setDelta(0.0001*deltaMono);
-        //edge->setRobustKernel(rk);
+      if( valid_depth_measurment ) {
+        if(v_instances.count(pth) ){
+          VertexSwitchLinear* v_ins = v_instances.at(pth);
+          auto ptr = new EdgeSwSE3PointXYZDepth(&param, uv_info, invd_info);
+          ptr->setVertex(0,v_mp);
+          ptr->setVertex(1,v_pose);
+          ptr->setVertex(2,v_ins);
+          ptr->setMeasurement( uvi );
+          edge = ptr;
+          swedges_parameter[pth] += 1.;
+          optimizer.addEdge(edge);
+        }
+        else {
+          auto ptr = new EdgeSE3PointXYZDepth(&param, uv_info, invd_info);
+          ptr->setVertex(0, v_mp);
+          ptr->setVertex(1, v_pose);
+          ptr->setMeasurement( uvi );
+          edge = ptr;
+          optimizer.addEdge(edge);
+        }
       }
-      {
-        auto ptr = new EdgeSE3PointXYZDepth(&param, uv_info, invd_info);
-        ptr->setMeasurement( uvi );
-        ptr->setVertex(0, v_mp);
-        ptr->setVertex(1, v_pose);
-        ptr->setMeasurement( uvi );
-        edge = ptr;
-        nb++;
-        optimizer.addEdge(edge);
-        //g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
-        //const float deltaMono = sqrt(5.991); // TODO Why? ORB_SLAM2
-        //rk->setDelta(0.0001*deltaMono);
-        //edge->setRobustKernel(rk);
+      else {
+        if(v_instances.count(pth) ){
+          VertexSwitchLinear* v_ins = v_instances.at(pth);
+          auto ptr = new EdgeSwProjection(&param, uv_info);
+          ptr->setVertex(0,v_mp);
+          ptr->setVertex(1,v_pose);
+          ptr->setVertex(2,v_ins);
+          ptr->setMeasurement( uvi.head<2>() );
+          edge = ptr;
+          swedges_parameter[pth] += 1.;
+          optimizer.addEdge(edge);
+        } else {
+          auto ptr = new EdgeProjection(&param, uv_info);
+          ptr->setVertex(0, v_mp);
+          ptr->setVertex(1, v_pose);
+          ptr->setMeasurement( uvi.head<2>() );
+          edge = ptr;
+          optimizer.addEdge(edge);
+        }
       }
       const Ith& ith = mp->GetId();
       if(!dst.empty() && jth == curr_frame->GetId()){
@@ -185,9 +209,8 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
           continue;
         cv::circle(vis_full, kpt.pt, 10, 255, -1); // prevent overlaped texts
         std::stringstream ss;
-        //ss << std::hex << ith; // Convert to hexadecimal
-        //ss << std::setprecision(3) << 1./std::max(uvi[0]*uvi[0], MIN_NUM);
-        ss << std::setprecision(3) << 1e-2/std::max(MIN_NUM,uvi[0]*uvi[0]);
+        ss << std::hex << ith; // Convert to hexadecimal
+        ss << std::setprecision(3) << cinfo;
         std::string msg = ss.str();
         cv::putText(dst, msg, kpt.pt, cv::FONT_HERSHEY_SIMPLEX, .3, CV_RGB(255,255,255) );
         cv::circle(dst, kpt.pt, 2, CV_RGB(0,255,0),-1);
@@ -203,7 +226,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
   for(auto it_v_sw : prior_edges){
     // Set Prior information
     //const double info = 1e-8* std::pow(swedges_parameter.at(it_v_sw.first),2);
-    const double info = 1e-4;
+    const double info = 1e-3;
     it_v_sw.second->SetInfomation(info);
   }
 

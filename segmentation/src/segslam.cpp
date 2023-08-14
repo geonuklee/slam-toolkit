@@ -51,8 +51,8 @@ Frame::~Frame() {
 bool Frame::IsInFrame(const Camera* camera, const Eigen::Vector2d& uv) const {
   double width = camera->GetWidth();
   double height = camera->GetHeight();
-  const double ulr_boundary = 50.;
-  const double b_boundary = 100.;
+  const double ulr_boundary = 20.;
+  const double b_boundary = 50.;
   if( uv.y() <  ulr_boundary )
     return false;
   if( uv.x() < ulr_boundary )
@@ -695,7 +695,7 @@ void Pipeline::SupplyMappoints(Frame* frame,
 #endif
     float z = depths[n];
     if(z < 1e-5) // No depth too far
-      z = 1e+5;
+      z = 1e+2;
     Instance* ins = instances[n];
     Eigen::Vector3d Xr = z*frame->GetNormalizedPoint(n);
     if(Mappoint* mp = mappoints[n]){
@@ -996,6 +996,7 @@ void Pipeline::Put(const cv::Mat gray,
                    const cv::Mat depth,
                    const cv::Mat flow0,
                    const std::map<Pth, ShapePtr>& curr_shapes,
+                   const cv::Mat& gradx, const cv::Mat& grady, const cv::Mat& valid_grad,
                    const cv::Mat vis_rgb)
 {
   const bool fill_bg_with_dominant = true;
@@ -1012,7 +1013,7 @@ void Pipeline::Put(const cv::Mat gray,
     cnts[0].reserve(s_ptr->outerior_.size() );
     for( auto pt: s_ptr->outerior_)
       cnts[0].push_back(cv::Point(pt.x,pt.y));
-    cv::drawContours(outline_mask, cnts, 0, 255, 40);
+    cv::drawContours(outline_mask, cnts, 0, 255, 20);
 
     const Pth& pth = it_shape.first;
     if(pth2instances_.count(pth) )
@@ -1121,7 +1122,8 @@ void Pipeline::Put(const cv::Mat gray,
 #endif
     bool vis_verbose = true;
     std::map<Pth,float> switch_states\
-      = mapper_->ComputeLBA(camera_, qth, neighbor_mappoints, neighbor_frames, curr_frame, vis_verbose);
+      = mapper_->ComputeLBA(camera_,qth, neighbor_mappoints, neighbor_frames, curr_frame,
+                            gradx, grady, valid_grad, vis_verbose);
     for(auto it : switch_states){
       if(it.second > switch_threshold)
         continue;

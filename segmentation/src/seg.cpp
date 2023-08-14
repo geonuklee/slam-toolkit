@@ -178,19 +178,33 @@ bool Shape::HasCollision(const int& _x, const int& _y, bool check_contour) const
   return b_outerior_collision;
 }
 
+
+bool IsInFrame(const cv::Size size, const cv::Point2f& pt, const float boundary){
+  if(pt.x < boundary)
+    return false;
+  if(pt.y < boundary)
+    return false;
+  if(pt.x > size.width-boundary)
+    return false;
+  if(pt.y > size.height-boundary)
+    return false;
+  return true;
+}
+
 std::map<int,int> TrackShapes(const std::map<int, ShapePtr>& local_shapes,
                               const cv::Mat& local_marker,
                               const cv::Mat& flow0,
                               const float min_iou,
+                              const float boundary,
                               std::map<int, ShapePtr>& global_shapes,
                               int& n_shapes) {
+  if(!flow0.empty()){
     // Motion update
     for(auto git : global_shapes){
       ShapePtr ptr = git.second;
       for(auto& pt : ptr->outerior_){
         const auto& dpt01 = flow0.at<cv::Point2f>(pt);
         pt += dpt01;
-        // TODO 화면 구석에 몰리면 지워야하나?
         pt.x = std::max<float>(pt.x, 0.f);
         pt.x = std::min<float>(pt.x,local_marker.cols-1.f);
         pt.y = std::max<float>(pt.y, 0.f);
@@ -198,6 +212,7 @@ std::map<int,int> TrackShapes(const std::map<int, ShapePtr>& local_shapes,
       }
       ptr->UpdateBB();
     }
+  }
 
   // Sampling area
   std::map<int, size_t> g_areas;
@@ -307,16 +322,27 @@ std::map<int,int> TrackShapes(const std::map<int, ShapePtr>& local_shapes,
     global_shapes[gid] = l_ptr;
     //matches[lid] = gid // 이걸 취급해야할진 모르겠다.
   }
+#if 0
+  // 화면 밖으로 나가는 경우 삭제.
+  for(auto it : global_shapes){
+    ShapePtr ptr = it.second;
+    for(auto& pt : ptr->outerior_){
+      if(!IsInFrame(local_marker.size(), pt, boundary) )
+        layoff_list.push_back(it.first);
+    }
+  }
+  for(int gid : layoff_list)
+    global_shapes.erase(gid);
+#endif
   return matches;
 }
 
 
-cv::Mat GetGrad(const cv::Mat depth , const cv::Mat valid_mask,
+void GetGrad(const cv::Mat depth , const cv::Mat valid_mask,
              const Camera& camera,
              cv::Mat& gradx,
              cv::Mat& grady,
-             cv::Mat& valid_grad,
-             bool verbose
+             cv::Mat& valid_grad
              ) {
   gradx = cv::Mat::zeros(depth.rows, depth.cols, CV_32FC1);
   grady = cv::Mat::zeros(depth.rows, depth.cols, CV_32FC1);
@@ -325,15 +351,19 @@ cv::Mat GetGrad(const cv::Mat depth , const cv::Mat valid_mask,
   const float s = 0.1;
   const float sfx = s*camera.GetK()(0,0);
   const float sfy = s*camera.GetK()(1,1);
+#if 0
   cv::Mat dst;
-  if(verbose)
-    dst = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC3);
+#else
+  cv::Mat dst = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC3);
+#endif
   for(int r = 0; r < depth.rows; r++) {
     for(int c = 0; c < depth.cols; c++) {
       const cv::Point2i pt(c,r);
       if(!valid_mask.at<uchar>(pt))
         continue;
       const float& z = depth.at<float>(pt);
+      if(z < 1e-3)
+        continue;
       const int du = std::max<int>( (int) sfx/z, 1);
       const int dv = std::max<int>( (int) sfy/z, 1);
       cv::Point2i ptx0(c-du,r);
@@ -348,12 +378,18 @@ cv::Mat GetGrad(const cv::Mat depth , const cv::Mat valid_mask,
         continue;
       if(pty1.y > depth.rows || !valid_mask.at<uchar>(pty1) )
         continue;
+      const float zx0 = depth.at<float>(ptx0);
+      const float zx1 = depth.at<float>(ptx1);
+      const float zy0 = depth.at<float>(pty0);
+      const float zy1 = depth.at<float>(pty1);
+      if(zx0 < 1e-3 || zx1 < 1e-3 || zy0 < 1e-3 || zy1 < 1e-3)
+        continue;
       valid_grad.at<uchar>(pt) = true;
-      const float gx = (depth.at<float>(ptx1) - depth.at<float>(ptx0) ) / s;
-      const float gy = (depth.at<float>(pty1) - depth.at<float>(pty0) ) / s;
-      gradx.at<float>(pt) = gx;
-      grady.at<float>(pt) = gy;
-      if(!verbose)
+      float& gx = gradx.at<float>(pt);
+      float& gy = grady.at<float>(pt);
+      gx = (zx1 - zx0) / s;
+      gy = (zy1 - zy0) / s;
+      if(dst.empty())
         continue;
       auto& color = dst.at<cv::Vec3b>(pt);
       int val = std::min<int>(255, std::max<int>(0, std::abs(10.*gy) ) );
@@ -365,7 +401,9 @@ cv::Mat GetGrad(const cv::Mat depth , const cv::Mat valid_mask,
       color[2] = val;
     }
   }
-  return dst;
+  if(!dst.empty())
+    cv::imshow("grad", dst);
+  return;
 }
 
 static bool SameSign(const float& v1, const float& v2){
@@ -632,7 +670,10 @@ const std::map<int, ShapePtr>& Segmentor::_Put(cv::Mat gray,
                cv::Mat depth,
                const Camera& camera,
                cv::Mat vis_rgb,
-               cv::Mat& flow0
+               cv::Mat& flow0,
+               cv::Mat& gradx,
+               cv::Mat& grady,
+               cv::Mat& valid_grad
                ) {
   auto start = std::chrono::steady_clock::now();
   std::vector<cv::Point2f> corners = GetCorners(gray);
@@ -670,8 +711,7 @@ const std::map<int, ShapePtr>& Segmentor::_Put(cv::Mat gray,
   cv::erode(valid_depth,valid_depth,cv::Mat::ones(13,13,CV_32FC1) );
   cv::GaussianBlur(depth,filtered_depth, cv::Size(7,7), 0., 0.); // Shallow groove가 필요없어서 그냥 Gaussian
 
-  cv::Mat gradx, grady, valid_grad;
-  cv::Mat vis_grad = GetGrad(filtered_depth, valid_depth, camera, gradx, grady, valid_grad, true);
+  GetGrad(filtered_depth, valid_depth, camera, gradx, grady, valid_grad);
   cv::Mat valid;
   cv::bitwise_and(valid_depth, valid_grad, valid);
   cv::Mat concave_edges = GetConcaveEdges(gradx,grady,depth,valid,camera);
@@ -687,7 +727,8 @@ const std::map<int, ShapePtr>& Segmentor::_Put(cv::Mat gray,
 
   std::map<int, ShapePtr> local_shapes = ConvertMarker2Instances(marker);
   const float min_iou = .3;
-  std::map<int,int> l2g = TrackShapes(local_shapes, marker, flow, min_iou, global_shapes_, n_shapes_);
+  const float boundary = 5.;
+  std::map<int,int> l2g = TrackShapes(local_shapes, marker, flow, min_iou, boundary, global_shapes_, n_shapes_);
 
   if(!is_keyframe){
     cv::waitKey(1);
@@ -707,8 +748,9 @@ const std::map<int, ShapePtr>& Segmentor::_Put(cv::Mat gray,
   return global_shapes_;
 }
 
-const std::map<int, ShapePtr>& Segmentor::Put(cv::Mat gray, cv::Mat depth, const DepthCamera& camera, cv::Mat vis_rgb, cv::Mat& flow0) {
+const std::map<int, ShapePtr>& Segmentor::Put(cv::Mat gray, cv::Mat depth, const DepthCamera& camera, cv::Mat vis_rgb,
+                                              cv::Mat& flow0, cv::Mat& gradx, cv::Mat& grady, cv::Mat& valid_grad) {
   cv::cuda::GpuMat g_gray;
   g_gray.upload(gray);
-  return _Put(gray, g_gray, depth, camera, vis_rgb, flow0);
+  return _Put(gray, g_gray, depth, camera, vis_rgb, flow0, gradx, grady, valid_grad);
 }

@@ -223,6 +223,9 @@ public:
            const cv::Mat depth,
            const cv::Mat flow0,
            const std::map<Pth, ShapePtr>& shapes,
+           const cv::Mat& gradx,
+           const cv::Mat& grady,
+           const cv::Mat& valid_grad,
            const cv::Mat vis_rgb=cv::Mat());
 
 private:

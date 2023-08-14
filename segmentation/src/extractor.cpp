@@ -31,7 +31,7 @@ CvFeatureDescriptor::CvFeatureDescriptor()
   nfeatures = 4000;
   scaleFactor = 1.2f;
   nlevels = 3;
-  iniThFAST = 30;
+  iniThFAST = 20;
   min_kpt_distance = 10.; // For each level
   // ---------------------------------------------
   mvScaleFactor.resize(nlevels);

@@ -147,7 +147,7 @@ static void computeOrbDescriptor(const KeyPoint& kpt,
 }
 
 
-static int bit_pattern_31_[256*4] =
+int bit_pattern_31_[256*4] =
 {
     8,-3, 9,5/*mean (0), correlation (0)*/,
     4,2, 7,-12/*mean (1.12461e-05), correlation (0.0437584)*/,

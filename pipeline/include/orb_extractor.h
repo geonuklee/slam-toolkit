@@ -129,6 +129,7 @@ protected:
     std::vector<float> mvInvLevelSigma2;
 };
 
+extern int bit_pattern_31_[256*4];
 } //namespace ORB_SLAM
 
 #endif
