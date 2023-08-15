@@ -44,22 +44,26 @@ g2o::OptimizableGraph::Vertex* Mapper::CreateStructureVertex(Qth qth,
 }
 
 
+struct EdgeInfo {
+  cv::KeyPoint kpt;
+  Mappoint* mp;
+  g2o::OptimizableGraph::Edge* edge;
+  VertexSwitchLinear* vswitch;
+  double uv_info;
+  double invd_info;
+};
+
 std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
                         Qth qth,
                         const std::set<Mappoint*>& neighbor_mappoints,
                         const std::map<Jth, Frame*>& neighbor_keyframes,
                         Frame* curr_frame,
+                        Frame* prev_frame,
                         const cv::Mat& gradx,
                         const cv::Mat& grady,
                         const cv::Mat& valid_grad,
                         bool vis_verbose
                         ) {
-  cv::Mat vis_rgb, dst, vis_full;
-  if(vis_verbose){
-    vis_rgb = curr_frame->GetRgb().clone();
-    dst = cv::Mat::zeros(vis_rgb.size(), CV_8UC3);
-    vis_full = cv::Mat::zeros(dst.size(), CV_8UC1);
-  }
   const double focal = camera->GetK()(0,0);
   const double delta = 10./focal;
   // info : inverted covariance
@@ -95,10 +99,16 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
   std::map<Mappoint*, g2o::OptimizableGraph::Vertex*> v_mappoints;
   std::map<Pth, VertexSwitchLinear*>  v_instances;
   std::map<Pth, size_t>               mp_counts;
-  std::map<g2o::OptimizableGraph::Edge*, std::pair<Frame*,Mappoint*> > measurment_edges;
   std::map<Pth, EdgeSwitchPrior*> prior_edges;
 
   for(Mappoint* mp : neighbor_mappoints){
+    size_t n_kf = mp->GetKeyframes(qth).size();
+    if(n_kf < 2){ // Projection Edge만 1개 생기는 경우 NAN이 발생하는것을 막기위해.
+      if(curr_frame->GetIndex(mp) > -1 )
+        n_kf++;
+      if(n_kf < 2)
+        continue;
+    }
     Instance* ins = mp->GetInstance();
     if(ins && ins->GetId() > 0 ){
       mp_counts[ins->GetId()]++;
@@ -121,10 +131,12 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
     optimizer.addEdge(sw_prior_edge);
     v_instances[it_pth.first] = sw_vertex;
     prior_edges[it_pth.first] = sw_prior_edge;
+    sw_vertex->setFixed(true);
   }
 
   int na = 0; int nb = 0;
   std::map<Pth, double> swedges_parameter;
+  std::map<Jth, std::map<int, EdgeInfo> >infos;
   for(auto it_frame : frames){
     Frame* frame = it_frame.second;
     Jth jth = it_frame.first;
@@ -136,8 +148,11 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
       Mappoint* mp = jth_mappoints[n];
       if(!mp)
         continue;
-      if(!v_mappoints.count(mp))
+      if(!v_mappoints.count(mp)){
+        if(mp->GetKeyframes(qth).size()>1)
+          throw -1;
         continue;
+      }
       auto v_mp = v_mappoints.at(mp);
       const cv::KeyPoint& kpt = frame->GetKeypoint(n);
       Eigen::Vector3d uvi = frame->GetNormalizedPoint(n);
@@ -150,18 +165,56 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
       const float& vg = valid_grad.at<uchar>(kpt.pt);
       const float& gx = gradx.at<float>(kpt.pt);
       const float& gy = grady.at<float>(kpt.pt);
-      bool valid_depth_measurment =  z > MIN_NUM && vg && std::abs(gx) < 2. ;
-#if 1
-      //double cinfo = 1.;
-      double cinfo = 1e-2/std::max(MIN_NUM,uvi[0]);
-      const double uv_info = 1.;
-      const double invd_info = 100.;
-      // TODO inverse depth의 fisher information
+      bool valid_depth_measurment =  z > MIN_NUM && vg;
+#if 0
+      double uv_info = 1.;
+#else
+      double uv_info = 0.; {
+        double p = std::max(std::abs(uvi[0]), std::abs(uvi[1]) );
+        //double p = std::abs(uvi[0]);
+        double pmin = 0.25;
+        double pmax = 0.35;
+        uv_info = std::max(1e-10 , (pmax-p) /(pmax-pmin) );
+        uv_info = std::min(1., uv_info);
+        uv_info *= uv_info;
+      }
 #endif
+#if 1
+      double invd_info = 1e-5;
+#else
+      double invd_info = 0.;
+      if(vg){
+        double p = std::max(std::abs(gx), std::abs(gy) );
+        //double p = std::abs(gx);
+        double pmin = 1.;
+        double pmax = 2.;
+        invd_info = std::max(0.001 ,  (pmax-p) /(pmax-pmin) );
+        invd_info = std::min(1., invd_info);
+      }
+      else{
+        invd_info = 1e-5;
+      }
+#endif
+
+      //const double invd_info = 1e+2;
+      //const double invd_info =  vg ? std::max(1., .2 - std::abs(gx) ) : MIN_NUM;
+      /* TODO False positive를 줄이기위해
+      * [ ] Huber kernel
+      * [ ] Fisher information
+        * [ ] uv info는 선형화. std::max(1e-1, tan(30deg) - normal uv) 이런거
+      * [ ] Instance별 error 요인 분류. depth 오차가 안줄어드는건지 uv 오차가 안줄어드는건지.
+        * ins 별 말고 point별로 표시하는것도 좋겠다. 
+      */
 
       Instance* ins = mp->GetInstance();
       Pth pth = ins ? ins->GetId() : -1;
       g2o::OptimizableGraph::Edge* edge = nullptr;
+      EdgeInfo info;
+      info.kpt = kpt;
+      info.mp = mp;
+      info.vswitch = nullptr;
+      info.uv_info = uv_info;
+      info.invd_info = invd_info;
       if( valid_depth_measurment ) {
         if(v_instances.count(pth) ){
           VertexSwitchLinear* v_ins = v_instances.at(pth);
@@ -173,6 +226,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
           edge = ptr;
           swedges_parameter[pth] += 1.;
           optimizer.addEdge(edge);
+          info.vswitch = v_ins;
         }
         else {
           auto ptr = new EdgeSE3PointXYZDepth(&param, uv_info, invd_info);
@@ -194,6 +248,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
           edge = ptr;
           swedges_parameter[pth] += 1.;
           optimizer.addEdge(edge);
+          info.vswitch = v_ins;
         } else {
           auto ptr = new EdgeProjection(&param, uv_info);
           ptr->setVertex(0, v_mp);
@@ -203,20 +258,12 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
           optimizer.addEdge(edge);
         }
       }
+      info.edge = edge;
       const Ith& ith = mp->GetId();
-      if(!dst.empty() && jth == curr_frame->GetId()){
-        if(vis_full.at<uchar>(kpt.pt) > 100) // 글자가 너무 많은경우.
-          continue;
-        cv::circle(vis_full, kpt.pt, 10, 255, -1); // prevent overlaped texts
-        std::stringstream ss;
-        ss << std::hex << ith; // Convert to hexadecimal
-        ss << std::setprecision(3) << cinfo;
-        std::string msg = ss.str();
-        cv::putText(dst, msg, kpt.pt, cv::FONT_HERSHEY_SIMPLEX, .3, CV_RGB(255,255,255) );
-        cv::circle(dst, kpt.pt, 2, CV_RGB(0,255,0),-1);
-      }
-    }
-  }
+      if(vis_verbose)
+        infos[jth][n] = info;
+    } // for mappoints
+  } // for frames
 
   if(!v_poses.empty()){
     g2o::OptimizableGraph::Vertex* v_oldest = v_poses.begin()->second;
@@ -225,8 +272,9 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
 
   for(auto it_v_sw : prior_edges){
     // Set Prior information
-    //const double info = 1e-8* std::pow(swedges_parameter.at(it_v_sw.first),2);
-    const double info = 1e-3;
+    double info = 1e-5 *  swedges_parameter.at(it_v_sw.first);
+    info = std::max(1e-3, info);
+    //const double info = 1e-2; // Edge 숫자에 비례해야하나?
     it_v_sw.second->SetInfomation(info);
   }
 
@@ -264,9 +312,97 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
     mpt->SetXq(qth,vertex->estimate());
   }
   //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-  if(!dst.empty()){
-    cv::addWeighted(vis_rgb, .4, dst, 1., 1., dst);
-    cv::imshow("optimizer", dst);
+  if(vis_verbose){
+#if 0
+    cv::Mat vis_rgb = curr_frame->GetRgb().clone();
+    cv::Mat vis_full = cv::Mat::zeros(vis_rgb.size(), CV_8UC1);
+    cv::Mat dst_invdinfo = cv::Mat::zeros(vis_rgb.size(), CV_8UC3);
+    cv::Mat dst_uvinfo = cv::Mat::zeros(vis_rgb.size(), CV_8UC3);
+    std::map<Ith, double> chi2_sums;
+    for(auto it_infos : infos){
+      for(auto info : it_infos.second){
+        double s = info.second.vswitch ? info.second.vswitch->estimate() : 1.;
+        g2o::OptimizableGraph::Edge* edge = info.second.edge;
+        chi2_sums[info.second.mp->GetId()] += edge->chi2() / s / s;
+      }
+    }
+
+    for(auto info : infos[curr_frame->GetId()] ){
+      double chi2 = chi2_sums.at(info.second.mp->GetId());
+      if(chi2 < 1e-4)
+        continue;
+      std::stringstream ss;
+      ss << std::setprecision(3) << chi2;
+      std::string msg = ss.str();
+      cv::putText(dst_uvinfo, msg, info.second.kpt.pt, cv::FONT_HERSHEY_SIMPLEX, .3, CV_RGB(255,255,255) );
+    }
+    cv::addWeighted(vis_rgb, .4, dst_uvinfo, 1., 1., dst_uvinfo);
+    cv::imshow("chi2 sum", dst_uvinfo);
+#else
+    for(auto it_infos : infos){
+      Frame* frame = frames.at(it_infos.first);
+      if(frame != curr_frame)
+        continue;
+      cv::Mat vis_rgb = frame->GetRgb().clone();
+      cv::Mat vis_full = cv::Mat::zeros(vis_rgb.size(), CV_8UC1);
+      cv::Mat dst_invdinfo = cv::Mat::zeros(vis_rgb.size(), CV_8UC3);
+      cv::Mat dst_uvinfo = cv::Mat::zeros(vis_rgb.size(), CV_8UC3);
+      for(auto info : it_infos.second){
+        cv::circle(dst_invdinfo, info.second.kpt.pt, 2, CV_RGB(0,255,0), -1);
+
+        {
+          std::stringstream ss;
+          ss << std::setprecision(2) << info.second.mp->GetXq(0)[2] << std::endl; // TODO sprintf로 정확한 자리수 표시.
+          std::string msg = ss.str();
+          cv::putText(dst_invdinfo, msg, info.second.kpt.pt, cv::FONT_HERSHEY_SIMPLEX, .3, CV_RGB(255,255,255) );
+        }
+
+
+        double s = info.second.vswitch ? info.second.vswitch->estimate() : 1.;
+        g2o::OptimizableGraph::Edge* edge = info.second.edge;
+        //Eigen::VectorXd err(edge->errorData(), edge->dimension());
+        int dim = edge->dimension();
+        g2o::MatrixX::MapType information(edge->informationData(), dim, dim);
+        Eigen::VectorXd err(dim);
+        for(int i=0; i<dim; i++){
+          const double e = edge->errorData()[i]/s;
+          err(i) = std::abs(e) * std::sqrt(information(i,i));
+        }
+        double uv_err = err.head<2>().norm();
+        if(uv_err > 1e-2){
+          std::stringstream ss;
+          //ss << std::setprecision(3) << information(0,0);
+          ss << std::setprecision(3) << uv_err;
+          std::string msg = ss.str();
+          cv::putText(dst_uvinfo, msg, info.second.kpt.pt, cv::FONT_HERSHEY_SIMPLEX, .3, CV_RGB(255,255,255) );
+        }
+        if(dim < 3)
+          continue;
+        double invd_err = std::abs( err(2) );
+        /*if(invd_err > 1e-2){
+          std::stringstream ss;
+          ss << std::setprecision(1) << info.second.invd_info;
+          std::string msg = ss.str();
+          cv::putText(dst_invdinfo, msg, info.second.kpt.pt, cv::FONT_HERSHEY_SIMPLEX, .3, CV_RGB(255,255,255) );
+        }*/
+      }
+      cv::addWeighted(vis_rgb, .4, dst_invdinfo, 1., 1., dst_invdinfo);
+      //cv::imshow("invd info"+std::to_string(it_infos.first), dst_invdinfo);
+      cv::imshow("invd info", dst_invdinfo);
+      cv::addWeighted(vis_rgb, .4, dst_uvinfo, 1., 1., dst_uvinfo);
+      //cv::imshow("uv info"+std::to_string(it_infos.first), dst_uvinfo);
+      //cv::imshow("uv info", dst_uvinfo);
+    }
+#endif
+  }
+
+  {
+    const auto& T0q = prev_frame->GetTcq(0);
+    const auto& T1q = curr_frame->GetTcq(0);
+    const auto T01 = T0q * T1q.inverse();
+    std::cout << "dT = " << T01.translation().transpose() << std::endl;
+    if(T01.translation().norm() < 1e-2)
+      throw -1;  // 버그 감지용.정지장면이 있는 seq에서는 오인식함.
   }
 
   if(txt_verbose){

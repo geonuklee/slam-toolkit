@@ -673,12 +673,12 @@ void Pipeline::SupplyMappoints(Frame* frame,
   const auto& depths    = frame->GetMeasuredDepths();
   const auto& mappoints = frame->GetMappoints();
   std::vector<cv::KeyPoint> distributed_keypoints; {
-    const int nFeatures = .5*keypoints.size();
+    const int nFeatures = .5*keypoints.size(); // 키포인트의 절반만...
     const int minX = 0;
     const int minY = 0;
     const int maxX = camera_->GetWidth();
     const int maxY = camera_->GetHeight();
-    const int min_mpt_distance = 10.;
+    const int min_mpt_distance = 20.; // 이게 왜 안지켜질까?
     distributed_keypoints= DistributeQuadTree(keypoints,minX,maxX,minY,maxY,nFeatures, min_mpt_distance);
   }
   /*
@@ -731,7 +731,7 @@ void Pipeline::SupplyMappoints(Frame* frame,
 }
 
 cv::Mat VisualizeStates(const RigidGroup* rig,
-                        const Frame* frame,
+                        Frame* frame,
                         const std::map<Pth,float>& density_scores,
                         const std::map<Pth, float>& switch_states,
                         const float& switch_threshold,
@@ -794,35 +794,6 @@ cv::Mat VisualizeStates(const RigidGroup* rig,
     Instance* ins = instances[n];
     Mappoint* mp = mappoints[n];
     const cv::Point2f& pt = keypoints[n].pt;
-#if 0
-    cv::Scalar c; int thickness;
-    bool b_circle = true;
-    if(mp){
-      thickness = -1;
-      const Pth& pth = ins ? ins->GetId() : -1;
-      const Pth& pth0 = mp->GetInstance()->GetId();
-      b_circle = pth == pth0;
-      const Jth jth0 = mp->GetRefFrame(0)->GetId(); // TODO 하드코딩이다.
-      if(frame->GetId() - jth0 > 1)
-        c = CV_RGB(0,255,0);
-      else
-        c = CV_RGB(255,255,0);
-    }
-    else {
-      thickness = 1;
-      c = CV_RGB(255,0,0);
-    }
-
-    if(b_circle){
-      cv::circle(dst_frame, pt, 2, c, thickness);
-    }
-    else{
-      const float hw = 6.;
-      cv::Rect rec(pt.x-hw, pt.y-hw, 2*hw, 2*hw);
-      cv::rectangle(dst_frame, rec, c, 2);
-    }
-#endif
-
     if(mp){
       std::stringstream ss;
       ss << std::hex << mp->GetId(); // Convert to hexadecimal
@@ -835,6 +806,9 @@ cv::Mat VisualizeStates(const RigidGroup* rig,
         cv::line(dst_frame, pt, pt0, CV_RGB(255,255,0),  1);
         break;
       }
+    }
+    else {
+      cv::circle(dst_frame, pt, 3, CV_RGB(200,200,200), 1);
     }
   }
   {
@@ -900,7 +874,9 @@ cv::Mat VisualizeStates(const RigidGroup* rig,
     int baseline=0;
     int y = 0;
     cv::rectangle(dst_texts,cv::Rect(0,0,dst_texts.cols, dst_texts.rows),CV_RGB(255,255,255),-1);
-    for(auto it_kf : neighbor_frames){
+    std::map<Jth, Frame*> keyframes = neighbor_frames;
+    keyframes[frame->GetId()] = frame;
+    for(auto it_kf : keyframes){
       const Jth& jth = it_kf.first;
       Frame* kf = it_kf.second;
       const auto t = kf->GetTcq(qth).inverse().translation();
@@ -1003,7 +979,7 @@ void Pipeline::Put(const cv::Mat gray,
   const float search_radius = 30.;
   const float switch_threshold = .3;
   float density_threshold = 1. / 40. / 40.; // octave==0d에서 NxN pixel에 한개 이상의 feature point가 존재해야 dense instance
-  const bool verbose_flowmatch = false;
+  const bool verbose_flowmatch = true;
 
   cv::Mat outline_mask = cv::Mat::zeros(gray.size(), CV_8UC1);
   for(auto it_shape : curr_shapes){
@@ -1122,13 +1098,13 @@ void Pipeline::Put(const cv::Mat gray,
 #endif
     bool vis_verbose = true;
     std::map<Pth,float> switch_states\
-      = mapper_->ComputeLBA(camera_,qth, neighbor_mappoints, neighbor_frames, curr_frame,
+      = mapper_->ComputeLBA(camera_,qth, neighbor_mappoints, neighbor_frames, curr_frame, prev_frame_,
                             gradx, grady, valid_grad, vis_verbose);
     for(auto it : switch_states){
       if(it.second > switch_threshold)
         continue;
       Instance* ins = pth2instances_.at( it.first );
-      rig->ExcludeInstance(ins); // TODO 활성화.
+      //rig->ExcludeInstance(ins); // TODO 활성화.
     }
     /* 
      * [ ] 3D visualization

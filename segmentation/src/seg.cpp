@@ -420,6 +420,8 @@ cv::Mat GetConcaveEdges(const cv::Mat gradx,
                      const cv::Mat valid_mask,
                      const Camera& camera){
   cv::Mat hessian = cv::Mat::zeros(depth.rows, depth.cols, CV_32FC1);
+
+  // TODO Hessian 의 dl도 gradients 처럼 [meter] unit으로 변경
   const int dl = 5; // "Shallow groove"를 찾을것도 아닌데, 간격이 좁을필요가..
   const int R = 10; // NMAS range
   /*

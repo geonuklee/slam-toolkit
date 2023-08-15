@@ -174,7 +174,7 @@ void VertexSwitchLinear::setEstimate(const number_t &et) {
 
 void VertexSwitchLinear::oplusImpl(const number_t* update) {
   _x += update[0];
-  if (_x<0.) _x=0.;
+  if (_x<1e-1) _x = 1e-1;
   if (_x>1.) _x=1.;
   _estimate=_x;
 }

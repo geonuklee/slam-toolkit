@@ -26,6 +26,7 @@ public:
                   const std::set<Mappoint*>& neighbor_mappoints,
                   const std::map<Jth, Frame*>& neighobor_frames,
                   Frame* curr_frame,
+                  Frame* prev_frame,
                   const cv::Mat& gradx,
                   const cv::Mat& grady,
                   const cv::Mat& valid_grad,
