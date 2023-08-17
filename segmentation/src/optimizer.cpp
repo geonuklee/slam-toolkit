@@ -131,7 +131,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
     optimizer.addEdge(sw_prior_edge);
     v_instances[it_pth.first] = sw_vertex;
     prior_edges[it_pth.first] = sw_prior_edge;
-    sw_vertex->setFixed(true);
+    //sw_vertex->setFixed(true);
   }
 
   int na = 0; int nb = 0;
@@ -392,6 +392,13 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
       cv::addWeighted(vis_rgb, .4, dst_uvinfo, 1., 1., dst_uvinfo);
       //cv::imshow("uv info"+std::to_string(it_infos.first), dst_uvinfo);
       //cv::imshow("uv info", dst_uvinfo);
+      static bool stop = false;
+      char c = cv::waitKey(stop?0:1);
+      if(c == 'q')
+        exit(1);
+      else if (c == 's')
+        stop = !stop;
+
     }
 #endif
   }
@@ -401,6 +408,8 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
     const auto& T1q = curr_frame->GetTcq(0);
     const auto T01 = T0q * T1q.inverse();
     std::cout << "dT = " << T01.translation().transpose() << std::endl;
+    if(T01.translation().z() < 0.)
+      throw -2;
     if(T01.translation().norm() < 1e-2)
       throw -1;  // 버그 감지용.정지장면이 있는 seq에서는 오인식함.
   }

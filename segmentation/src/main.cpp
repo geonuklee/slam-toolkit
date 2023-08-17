@@ -106,14 +106,15 @@ int TestWaymodataset(int argc, char** argv) {
     const std::map<seg::Pth, ShapePtr>& shapes = segmentor.Put(gray, depth, *camera, 
                                                                visualize_segment ? rgb : cv::Mat(), flow0, gradx, grady, valid_grad);
     pipeline.Put(gray, depth, flow0, shapes, gradx, grady, valid_grad, rgb);
-
+    /*
     if(i<1)
       continue;
-    char c = cv::waitKey(stop?0:100);
+    char c = cv::waitKey(stop?0:1);
     if(c == 'q')
       break;
     else if (c == 's')
       stop = !stop;
+    */
   }
   return 1;
 }

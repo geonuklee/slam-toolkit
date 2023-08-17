@@ -369,9 +369,15 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
       const cv::Point2f& pt1 = curr_frame->GetKeypoint(i1).pt;
       const int& i0 = prev_frame->GetIndex(it.second.first);
       const cv::Point2f& pt0 = prev_frame->GetKeypoint(i0).pt;
-      cv::circle(dst, pt1, 3,  CV_RGB(255,0,0), 1);
-      cv::line(dst, pt0, pt1, CV_RGB(0,255,0), 3);
+      if(prev_frame->GetDepth(i0) < 1e-5 && curr_frame->GetDepth(i1) < 1e-5)
+        cv::line(dst, pt0, pt1, CV_RGB(255,0,0), 2);
+      else
+        cv::line(dst, pt0, pt1, CV_RGB(0,255,0), 2);
+      //cv::circle(dst, pt1, 3,  CV_RGB(0,0,255), 1);
     }
+    char buffer[200];
+    snprintf(buffer, sizeof(buffer), "Jth #%d, #%d", prev_frame->GetId(), curr_frame->GetId() );
+    cv::putText(dst, buffer, cv::Point(10, dst.rows - 20), cv::FONT_HERSHEY_SIMPLEX, 1.,  CV_RGB(255,0,0), 2);
     cv::imshow("flow match", dst);
   }
 

@@ -20,7 +20,12 @@ EdgeSE3PointXYZDepth::EdgeSE3PointXYZDepth(const Param* param,
 }
 
 inline double GetInverse(const double& z) {
-  return std::max(MIN_NUM, 1./std::max<double>(MIN_NUM,z) );
+  const double min_z = 1.;
+  // min_z 을 너무 작게 설정하면,
+  // LM optimization이 수렴 안하는 문제가 발생한다.
+  if(z < min_z)
+    return 1./min_z;
+  return 1./z;
 }
 
 void EdgeSE3PointXYZDepth::computeError() {
@@ -174,7 +179,7 @@ void VertexSwitchLinear::setEstimate(const number_t &et) {
 
 void VertexSwitchLinear::oplusImpl(const number_t* update) {
   _x += update[0];
-  if (_x<1e-1) _x = 1e-1;
+  if (_x < MIN_NUM) _x = MIN_NUM;
   if (_x>1.) _x=1.;
   _estimate=_x;
 }
@@ -256,6 +261,5 @@ void EdgeSwSE3PointXYZDepth::linearizeOplus() {
   _jacobianOplus[2] = h-obs;
   return;
 }
-
 
 } // namespace seg
