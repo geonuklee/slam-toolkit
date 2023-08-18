@@ -116,6 +116,7 @@ int TestWaymodataset(int argc, char** argv) {
       stop = !stop;
     */
   }
+  std::cout << "Done. The end of the dataset." << std::endl;
   return 1;
 }
 

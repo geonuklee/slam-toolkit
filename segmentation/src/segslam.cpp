@@ -674,31 +674,17 @@ void AddKeyframesAtMappoints(Frame* keyframe, RigidGroup* rig_new) {
 
 void Pipeline::SupplyMappoints(Frame* frame,
                                RigidGroup* rig_new) {
+  const double min_mpt_distance = 15.;
   const auto& keypoints = frame->GetKeypoints();
   const auto& instances = frame->GetInstances();
   const auto& depths    = frame->GetMeasuredDepths();
   const auto& mappoints = frame->GetMappoints();
-  std::vector<cv::KeyPoint> distributed_keypoints; {
-    const int nFeatures = .5*keypoints.size(); // 키포인트의 절반만...
-    const int minX = 0;
-    const int minY = 0;
-    const int maxX = camera_->GetWidth();
-    const int maxY = camera_->GetHeight();
-    const int min_mpt_distance = 20.; // 이게 왜 안지켜질까?
-    distributed_keypoints= DistributeQuadTree(keypoints,minX,maxX,minY,maxY,nFeatures, min_mpt_distance);
-  }
   /*
     현재 frame에서 관찰되는 (모든 잠재적 연결가능성있는) Qth를 모두 받기
      - 이거 나중에는 dominant group 과만 연결하는 쪽으로 가야할 순 있지만,. 일단은.
   */
   const auto& Tcqs = frame->GetTcqs();
-#if 1
-  for(const auto& kpt : distributed_keypoints){
-    const int n = kpt.class_id;
-#else
-  for(size_t n=0; n<keypoints.size(); n++){
-    const cv::KeyPoint& kpt = keypoints[n];
-#endif
+  for(int n=0; n < keypoints.size(); n++){
     float z = depths[n];
     if(z < 1e-5) // No depth too far
       z = 1e+2;
@@ -715,6 +701,18 @@ void Pipeline::SupplyMappoints(Frame* frame,
       }
       continue;
     }
+    const cv::KeyPoint& kpt = keypoints[n];
+    std::set<int> neighbors = frame->SearchRadius(Eigen::Vector2d(kpt.pt.x, kpt.pt.y), min_mpt_distance);
+    bool exists = false;
+    for(int nn : neighbors){
+      if(mappoints[nn]){
+        exists=true;
+        break;
+      }
+    }
+    if(exists)
+      continue;
+
     static Ith nMappoints = 0;
     if(!ins)
       throw -1;
@@ -808,13 +806,13 @@ cv::Mat VisualizeStates(const RigidGroup* rig,
       const std::set<Frame*>& keyframes = mp->GetKeyframes(qth);
       for(auto it = keyframes.rbegin(); it!=keyframes.rend(); it++){
         const cv::Point2f& pt0 = (*it)->GetKeypoint( (*it)->GetIndex(mp) ).pt;
-        cv::circle(dst_frame, pt, 2, CV_RGB(255,255,0), -1);
+        cv::circle(dst_frame, pt, 3, CV_RGB(0,255,0), -1);
         cv::line(dst_frame, pt, pt0, CV_RGB(255,255,0),  1);
         break;
       }
     }
     else {
-      cv::circle(dst_frame, pt, 3, CV_RGB(200,200,200), 1);
+      cv::circle(dst_frame, pt, 2, CV_RGB(150,150,150), 1);
     }
   }
   {
