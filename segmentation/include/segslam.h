@@ -1,6 +1,7 @@
 #ifndef SEG_FRAME_
 #define SEG_FRAME_
 #include <flann/flann.hpp> // include it before opencv
+#include <g2o/types/slam3d/se3quat.h>
 #include <opencv2/core/mat.hpp>
 #include "stdafx.h"
 #include "seg.h"
@@ -199,15 +200,20 @@ public:
   ~RigidGroup();
   bool IncludeInstance(Instance* ins);
   bool ExcludeInstance(Instance* ins);
+  void ExcludeMappoint(Mappoint* mp);
+
   Instance* GetBgInstance() const { return bg_instance_; }
   const Qth& GetId() const { return id_; }
   const std::map<Pth, Instance*>& GetIncludedInstances() const { return included_instances_; }
   const std::map<Pth, Instance*>& GetExcludedInstances() const { return excluded_instances_; }
+  const std::map<Ith, Mappoint*>& GetExcludedMappoints() const { return excluded_mappoints_; }
 
 private:
   const Qth id_;
   Instance*const bg_instance_;
   std::map<Pth, Instance*> excluded_instances_;
+  std::map<Ith, Mappoint*> excluded_mappoints_;
+
   std::map<Pth, Instance*> included_instances_; // TODO Need?
 };
 
@@ -226,7 +232,8 @@ public:
            const cv::Mat& gradx,
            const cv::Mat& grady,
            const cv::Mat& valid_grad,
-           const cv::Mat vis_rgb=cv::Mat());
+           const cv::Mat vis_rgb=cv::Mat(),
+           const EigenMap<int,g2o::SE3Quat>* gt_Tcws = nullptr);
 
 private:
   void SupplyMappoints(Frame* frame, RigidGroup* rig_new);

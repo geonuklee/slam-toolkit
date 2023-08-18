@@ -959,7 +959,7 @@ void DistanceWatershed(const cv::Mat _dist_fromedge,
         if(indirect_boundary_counts[m0].count(m1))
           n_edge = indirect_boundary_counts[m0][m1];
         float n_all = n_contact+n_edge;
-        if(n_edge > .5*n_all)
+        if(n_edge > .2*n_all)
           continue;
         //printf("Pair between %d,%d. Contact %.2f/%.f\n",std::min(m0,m1),std::max(m0,m1),n_contact,n_all);
         DSNode* child = nodes+std::max(m0,m1);

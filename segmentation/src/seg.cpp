@@ -1,5 +1,7 @@
 #include <opencv2/core/types.hpp>
 #include <opencv2/cudaoptflow.hpp>
+#include <opencv2/highgui.hpp>
+#include <opencv2/imgproc.hpp>
 // #include <opencv2/cudafilters.hpp>
 
 #include "../include/seg.h"
@@ -422,26 +424,35 @@ cv::Mat GetConcaveEdges(const cv::Mat gradx,
   cv::Mat hessian = cv::Mat::zeros(depth.rows, depth.cols, CV_32FC1);
 
   // TODO Hessian 의 dl도 gradients 처럼 [meter] unit으로 변경
+#if 1
+  const float s = .1; // sample offset. [meter]
+  const float R = .5; // NMAS range. [meter]
+#else
   const int dl = 5; // "Shallow groove"를 찾을것도 아닌데, 간격이 좁을필요가..
   const int R = 10; // NMAS range
-  /*
-  const float s = 1. / ( 2. * (float)dl );
-  const float sfx = s*camera.GetK()(0,0);
-  const float sfy = s*camera.GetK()(1,1);
-  */
   const float fx = camera.GetK()(0,0);
   const float fy = camera.GetK()(1,1);
+#endif
+  const float sfx = s*camera.GetK()(0,0);
+  const float sfy = s*camera.GetK()(1,1);
+  const float Rfx = R*camera.GetK()(0,0);
+  //const float Rfy = R*camera.GetK()(1,1);
 
-  for(int r=dl; r < depth.rows-dl; r++) {
-    for(int c=dl; c < depth.cols-dl; c++) {
+  for(int r=0; r < depth.rows-0; r++) {
+    for(int c=0; c < depth.cols-0; c++) {
       const cv::Point2i pt(c,r);
       if(!valid_mask.at<uchar>(pt))
         continue;
       const float& z = depth.at<float>(pt);
-      cv::Point2i ptx0(c-dl,r);
-      cv::Point2i ptx1(c+dl,r);
-      cv::Point2i pty0(c,r-dl);
-      cv::Point2i pty1(c,r+dl);
+      if(z < 1e-3)
+        continue;
+      const int du = std::max<int>( (int) sfx/z, 1);
+      const int dv = std::max<int>( (int) sfy/z, 1);
+
+      cv::Point2i ptx0(c-du,r);
+      cv::Point2i ptx1(c+du,r);
+      cv::Point2i pty0(c,r-dv);
+      cv::Point2i pty1(c,r+dv);
       if(ptx0.x < 0 || !valid_mask.at<uchar>(ptx0) )
         continue;
       if(ptx1.x > depth.cols || !valid_mask.at<uchar>(ptx1) )
@@ -450,8 +461,15 @@ cv::Mat GetConcaveEdges(const cv::Mat gradx,
         continue;
       if(pty1.y > depth.rows || !valid_mask.at<uchar>(pty1) )
         continue;
-      float hxx = gradx.at<float>(ptx1) - gradx.at<float>(ptx0);
-      float hyy = grady.at<float>(pty1) - grady.at<float>(pty0);
+      const float zx0 = depth.at<float>(ptx0);
+      const float zx1 = depth.at<float>(ptx1);
+      const float zy0 = depth.at<float>(pty0);
+      const float zy1 = depth.at<float>(pty1);
+      if(zx0 < 1e-3 || zx1 < 1e-3 || zy0 < 1e-3 || zy1 < 1e-3)
+        continue;
+
+      float hxx = (gradx.at<float>(ptx1) - gradx.at<float>(ptx0) ) / s;
+      float hyy = (grady.at<float>(pty1) - grady.at<float>(pty0) ) / s;
       hessian.at<float>(pt) = hxx + hyy;
     }
   }
@@ -463,16 +481,25 @@ cv::Mat GetConcaveEdges(const cv::Mat gradx,
   };
 
   cv::Mat edges = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
-  for(int r=dl; r < depth.rows-dl; r++) {
-    for(int c=dl; c < depth.cols-dl; c++) {
+  const int ioffset = 5;
+  for(int r=ioffset; r < depth.rows-ioffset; r++) {
+    for(int c=ioffset; c < depth.cols-ioffset; c++) {
       const cv::Point2i pt(c,r);
       if(!valid_mask.at<uchar>(pt))
         continue;
+      const float& z = depth.at<float>(pt);
+      if(z < 1e-3)
+        continue;
       const float& h = hessian.at<float>(pt);
+      int dL = std::max<int>( Rfx/z, 2);
       bool ismax = true;
-      for(int dr=1; dr<R; dr++){
+      for(int dl=dL-1; dl>0; dl--){
         for(const auto& dpt : samples){
-          const cv::Point2i pt1 = pt + dr * dpt;
+          const cv::Point2i pt1 = pt + dl * dpt;
+          if(pt1.x < ioffset || pt1.y < ioffset || pt1.x >= depth.cols-ioffset || pt1.y >= depth.rows-ioffset ){
+            ismax = false; // 범위 초과할경우 그만둠.
+            break;
+          }
           const float& h1 = hessian.at<float>(pt1);
           if(std::abs(h1) < std::abs(h))
             continue;
@@ -495,9 +522,40 @@ cv::Mat GetConcaveEdges(const cv::Mat gradx,
 }
 
 cv::Mat FilterThinNoise(const cv::Mat edges){
+#if 1
+  cv::Mat ones = cv::Mat::ones(7,7,edges.type());
+  cv::Mat expanded_outline;
+  cv::dilate(255*edges, expanded_outline, ones);
+  cv::threshold(expanded_outline,expanded_outline, 200., 255, cv::THRESH_BINARY);
+  //cv::imshow("Before filter", 255*edges);
+  cv::Mat labels, stats, centroids;
+  cv::connectedComponentsWithStats(expanded_outline,labels,stats,centroids);
+  std::set<int> inliers;
+  for(int i = 0; i < stats.rows; i++){
+    const int max_wh = std::max(stats.at<int>(i,cv::CC_STAT_WIDTH),
+                                stats.at<int>(i,cv::CC_STAT_HEIGHT));
+    if(max_wh < 20)
+      continue;
+    if(stats.at<int>(i,cv::CC_STAT_AREA) < 400)
+      continue;
+    inliers.insert(i);
+  }
+  cv::Mat output = cv::Mat::zeros(edges.rows, edges.cols, CV_8UC1);
+  for(int r = 0; r < output.rows; r++){
+    for(int c = 0; c < output.cols; c++){
+      if(edges.at<unsigned char>(r,c) < 1)
+        continue;
+      const int& l = labels.at<int>(r,c);
+      if(inliers.count(l))
+        output.at<uchar>(r,c) = 1;
+    }
+  }
+  //cv::imshow("After filter", 255*output);
+#else
   cv::Mat kernel = cv::Mat::ones(3,3,edges.type());
   cv::Mat output;
   cv::morphologyEx(edges, output, cv::MORPH_OPEN, kernel );
+#endif
   return output;
 }
 

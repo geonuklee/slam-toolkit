@@ -34,6 +34,8 @@ OTHER DEALINGS IN THE SOFTWARE.
 //#include <QApplication>
 //#include <QWidget>
 #include "segslam.h"
+#include <exception>
+#include <g2o/types/slam3d/se3quat.h>
 
 int TestKitti(int argc, char** argv) {
   //Seq :"02",("13" "20");
@@ -91,21 +93,21 @@ int TestWaymodataset(int argc, char** argv) {
 #endif
   seg::Pipeline pipeline(camera, &extractor);
 
-  bool visualize_segment = false;
+  bool visualize_segment = true;
 
   //std::cout << "Intrinsic = \n" << camera->GetK() << std::endl;
-  const EigenMap<int, g2o::SE3Quat>& Tcws = dataset.GetTcws();
+  const EigenMap<int, g2o::SE3Quat> Tcws = dataset.GetTcws();
   bool stop = 0==std::stoi(start);
   for(int i=0; i<dataset.Size(); i+=1){
-    const auto Twc = Tcws.at(i).inverse();
-    std::cout << i << ", gt t=" << Twc.translation().transpose() << std::endl;
+    //const auto Twc = Tcws.at(i).inverse();
+    //std::cout << i << ", gt t=" << Twc.translation().transpose() << std::endl;
     const cv::Mat rgb   = dataset.GetImage(i,cv::IMREAD_UNCHANGED);
     const cv::Mat depth = dataset.GetDepthImage(i);
     cv::Mat gray, flow0, gradx, grady, valid_grad;
     cv::cvtColor(rgb,gray,cv::COLOR_BGR2GRAY);
     const std::map<seg::Pth, ShapePtr>& shapes = segmentor.Put(gray, depth, *camera, 
                                                                visualize_segment ? rgb : cv::Mat(), flow0, gradx, grady, valid_grad);
-    pipeline.Put(gray, depth, flow0, shapes, gradx, grady, valid_grad, rgb);
+    pipeline.Put(gray, depth, flow0, shapes, gradx, grady, valid_grad, rgb, &Tcws);
     /*
     if(i<1)
       continue;

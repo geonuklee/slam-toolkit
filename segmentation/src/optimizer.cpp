@@ -148,11 +148,8 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
       Mappoint* mp = jth_mappoints[n];
       if(!mp)
         continue;
-      if(!v_mappoints.count(mp)){
-        if(mp->GetKeyframes(qth).size()>1)
-          throw -1;
+      if(!v_mappoints.count(mp)) // ins가 exclude 된 케이스라 neighbors에서 제외됬을 수 있다.
         continue;
-      }
       auto v_mp = v_mappoints.at(mp);
       const cv::KeyPoint& kpt = frame->GetKeypoint(n);
       Eigen::Vector3d uvi = frame->GetNormalizedPoint(n);
@@ -258,6 +255,11 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
           optimizer.addEdge(edge);
         }
       }
+
+      g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
+      rk->setDelta(delta);
+      edge->setRobustKernel(rk);
+
       info.edge = edge;
       const Ith& ith = mp->GetId();
       if(vis_verbose)
@@ -273,7 +275,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
   for(auto it_v_sw : prior_edges){
     // Set Prior information
     double info = 1e-5 *  swedges_parameter.at(it_v_sw.first);
-    info = std::max(1e-3, info);
+    //info = std::max(1e-3, info);
     //const double info = 1e-2; // Edge 숫자에 비례해야하나?
     it_v_sw.second->SetInfomation(info);
   }
@@ -408,10 +410,10 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
     const auto& T1q = curr_frame->GetTcq(0);
     const auto T01 = T0q * T1q.inverse();
     std::cout << "dT = " << T01.translation().transpose() << std::endl;
-    if(T01.translation().z() < 0.)
-      throw -2;
-    if(T01.translation().norm() < 1e-2)
-      throw -1;  // 버그 감지용.정지장면이 있는 seq에서는 오인식함.
+    //if(T01.translation().z() < 0.)
+    //  throw -2;
+    //if(T01.translation().norm() < 1e-2)
+    //  throw -1;  // 버그 감지용.정지장면이 있는 seq에서는 오인식함.
   }
 
   if(txt_verbose){

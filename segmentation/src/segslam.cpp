@@ -7,9 +7,11 @@
 #include "orb_extractor.h"
 #include "seg.h"
 #include "util.h"
+#include <g2o/types/slam3d/se3quat.h>
 #include <opencv2/core.hpp>
 #include <opencv2/core/mat.hpp>
 #include <opencv2/core/types.hpp>
+#include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 #include <queue>
 #include <string>
@@ -122,8 +124,6 @@ void Frame::ExtractAndNormalizeKeypoints(const cv::Mat gray,
                                          FeatureDescriptor* extractor,
                                          const cv::Mat& mask) {
   extractor->Extract(gray, mask, keypoints_, descriptions_);
-  for(int i=0; i<keypoints_.size(); i++)
-    keypoints_[i].class_id = i; // For calling DistributeOctTree at SupplyMappoints
   mappoints_.resize(keypoints_.size(), nullptr);
   instances_.resize(keypoints_.size(), nullptr);
   measured_depths_.resize(keypoints_.size(), 0.f);
@@ -272,6 +272,10 @@ bool RigidGroup::ExcludeInstance(Instance* ins) {
    count = false;;
   excluded_instances_[pth] = ins;
   return count;
+}
+
+void RigidGroup::ExcludeMappoint(Mappoint* mp) {
+  excluded_mappoints_[mp->GetId()] = mp;
 }
 
 bool RigidGroup::IncludeInstance(Instance* ins) {
@@ -741,7 +745,9 @@ cv::Mat VisualizeStates(const RigidGroup* rig,
                         const float& switch_threshold,
                         const std::map<Jth, Frame* >& neighbor_frames,
                         const std::map<Pth,ShapePtr>& curr_shapes,
-                        const cv::Mat& outline_mask) {
+                        const cv::Mat& outline_mask,
+                        const EigenMap<int,g2o::SE3Quat>* gt_Tcws = nullptr
+                        ) {
   const Qth qth = rig->GetId();
   const cv::Mat rgb = frame->GetRgb();
   cv::Mat dst_frame; {
@@ -873,22 +879,51 @@ cv::Mat VisualizeStates(const RigidGroup* rig,
 
   cv::Mat dst_texts = cv::Mat::zeros( rgb.rows, 400, CV_8UC3); {
     int fontFace = cv::FONT_HERSHEY_SIMPLEX;
-    double fontScale = .5;
+    double fontScale = .4;
     int thickness = 1;
     int baseline=0;
     int y = 0;
     cv::rectangle(dst_texts,cv::Rect(0,0,dst_texts.cols, dst_texts.rows),CV_RGB(255,255,255),-1);
     std::map<Jth, Frame*> keyframes = neighbor_frames;
     keyframes[frame->GetId()] = frame;
+    Frame* prev_kf = nullptr;
     for(auto it_kf : keyframes){
       const Jth& jth = it_kf.first;
       Frame* kf = it_kf.second;
-      const auto t = kf->GetTcq(qth).inverse().translation();
+      auto t = kf->GetTcq(qth).inverse().translation();
       char text[100];
-      sprintf(text,"F#%2d,  (%4.3f, %4.3f, %4.3f)", kf->GetId(), t[0], t[1], t[2] );
+
+      sprintf(text,"est : F#%2d,  (%4.3f, %4.3f, %4.3f)", kf->GetId(), t[0], t[1], t[2] );
       auto size = cv::getTextSize(text, fontFace, fontScale, thickness, &baseline);
       y += size.height+2;
       cv::putText(dst_texts, text, cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
+
+      if(!gt_Tcws)
+        continue;
+      const g2o::SE3Quat& Tcw = gt_Tcws->at(jth);
+      t = Tcw.inverse().translation();
+      sprintf(text,"true: F#%2d,  (%4.3f, %4.3f, %4.3f)", kf->GetId(), t[0], t[1], t[2] );
+      size = cv::getTextSize(text, fontFace, fontScale, thickness, &baseline);
+      y += size.height+2;
+      cv::putText(dst_texts, text, cv::Point(5, y), fontFace, fontScale, CV_RGB(120,120,120), thickness);
+
+      if(!prev_kf){
+        prev_kf = kf;
+        continue;
+      }
+      // dT =Tc0 c1 = Tc0 w * Tc1 w.inverse()
+      g2o::SE3Quat est_dT = prev_kf->GetTcq(qth) * kf->GetTcq(qth).inverse();
+      g2o::SE3Quat true_dT = gt_Tcws->at(prev_kf->GetId()) * gt_Tcws->at(kf->GetId()).inverse();
+      g2o::SE3Quat err_dT = true_dT.inverse() * est_dT;
+      if(true_dT.translation().norm() < 1e-2)
+        continue;
+      float norm_ratio = est_dT.translation().norm() / true_dT.translation().norm();
+      float err_ratio = err_dT.translation().norm() / true_dT.translation().norm();
+      sprintf(text,"norm ratio: %4.3f", norm_ratio);
+      cv::putText(dst_texts, text, cv::Point(20+size.width, y), fontFace, fontScale, CV_RGB(255,0,0), thickness);
+
+      y += 2;
+      prev_kf = kf;
     }
 
     y+= 10;
@@ -977,7 +1012,9 @@ void Pipeline::Put(const cv::Mat gray,
                    const cv::Mat flow0,
                    const std::map<Pth, ShapePtr>& curr_shapes,
                    const cv::Mat& gradx, const cv::Mat& grady, const cv::Mat& valid_grad,
-                   const cv::Mat vis_rgb)
+                   const cv::Mat vis_rgb,
+                   const EigenMap<int, g2o::SE3Quat>* gt_Tcws
+                   )
 {
   const bool fill_bg_with_dominant = true;
   const float search_radius = 30.;
@@ -1127,7 +1164,8 @@ void Pipeline::Put(const cv::Mat gray,
                                   switch_threshold,
                                   neighbor_frames,
                                   curr_shapes,
-                                  outline_mask);
+                                  outline_mask,
+                                  gt_Tcws);
     cv::imshow("segslam", dst); // TODO 
 
   }
