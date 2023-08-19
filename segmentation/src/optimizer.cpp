@@ -169,15 +169,15 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
       double uv_info = 0.; {
         double p = std::max(std::abs(uvi[0]), std::abs(uvi[1]) );
         //double p = std::abs(uvi[0]);
-        double pmin = 0.25;
-        double pmax = 0.35;
+        double pmin = 0.3;
+        double pmax = 0.4;
         uv_info = std::max(1e-10 , (pmax-p) /(pmax-pmin) );
         uv_info = std::min(1., uv_info);
         uv_info *= uv_info;
       }
 #endif
 #if 1
-      double invd_info = 1e-5;
+      double invd_info = 1e+2;
 #else
       double invd_info = 0.;
       if(vg){
@@ -196,9 +196,9 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
       //const double invd_info = 1e+2;
       //const double invd_info =  vg ? std::max(1., .2 - std::abs(gx) ) : MIN_NUM;
       /* TODO False positive를 줄이기위해
-      * [ ] Huber kernel
-      * [ ] Fisher information
-        * [ ] uv info는 선형화. std::max(1e-1, tan(30deg) - normal uv) 이런거
+      * [x] Huber kernel
+      * [x] Fisher information
+        * [x] uv info는 선형화. std::max(1e-1, tan(30deg) - normal uv) 이런거
       * [ ] Instance별 error 요인 분류. depth 오차가 안줄어드는건지 uv 오차가 안줄어드는건지.
         * ins 별 말고 point별로 표시하는것도 좋겠다. 
       */
@@ -274,7 +274,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
 
   for(auto it_v_sw : prior_edges){
     // Set Prior information
-    double info = 1e-5 *  swedges_parameter.at(it_v_sw.first);
+    double info = 1e-4 *  swedges_parameter.at(it_v_sw.first);
     //info = std::max(1e-3, info);
     //const double info = 1e-2; // Edge 숫자에 비례해야하나?
     it_v_sw.second->SetInfomation(info);

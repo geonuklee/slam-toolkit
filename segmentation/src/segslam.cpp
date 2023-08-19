@@ -678,7 +678,7 @@ void AddKeyframesAtMappoints(Frame* keyframe, RigidGroup* rig_new) {
 
 void Pipeline::SupplyMappoints(Frame* frame,
                                RigidGroup* rig_new) {
-  const double min_mpt_distance = 15.;
+  const double min_mpt_distance = 10.;
   const auto& keypoints = frame->GetKeypoints();
   const auto& instances = frame->GetInstances();
   const auto& depths    = frame->GetMeasuredDepths();
