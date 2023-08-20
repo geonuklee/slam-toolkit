@@ -289,7 +289,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
   const Jth curr_jth = curr_frame->GetId();
   int n_pose = 0;
   int N_pose = v_poses.size();
-  bool txt_verbose = true;
+  bool txt_verbose = false;
   if(txt_verbose)
     std::cout << "At Q#" << qth << " curr F#"<< curr_frame->GetId() <<"--------------------" << std::endl;
   for(auto it_poses : v_poses){
@@ -405,7 +405,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
 #endif
   }
 
-  {
+  if(txt_verbose){
     const auto& T0q = prev_frame->GetTcq(0);
     const auto& T1q = curr_frame->GetTcq(0);
     const auto T01 = T0q * T1q.inverse();

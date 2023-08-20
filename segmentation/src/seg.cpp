@@ -353,7 +353,7 @@ void GetGrad(const cv::Mat depth , const cv::Mat valid_mask,
   const float s = 0.1;
   const float sfx = s*camera.GetK()(0,0);
   const float sfy = s*camera.GetK()(1,1);
-#if 0
+#if 1
   cv::Mat dst;
 #else
   cv::Mat dst = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC3);
@@ -801,7 +801,7 @@ const std::map<int, ShapePtr>& Segmentor::_Put(cv::Mat gray,
     PutKeyframe(gray, g_gray);
 
   auto stop = std::chrono::steady_clock::now();
-  std::cout << "etime = " << std::chrono::duration_cast<std::chrono::milliseconds>(stop-start).count() << "[msec]" << std::endl;
+  //std::cout << "etime = " << std::chrono::duration_cast<std::chrono::milliseconds>(stop-start).count() << "[msec]" << std::endl;
   if(!vis_rgb.empty()){
     cv::Mat dst = EntireVisualization(vis_rgb, valid_depth, outline_edges, global_shapes_, marker);
     cv::imshow("vis", dst);

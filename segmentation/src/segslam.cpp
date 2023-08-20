@@ -666,7 +666,7 @@ std::map<Qth,bool> Pipeline::FrameNeedsToBeKeyframe(Frame* curr_frame,
     }
     const size_t& n_mappoints_lkf = lkf_n_mappoints.at(qth);
     size_t min_mpt_threshold = std::max<size_t>(10, .5 * n_mappoints_lkf);
-    printf("KF test. Jth %d, Qth %d,  %ld / %ld (%ld)\n", curr_frame->GetId(), qth,n_mappoints_curr, min_mpt_threshold, n_mappoints_lkf);
+    //printf("KF test. Jth %d, Qth %d,  %ld / %ld (%ld)\n", curr_frame->GetId(), qth,n_mappoints_curr, min_mpt_threshold, n_mappoints_lkf);
     need_keyframes[qth] = n_mappoints_curr < min_mpt_threshold;
   }
   if(rig_new)
@@ -1134,12 +1134,9 @@ void Pipeline::Put(const cv::Mat gray,
     GetNeighbors(latest_kf, qth, neighbor_mappoints, neighbor_frames);
 #if 0
     /*
-    ProjectionMatch는 
-    flow로부터 motion update와 
-    pth0 != pth_curr 인 경우에 예외처리가 팔요해보인다.
+    ProjectionMatch는 flow로부터 motion update와 pth0 != pth_curr 인 경우에 예외처리가 팔요해보인다.
     */
-    std::map<int, std::pair<Mappoint*, double> > proj_matches
-      = ProjectionMatch(camera_, extractor_, neighbor_mappoints, curr_frame, qth, search_radius);
+    std::map<int, std::pair<Mappoint*, double> > proj_matches = ProjectionMatch(camera_, extractor_, neighbor_mappoints, curr_frame, qth, search_radius);
     for(auto it : proj_matches){
       const int& prj_n = it.first;
       Mappoint*const prj_mp = it.second.first;
@@ -1190,34 +1187,34 @@ void Pipeline::Put(const cv::Mat gray,
      - 나머지 '자잘' 한것은 그냥 독립된 instance로 취급.
      - '자잘' 한것은 일단 medain length tracking으로 관찰하다가 일정프레임 이상 유지되면 병합.
      */
-    cv::Mat dst = VisualizeStates(rig,
-                                  curr_frame,
-                                  density_scores,
-                                  switch_states,
-                                  switch_threshold,
-                                  neighbor_frames,
-                                  curr_shapes,
-                                  outline_mask,
-                                  gt_Tcws);
-    cv::imshow("segslam", dst); // TODO 
-
-  }
-
-  if(true){ // Mappoint 보충이 매 프레임미다 있어야 한다는게 타당한가?
-#if 1
-    std::map<Qth,bool> need_keyframe = FrameNeedsToBeKeyframe(curr_frame, rig_new);
-    for(auto it : need_keyframe){
-      if(!it.second)
-        continue;
-      keyframes_[it.first][curr_frame->GetId()] = curr_frame;
-      SupplyMappoints(curr_frame, rig_new);
+    if(qth == 0){
+      cv::Mat dst = VisualizeStates(rig,
+                                    curr_frame,
+                                    density_scores,
+                                    switch_states,
+                                    switch_threshold,
+                                    neighbor_frames,
+                                    curr_shapes,
+                                    outline_mask,
+                                    gt_Tcws);
+      cv::imshow("segslam", dst); // TODO
     }
-#else
-    // TODO 제대로 된 keyframe 선택
-    keyframes_[0][curr_frame->GetId()] = curr_frame;
-    SupplyMappoints(curr_frame, rig_new);
-#endif
   }
+
+#if 1
+  std::map<Qth,bool> need_keyframe = FrameNeedsToBeKeyframe(curr_frame, rig_new);
+  for(auto it : need_keyframe){
+    if(!it.second)
+      continue;
+    keyframes_[it.first][curr_frame->GetId()] = curr_frame;
+    SupplyMappoints(curr_frame, rig_new);
+  }
+#else
+  // TODO 제대로 된 keyframe 선택
+  keyframes_[0][curr_frame->GetId()] = curr_frame;
+  SupplyMappoints(curr_frame, rig_new);
+#endif
+
   prev_frame_ = curr_frame;
   prev_rigs_ = curr_rigs;
   prev_dominant_qth_ = dominant_qth;
