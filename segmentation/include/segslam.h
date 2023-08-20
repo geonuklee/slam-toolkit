@@ -105,7 +105,7 @@ public:
                                   );
   void SetMeasuredDepths(const cv::Mat depth);
 
-  std::set<int> SearchRadius(const Eigen::Vector2d& uv, double radius) const;
+  std::list<int> SearchRadius(const Eigen::Vector2d& uv, double radius) const;
   std::vector<std::vector<int> > SearchRadius(const flann::Matrix<double>& points, double radius) const;
   std::vector<std::vector<int> > SearchRadius(const flann::Matrix<double>& points, double radius, 
                                               std::vector<std::vector<double> >& dists) const;

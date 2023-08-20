@@ -91,15 +91,15 @@ void Frame::SetMappoint(Mappoint* mp, int index) {
   return;
 }
 
-std::set<int> Frame::SearchRadius(const Eigen::Vector2d& uv, double radius) const {
+std::list<int> Frame::SearchRadius(const Eigen::Vector2d& uv, double radius) const {
   flann::Matrix<double> query((double*)uv.data(), 1, 2);
-  std::set<int> inliers;
+  std::list<int> inliers;
   std::vector<std::vector<int> > indices;
   std::vector<std::vector<double> > dists;
   const flann::SearchParams param;
   flann_kdtree_->radiusSearch(query, indices, dists, radius*radius, param);
   for(int idx :  indices[0])
-    inliers.insert(idx);
+    inliers.push_back(idx);
   return inliers;
 }
 
@@ -287,47 +287,65 @@ bool RigidGroup::IncludeInstance(Instance* ins) {
   return true;
 }
 
+inline double lerp(double x0, double y0, double x1, double y1, double x) {
+  return y0 + (x - x0) * (y1 - y0) / (x1 - x0);
+}
+
 std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
                                                        const FeatureDescriptor* extractor,
                                                        const cv::Mat& flow0,
                                                        const Frame* prev_frame,
-                                                       const double search_radius,
                                                        bool verbose,
                                                        Frame* curr_frame) {
-  const double best12_threshold = .5;
-  cv::Mat dst;
-  if(verbose)
-    dst = curr_frame->GetRgb().clone();
+  const double best12_threshold = .7;
+  const double search_radius_min = 5.; // [pixel]
+  const double far_depth         = 50.; // [meter] for min radius.
+  const double search_radius_max = 20.; // [pixel]
+  const double near_depth        = 15.; // [meter] for max radius
   const auto& keypoints0 = prev_frame->GetKeypoints();
   const auto& mappoints0 = prev_frame->GetMappoints();
-  double* ptr_queries = new double[2 * mappoints0.size()];
-  std::vector<int> vec_index0; vec_index0.reserve(mappoints0.size());
-  for(int n=0; n < mappoints0.size(); n++){
-    Mappoint* mp0 = mappoints0[n];
+  const auto& depths0    = prev_frame->GetMeasuredDepths();
+  const auto& keypoints1 = curr_frame->GetKeypoints();
+  cv::Mat dst0, dst1;
+  if(verbose){
+    dst0 = prev_frame->GetRgb().clone();
+    dst1 = curr_frame->GetRgb().clone();
+    for(int n=0; n<keypoints0.size(); n++)
+      cv::circle(dst0,  keypoints0[n].pt, 3, CV_RGB(150,150,150), 1);
+    for(int n=0; n<keypoints1.size(); n++)
+      cv::circle(dst1,  keypoints1[n].pt, 3, CV_RGB(150,150,150), 1);
+  }
+  std::map<int, std::pair<Mappoint*, double> > matches;
+  for(int n0=0; n0 < mappoints0.size(); n0++){
+    Mappoint* mp0 = mappoints0[n0];
     if(!mp0)
       continue;
-    const cv::Point2f& pt0 = keypoints0[n].pt;
+    const cv::KeyPoint& kpt0 = keypoints0[n0];
+    const cv::Point2f&  pt0  = kpt0.pt;
+    const double z = depths0[n0] < 1e-5 ? far_depth : depths0[n0];
+    double search_radius = lerp(near_depth, search_radius_max, far_depth, search_radius_min, z);
+    search_radius = std::max(search_radius, search_radius_min);
+    search_radius = std::min(search_radius, search_radius_max);
     const auto& dpt01 = flow0.at<cv::Point2f>(pt0);
-    Eigen::Vector2d pt1(pt0.x+dpt01.x, pt0.y+dpt01.y);
-    if(!curr_frame->IsInFrame(camera,pt1))  //  땅바닥 제외
+    Eigen::Vector2d eig_pt1(pt0.x+dpt01.x, pt0.y+dpt01.y);
+    if(!curr_frame->IsInFrame(camera,eig_pt1))  //  땅바닥 제외
       continue;
-    double* ptr = ptr_queries+ 2*vec_index0.size();
-    ptr[0] = pt1.x();
-    ptr[1] = pt1.y();
-    vec_index0.push_back(n);
-  }
-  flann::Matrix<double> queries(ptr_queries, vec_index0.size(), 2);
-  std::vector<std::vector<int> > batch_search = curr_frame->SearchRadius(queries, search_radius);
-  std::map<int, std::pair<Mappoint*, double> > matches;
-  const auto& keypoints1 = curr_frame->GetKeypoints();
-  const auto& mappoints1 = curr_frame->GetMappoints();
-  for(int i=0; i< batch_search.size(); i++){
-    const std::vector<int>& candidates = batch_search.at(i);
+
+    if(verbose){
+      cv::Point2f pt1(eig_pt1.x(), eig_pt1.y());
+      cv::line(  dst1, pt0, pt1, CV_RGB(0,0,255), 1);
+      cv::circle(dst1, pt1, 3,  CV_RGB(0,0,255), -1);
+      cv::line(  dst0, pt0, pt1, CV_RGB(0,0,255), 1);
+      cv::circle(dst0, pt0, 3,  CV_RGB(0,0,255), -1);
+      char text[100];
+      sprintf(text,"%2.1f",z);
+      cv::putText(dst0, text, pt0, cv::FONT_HERSHEY_SIMPLEX, .4,  CV_RGB(255,0,0) );
+      cv::circle(dst0, pt1, search_radius,  CV_RGB(0,255,0), 1);
+    }
+
+    std::list<int> candidates = curr_frame->SearchRadius(eig_pt1, search_radius);
     if(candidates.empty())
       continue;
-    const int& n0 = vec_index0[i];
-    Mappoint* mp0 = mappoints0[n0];
-    const cv::KeyPoint& kpt0 = keypoints0[n0];
     const cv::Mat desc0 = prev_frame->GetDescription(n0);
     double dist0 = 1e+9;
     double dist1 = dist0;
@@ -336,13 +354,7 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
     for(const int& n1 : candidates){
       const cv::Mat desc1 = curr_frame->GetDescription(n1);
       const cv::KeyPoint& kpt1 = keypoints1[n1];
-      if(! curr_frame->IsInFrame(camera, Eigen::Vector2d(kpt1.pt.x, kpt1.pt.y)) )
-        continue;
       double dist = extractor->GetDistance(desc0,desc1);
-      if(std::abs(kpt0.angle - kpt1.angle) > 40.)
-        continue;
-      if(kpt0.octave != kpt1.octave)
-        continue;
       if(dist < dist0){
         dist1 = dist0;
         champ1 = champ0;
@@ -356,7 +368,15 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
     }
     if(champ0 < 0)
       continue;
-    if(dist0 < dist1 * best12_threshold){
+    {
+      const cv::KeyPoint& kpt1 = keypoints1[champ0];
+      if(std::abs(kpt0.angle - kpt1.angle) > 20.) // flow match는 낮은 angle 오차 허용.
+        continue;
+      if(kpt0.octave != kpt1.octave)
+        continue;
+    }
+    bool c2 = dist0 < dist1 * best12_threshold;
+    if(candidates.size() < 6 || c2  ){
       if(matches.count(champ0)){
         // 이미 matching candidate가 있는 keypoint가 선택된 경우,
         // 오차를 비교하고 교체 여부 결정
@@ -365,27 +385,23 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
       }
       matches[champ0] = std::make_pair(mp0,dist0);
     }
-  } // for batch_search.size
+  }
 
-  if(!dst.empty()){ // Visualization
+  if(!dst1.empty()){ // Visualization
     for(auto it : matches){
       const int& i1 = it.first;
       const cv::Point2f& pt1 = curr_frame->GetKeypoint(i1).pt;
       const int& i0 = prev_frame->GetIndex(it.second.first);
       const cv::Point2f& pt0 = prev_frame->GetKeypoint(i0).pt;
-      if(prev_frame->GetDepth(i0) < 1e-5 && curr_frame->GetDepth(i1) < 1e-5)
-        cv::line(dst, pt0, pt1, CV_RGB(255,0,0), 2);
-      else
-        cv::line(dst, pt0, pt1, CV_RGB(0,255,0), 2);
-      //cv::circle(dst, pt1, 3,  CV_RGB(0,0,255), 1);
+      cv::line(  dst1, pt0, pt1, CV_RGB(255,255,0), 1);
+      cv::circle(dst1, pt1, 3,  CV_RGB(255,255,0), 1);
     }
     char buffer[200];
     snprintf(buffer, sizeof(buffer), "Jth #%d, #%d", prev_frame->GetId(), curr_frame->GetId() );
-    cv::putText(dst, buffer, cv::Point(10, dst.rows - 20), cv::FONT_HERSHEY_SIMPLEX, 1.,  CV_RGB(255,0,0), 2);
-    cv::imshow("flow match", dst);
+    cv::putText(dst1, buffer, cv::Point(10, dst1.rows - 20), cv::FONT_HERSHEY_SIMPLEX, 1.,  CV_RGB(255,0,0), 2);
+    cv::imshow("flow 01", dst0);
+    cv::imshow("flow 10", dst1);
   }
-
-  delete[] ptr_queries;
   return matches;
 }
 
@@ -397,7 +413,7 @@ std::map<int, std::pair<Mappoint*,double> > ProjectionMatch(const Camera* camera
                                                             const Qth qth,
                                                             double search_radius) {
   const bool use_latest_desc = false;
-  const double best12_threshold = 0.5;
+  const double best12_threshold = 1.;
   double* ptr_projections = new double[2 * mappoints.size()];
   std::map<int, Mappoint*> key_table;
   int n = 0;
@@ -706,7 +722,7 @@ void Pipeline::SupplyMappoints(Frame* frame,
       continue;
     }
     const cv::KeyPoint& kpt = keypoints[n];
-    std::set<int> neighbors = frame->SearchRadius(Eigen::Vector2d(kpt.pt.x, kpt.pt.y), min_mpt_distance);
+    std::list<int> neighbors = frame->SearchRadius(Eigen::Vector2d(kpt.pt.x, kpt.pt.y), min_mpt_distance);
     bool exists = false;
     for(int nn : neighbors){
       if(mappoints[nn]){
@@ -731,6 +747,24 @@ void Pipeline::SupplyMappoints(Frame* frame,
     ith2mappoints_[mp->GetId()] = mp;
   }
 
+  bool verbose = false;
+  if(verbose){
+    cv::Mat dst = frame->GetRgb().clone();
+    for(int n=0; n<keypoints.size(); n++){
+      const auto& kpt = keypoints[n];
+      const Mappoint* mp = mappoints[n];
+      float z = depths[n];
+      if(mp){
+        if( z > 1e-2)
+          cv::circle(dst,kpt.pt,5,CV_RGB(0,255,0),-1);
+        else
+          cv::circle(dst,kpt.pt,5,CV_RGB(255,0,0),-1);
+      }
+      else
+        cv::circle(dst,kpt.pt,5,CV_RGB(150,150,150),1);
+    }
+    cv::imshow("supply mappoints", dst);
+  }
   if(rig_new)
     keyframes_[rig_new->GetId()][frame->GetId()] = frame;
   AddKeyframesAtMappoints(frame, rig_new); // Call after supply mappoints
@@ -1020,7 +1054,7 @@ void Pipeline::Put(const cv::Mat gray,
   const float search_radius = 30.;
   const float switch_threshold = .3;
   float density_threshold = 1. / 40. / 40.; // octave==0d에서 NxN pixel에 한개 이상의 feature point가 존재해야 dense instance
-  const bool verbose_flowmatch = true;
+  const bool verbose_flowmatch = false;
 
   cv::Mat outline_mask = cv::Mat::zeros(gray.size(), CV_8UC1);
   for(auto it_shape : curr_shapes){
@@ -1080,9 +1114,8 @@ void Pipeline::Put(const cv::Mat gray,
     curr_frame->SetTcq(it.first, *it.second);
 
   // Optical flow를 기반으로한 feature matching은 Tcq가 필요없다.
-  const double flow_search_radius = 2.;
   std::map<int, std::pair<Mappoint*, double> > flow_matches
-    = FlowMatch(camera_, extractor_, flow0, prev_frame_, flow_search_radius, verbose_flowmatch, curr_frame);
+    = FlowMatch(camera_, extractor_, flow0, prev_frame_, verbose_flowmatch, curr_frame);
   std::map<Mappoint*,int> matched_mappoints;
   for(auto it : flow_matches){
     curr_frame->SetMappoint(it.second.first, it.first);

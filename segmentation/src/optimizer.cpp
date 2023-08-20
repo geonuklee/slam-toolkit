@@ -390,11 +390,11 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
       }
       cv::addWeighted(vis_rgb, .4, dst_invdinfo, 1., 1., dst_invdinfo);
       //cv::imshow("invd info"+std::to_string(it_infos.first), dst_invdinfo);
-      cv::imshow("invd info", dst_invdinfo);
+      //cv::imshow("invd info", dst_invdinfo);
       cv::addWeighted(vis_rgb, .4, dst_uvinfo, 1., 1., dst_uvinfo);
       //cv::imshow("uv info"+std::to_string(it_infos.first), dst_uvinfo);
       //cv::imshow("uv info", dst_uvinfo);
-      static bool stop = false;
+      static bool stop = true;
       char c = cv::waitKey(stop?0:1);
       if(c == 'q')
         exit(1);

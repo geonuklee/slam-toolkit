@@ -56,18 +56,18 @@ void Segmentor::PutKeyframe(cv::Mat gray, cv::cuda::GpuMat g_gray){
 cv::Mat Segmentor::GetFlow(cv::cuda::GpuMat g_gray) {
   cv::Mat flow;
   cv::cuda::GpuMat g_flow;
-  // ref) https://android.googlesource.com/platform/external/opencv3/+/master/samples/gpu/optical_flow.cpp#189
+  // ref: https://docs.opencv.org/3.4/dc/d6b/group__video__track.html#ga5d10ebbd59fe09c5f650289ec0ece5af 
   if(optical_flow_->getDefaultName() == "DenseOpticalFlow.BroxOpticalFlow"){
     cv::cuda::GpuMat g_f_gray,g_f_gray0;
     g_gray0_.convertTo(g_f_gray0,CV_32FC1, 1./255.);
     g_gray.convertTo(g_f_gray,CV_32FC1, 1./255.);
-    optical_flow_->calc(g_f_gray, g_f_gray0, g_flow);
+    //optical_flow_->calc(g_f_gray, g_f_gray0, g_flow);
+    optical_flow_->calc(g_f_gray0, g_f_gray, g_flow);
   }
   else{
-    optical_flow_->calc(g_gray, g_gray0_, g_flow);
+    optical_flow_->calc(g_gray0_, g_gray, g_flow);
   }
   g_flow.download(flow); // flow : 2ch float image
-  flow = -flow;
   return flow;
 }
 
@@ -746,11 +746,12 @@ const std::map<int, ShapePtr>& Segmentor::_Put(cv::Mat gray,
   }
   */
   const bool is_keyframe = true;
-  cv::Mat flow;
+  //cv::Mat flow;
   if(!gray0_.empty()){
     // flow  : {1} coordinate의 0->1 flow
-    flow = GetFlow(g_gray); // Flow for tracking shape.
     // flow0 : {0} coordinate의 0->1 flow
+    flow0 = GetFlow(g_gray); // Flow for tracking shape.
+    /*
     flow0 = cv::Mat::zeros(flow.rows,flow.cols,CV_32FC2);
     for(int r1=0; r1<flow.rows; r1++){
       for(int c1=0; c1<flow.cols; c1++){
@@ -765,6 +766,7 @@ const std::map<int, ShapePtr>& Segmentor::_Put(cv::Mat gray,
         flow0.at<cv::Point2f>(pt0) = dpt01;
       }
     }
+    */
   }
   cv::Mat valid_depth = depth > 0.;
   cv::Mat filtered_depth;
@@ -788,7 +790,7 @@ const std::map<int, ShapePtr>& Segmentor::_Put(cv::Mat gray,
   std::map<int, ShapePtr> local_shapes = ConvertMarker2Instances(marker);
   const float min_iou = .3;
   const float boundary = 5.;
-  std::map<int,int> l2g = TrackShapes(local_shapes, marker, flow, min_iou, boundary, global_shapes_, n_shapes_);
+  std::map<int,int> l2g = TrackShapes(local_shapes, marker, flow0, min_iou, boundary, global_shapes_, n_shapes_);
 
   if(!is_keyframe){
     cv::waitKey(1);
