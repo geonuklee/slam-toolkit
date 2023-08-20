@@ -239,8 +239,7 @@ private:
   void SupplyMappoints(Frame* frame, RigidGroup* rig_new);
   void AddNewKeyframesMappoints(Frame* frame,
                                 RigidGroup* rig_new);
-  std::map<Qth,bool> FrameNeedsToBeKeyframe(Frame* frame,
-                                                RigidGroup* rig_new) const;
+  std::map<Qth,bool> FrameNeedsToBeKeyframe(Frame* frame, RigidGroup* rig_new) const;
   void UpdateRigGroups(const std::set<Qth>& curr_rigs, Frame* frame) const;
 
   // j -> q -> (p) -> i

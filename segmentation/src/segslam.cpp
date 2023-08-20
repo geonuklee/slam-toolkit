@@ -541,7 +541,7 @@ RigidGroup* SupplyRigGroup(Frame* frame,
   return rig;
 }
 
-std::vector< std::pair<Qth, size_t> > CountRigPoints(Frame* frame,
+std::vector< std::pair<Qth, size_t> > CountRigKeypoints(Frame* frame,
                                                      const Camera* camera,
                                                      bool fill_bg_with_dominant,
                                                      Qth prev_dominant_qth,
@@ -580,7 +580,6 @@ std::vector< std::pair<Qth, size_t> > CountRigPoints(Frame* frame,
       ins = dominant_rig->GetBgInstance();
     }
   }
-
   return sorted_results;
 }
 
@@ -634,43 +633,44 @@ void GetNeighbors(Frame* keyframe,
   return;
 }
 
-std::map<Qth,bool> Pipeline::FrameNeedsToBeKeyframe(Frame* frame,
-                                                        RigidGroup* rig_new) const {
+std::map<Qth, size_t> CountMappoints(Frame* frame){
   const auto& keypoints = frame->GetKeypoints();
   const auto& mappoints = frame->GetMappoints();
   const auto& instances = frame->GetInstances();
-  std::map<Qth, std::pair<size_t, size_t> > n_mappoints;
+  std::map<Qth, size_t> n_mappoints;
   for(size_t n=0; n<keypoints.size(); n++){
     Instance* ins = instances[n];
     if(!ins)
       continue;
     Mappoint* mpt = mappoints[n];
-    for(auto it_rig : ins->rig_groups_){
-      n_mappoints[it_rig.first].second++;
-      if(mpt)
-        n_mappoints[it_rig.first].first++;
+    if(mpt){
+      for(auto it_rig : ins->rig_groups_)
+        n_mappoints[it_rig.first]++;
     }
   }
+  return n_mappoints;
+}
 
+std::map<Qth,bool> Pipeline::FrameNeedsToBeKeyframe(Frame* curr_frame,
+                                                    RigidGroup* rig_new) const {
+  std::map<Qth, size_t> curr_n_mappoints = CountMappoints(curr_frame);
   std::map<Qth,bool> need_keyframes;
-  const Qth qth_new = rig_new? rig_new->GetId() : 0;
-  for(auto it : n_mappoints){
+  for(auto it : curr_n_mappoints){
     const Qth& qth = it.first;
-    if(qth==qth_new) // 다음 if(rig_new에서 'frame'이 qth의 kf로 추가 된다.
-      continue;
-    float valid_matches_ratio = ((float) it.second.first) / ((float)it.second.second);
-    if(valid_matches_ratio < .5){
+    Frame* lkf = keyframes_.at(qth).rbegin()->second; // Not count 일 경우?
+    std::map<Qth, size_t> lkf_n_mappoints = CountMappoints(lkf);
+    const size_t& n_mappoints_curr = it.second;
+    if(!lkf_n_mappoints.count(qth) ){
       need_keyframes[qth] = true;
       continue;
     }
-    bool lot_flow = false;
-    if(lot_flow){
-      // 나~중에 valid match가 많아도 flow가 크면 미리 kf를 추가할 필요가 있다.
-      need_keyframes[qth] = true;
-      continue;
-    }
-    need_keyframes[qth] = false;
+    const size_t& n_mappoints_lkf = lkf_n_mappoints.at(qth);
+    size_t min_mpt_threshold = std::max<size_t>(10, .5 * n_mappoints_lkf);
+    printf("KF test. Jth %d, Qth %d,  %ld / %ld (%ld)\n", curr_frame->GetId(), qth,n_mappoints_curr, min_mpt_threshold, n_mappoints_lkf);
+    need_keyframes[qth] = n_mappoints_curr < min_mpt_threshold;
   }
+  if(rig_new)
+    need_keyframes[rig_new->GetId()] = true;
   return need_keyframes;
 }
 
@@ -1093,7 +1093,7 @@ void Pipeline::Put(const cv::Mat gray,
   std::vector<std::pair<Qth,size_t> > rig_counts;
   Qth dominant_qth = -1;
   std::set<Qth> curr_rigs; {
-    rig_counts  = CountRigPoints(curr_frame, camera_, fill_bg_with_dominant, prev_dominant_qth_, qth2rig_groups_);
+    rig_counts  = CountRigKeypoints(curr_frame, camera_, fill_bg_with_dominant, prev_dominant_qth_, qth2rig_groups_);
     for(auto it : rig_counts)
       curr_rigs.insert(it.first);
     if(rig_counts.empty())
@@ -1204,14 +1204,14 @@ void Pipeline::Put(const cv::Mat gray,
   }
 
   if(true){ // Mappoint 보충이 매 프레임미다 있어야 한다는게 타당한가?
-#if 0
+#if 1
     std::map<Qth,bool> need_keyframe = FrameNeedsToBeKeyframe(curr_frame, rig_new);
     for(auto it : need_keyframe){
       if(!it.second)
         continue;
       keyframes_[it.first][curr_frame->GetId()] = curr_frame;
+      SupplyMappoints(curr_frame, rig_new);
     }
-    SupplyMappoints(curr_frame, rig_new);
 #else
     // TODO 제대로 된 keyframe 선택
     keyframes_[0][curr_frame->GetId()] = curr_frame;
