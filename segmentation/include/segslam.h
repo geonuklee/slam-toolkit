@@ -3,6 +3,7 @@
 #include <flann/flann.hpp> // include it before opencv
 #include <g2o/types/slam3d/se3quat.h>
 #include <opencv2/core/mat.hpp>
+#include "Eigen/src/Core/Matrix.h"
 #include "stdafx.h"
 #include "seg.h"
 
@@ -99,10 +100,7 @@ public:
                                     const Camera* camera,
                                     FeatureDescriptor* extractor,
                                     const cv::Mat& mask);
-  std::map<Pth,float> SetInstances(const std::map<Pth, ShapePtr>& shapes,
-                                   const std::map<Pth, Instance*>& instances,
-                                   float density_threshold
-                                  );
+  void SetInstances(const std::map<Pth, ShapePtr>& shapes, const std::map<Pth, Instance*>& instances);
   void SetMeasuredDepths(const cv::Mat depth);
 
   std::list<int> SearchRadius(const Eigen::Vector2d& uv, double radius) const;
@@ -171,7 +169,7 @@ public:
   const std::set<Frame*>& GetKeyframes(Qth qth) const { return keyframes_.at(qth); }
 
   // Ref coordinate에서 본 Xr. Depth Camera의 Measurement
-  void AddReferenceKeyframe(const Qth& qth, Frame* ref);
+  void AddReferenceKeyframe(const Qth& qth, Frame* ref, const Eigen::Vector3d& Xq);
   void SetXr(const Qth& qth, const Eigen::Vector3d& Xr);
   const Eigen::Vector3d& GetXr(const Qth& qth) const;
 
@@ -198,11 +196,18 @@ struct RigidGroup {
 public:
   RigidGroup(Qth qth, Frame* first_frame);
   ~RigidGroup();
-  bool IncludeInstance(Instance* ins);
-  bool ExcludeInstance(Instance* ins);
-  void ExcludeMappoint(Mappoint* mp);
+  bool DoIncludeInstance(Instance* ins);
+  bool DoExcludeInstance(Instance* ins);
+  void DoExcludeMappoint(Mappoint* mp);
 
   Instance* GetBgInstance() const { return bg_instance_; }
+  bool IsIncludedInstances(Instance* ins) const {
+    const Pth pth = ins->GetId();
+    if(pth < 0)
+      return bg_instance_ == ins;
+    return included_instances_.count(pth);
+
+  }
   const Qth& GetId() const { return id_; }
   const std::map<Pth, Instance*>& GetIncludedInstances() const { return included_instances_; }
   const std::map<Pth, Instance*>& GetExcludedInstances() const { return excluded_instances_; }
@@ -236,11 +241,32 @@ public:
            const EigenMap<int,g2o::SE3Quat>* gt_Tcws = nullptr);
 
 private:
-  void SupplyMappoints(Frame* frame, RigidGroup* rig_new);
+  void SupplyMappoints(const Qth& qth, Frame* frame);
   void AddNewKeyframesMappoints(Frame* frame,
                                 RigidGroup* rig_new);
-  std::map<Qth,bool> FrameNeedsToBeKeyframe(Frame* frame, RigidGroup* rig_new) const;
-  void UpdateRigGroups(const std::set<Qth>& curr_rigs, Frame* frame) const;
+  std::map<Qth,bool> FrameNeedsToBeKeyframe(Frame* frame) const;
+  void UpdateRigGroups(const Qth& dominant_qth,
+                       Frame* frame) const;
+
+  cv::Mat VisualizeStates(Frame* frame,
+                          const std::map<Pth,float>& density_scores,
+                          const std::map<Pth, float>& switch_states,
+                          const float& switch_threshold,
+                          const std::map<Jth, Frame* >& neighbor_frames,
+                          const std::map<Pth,ShapePtr>& curr_shapes,
+                          const cv::Mat& outline_mask,
+                          const EigenMap<int,g2o::SE3Quat>* gt_Tcws = nullptr
+                         ) const;
+  cv::Mat VisualizeRigInfos(Frame* frame,
+                            const Qth& qth,
+                            const std::map<Jth, Frame* >& neighbor_frames,
+                            const std::set<Mappoint*>& neighbor_mappoints,
+                            std::set<Pth> instances,
+                            const float& switch_threshold,
+                            const std::map<Pth,float>& switch_states,
+                            const std::map<Pth,ShapePtr>& curr_shapes
+                           ) const ;
+
 
   // j -> q -> (p) -> i
   std::map<Qth, std::map<Jth, Frame*> >       keyframes_;  // jth {c}amera와 keypointt<->'i'th mappoint correspondence

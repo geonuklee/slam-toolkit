@@ -59,6 +59,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
                         const std::map<Jth, Frame*>& neighbor_keyframes,
                         Frame* curr_frame,
                         Frame* prev_frame,
+                        const std::set<Pth>& fixed_instances,
                         const cv::Mat& gradx,
                         const cv::Mat& grady,
                         const cv::Mat& valid_grad,
@@ -131,7 +132,8 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
     optimizer.addEdge(sw_prior_edge);
     v_instances[it_pth.first] = sw_vertex;
     prior_edges[it_pth.first] = sw_prior_edge;
-    //sw_vertex->setFixed(true);
+    if(fixed_instances.count(it_pth.first))
+      sw_vertex->setFixed(true);
   }
 
   int na = 0; int nb = 0;
@@ -199,7 +201,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
       * [x] Huber kernel
       * [x] Fisher information
         * [x] uv info는 선형화. std::max(1e-1, tan(30deg) - normal uv) 이런거
-      * [ ] Instance별 error 요인 분류. depth 오차가 안줄어드는건지 uv 오차가 안줄어드는건지.
+      * [ ] Instance별 error 요인 분류. depth 오차가 안줄어드는건지 uv 오차가 안줄어드는건지.
         * ins 별 말고 point별로 표시하는것도 좋겠다. 
       */
 
@@ -315,32 +317,6 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
   }
   //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
   if(vis_verbose){
-#if 0
-    cv::Mat vis_rgb = curr_frame->GetRgb().clone();
-    cv::Mat vis_full = cv::Mat::zeros(vis_rgb.size(), CV_8UC1);
-    cv::Mat dst_invdinfo = cv::Mat::zeros(vis_rgb.size(), CV_8UC3);
-    cv::Mat dst_uvinfo = cv::Mat::zeros(vis_rgb.size(), CV_8UC3);
-    std::map<Ith, double> chi2_sums;
-    for(auto it_infos : infos){
-      for(auto info : it_infos.second){
-        double s = info.second.vswitch ? info.second.vswitch->estimate() : 1.;
-        g2o::OptimizableGraph::Edge* edge = info.second.edge;
-        chi2_sums[info.second.mp->GetId()] += edge->chi2() / s / s;
-      }
-    }
-
-    for(auto info : infos[curr_frame->GetId()] ){
-      double chi2 = chi2_sums.at(info.second.mp->GetId());
-      if(chi2 < 1e-4)
-        continue;
-      std::stringstream ss;
-      ss << std::setprecision(3) << chi2;
-      std::string msg = ss.str();
-      cv::putText(dst_uvinfo, msg, info.second.kpt.pt, cv::FONT_HERSHEY_SIMPLEX, .3, CV_RGB(255,255,255) );
-    }
-    cv::addWeighted(vis_rgb, .4, dst_uvinfo, 1., 1., dst_uvinfo);
-    cv::imshow("chi2 sum", dst_uvinfo);
-#else
     for(auto it_infos : infos){
       Frame* frame = frames.at(it_infos.first);
       if(frame != curr_frame)
@@ -394,15 +370,15 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
       cv::addWeighted(vis_rgb, .4, dst_uvinfo, 1., 1., dst_uvinfo);
       //cv::imshow("uv info"+std::to_string(it_infos.first), dst_uvinfo);
       //cv::imshow("uv info", dst_uvinfo);
-      static bool stop = true;
+      /*
+      static bool stop = false;
       char c = cv::waitKey(stop?0:1);
       if(c == 'q')
         exit(1);
       else if (c == 's')
         stop = !stop;
-
+     */
     }
-#endif
   }
 
   if(txt_verbose){
