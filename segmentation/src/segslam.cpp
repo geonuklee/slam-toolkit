@@ -23,10 +23,10 @@ RigidGroup::RigidGroup(Qth qth, Frame* first_frame)
 : id_(qth),
   bg_instance_(new Instance(-1))
 {
-  DoIncludeInstance(bg_instance_);
+  AddInlierInstace(bg_instance_);
 }
 
-bool RigidGroup::DoIncludeInstance(Instance* ins) {
+bool RigidGroup::AddInlierInstace(Instance* ins) {
   const Pth pth = ins->GetId();
   if(excluded_instances_.count(pth) )
     return false;
@@ -197,6 +197,19 @@ const cv::Mat Frame::GetDescription(int i) const {
   return desc;
 }
 
+void Frame::SetKfId(const Qth qth, int kf_id) { 
+  if(kf_id_.count(qth))
+    throw  -1;
+  kf_id_[qth] = kf_id;
+}
+
+
+const int Frame::GetKfId(const Qth qth) const { 
+  if(kf_id_.count(qth))
+    return kf_id_.at(qth);
+  return -1;
+}
+
 Mappoint::Mappoint(Ith id, Instance* ins)
   : id_(id), ins_(ins)
 {
@@ -243,7 +256,7 @@ void Mappoint::GetFeature(const Qth& qth, bool latest, cv::Mat& description, cv:
   return;
 }
 
-bool RigidGroup::DoExcludeInstance(Instance* ins) {
+bool RigidGroup::AddOutlierInstance(Instance* ins) {
   const Pth pth = ins->GetId();
   bool count = included_instances_.count(pth);
   if(count) 
@@ -256,7 +269,7 @@ bool RigidGroup::DoExcludeInstance(Instance* ins) {
   return count;
 }
 
-void RigidGroup::DoExcludeMappoint(Mappoint* mp) {
+void RigidGroup::AddOutlierMappoint(Mappoint* mp) {
   excluded_mappoints_[mp->GetId()] = mp;
 }
 
@@ -481,36 +494,9 @@ void Pipeline::UpdateRigGroups(const Qth& dominant_qth,
   }
   RigidGroup* rig = qth2rig_groups_.at(dominant_qth);    
   for(Instance* ins : nongroup_instances)
-    rig->DoIncludeInstance(ins);
+    rig->AddInlierInstace(ins);
   return;
 }
-
-#if 0
-RigidGroup* SupplyRigGroup(Frame* frame,
-                           std::map<Qth, RigidGroup*>& rig_groups) {
-  size_t N = 0;
-  size_t n = 0;
-  for(Instance* ipt : frame->GetInstances() ){
-    if(!ipt)
-      continue;
-    N++;
-    if(ipt->rig_groups_.empty()){
-      n++;
-    }
-  }
-  float ng_ratio = (float)n / (float) N;
-  // TODO 제대로 n(qth) > 1 에서 문제없는것 확인하고 삭제.
-  //if(ng_ratio < .2)
-  //  return nullptr;
-  if(frame->GetId() > 0)
-    return nullptr;
-  static Qth nRiggroups = 0;
-  RigidGroup* rig = new RigidGroup(nRiggroups++, frame);
-  rig_groups[rig->GetId()] = rig;
-  std::cout << "Add new group! #" << rig->GetId() << std::endl;
-  return rig;
-}
-#endif
 
 void SetMatches(std::map<int, std::pair<Mappoint*, double> >& flow_matches,
                 std::map<int, std::pair<Mappoint*, double> >& proj_matches,
@@ -627,15 +613,15 @@ void GetNeighbors(Frame* keyframe,
                   const Qth& qth,
                   std::set<Mappoint*>   &neighbor_mappoints,
                   std::map<Jth, Frame*> &neighbor_keyframes) {
-  int min_jth = keyframe->GetId() - 15; // TODO frame 간격이 아니라 keyframe 간격
+  int min_kf_id = keyframe->GetKfId(qth) - 5; // TODO frame 간격이 아니라 keyframe 간격
   // 1. frame에서 보이는 mappoints
   GetMappoints4Qth(keyframe, qth, neighbor_mappoints);
   // 2. '1'의 mappoint에서 보이는 nkf
   for(Mappoint* mpt : neighbor_mappoints){
     for(Frame* nkf : mpt->GetKeyframes(qth) ){
-      const int& jth = nkf->GetId();
-      if(jth > min_jth)
-        neighbor_keyframes[jth] = nkf;
+      // nkf가 qth에 대해 keyframe이 아닐경우 -1이므로, neighbor_keyframes에 여기서 추가되진 않는다.
+      if(nkf->GetKfId(qth) > min_kf_id)
+        neighbor_keyframes[nkf->GetId()] = nkf;
     }
   }
 
@@ -729,6 +715,12 @@ void AddKeyframesAtMappoints(Frame* keyframe) {
 }
 */
 
+Eigen::Vector3d ComputeXr(float z, const Eigen::Vector3d& normalized_pt) {
+  if(z < 1e-5) // No depth too far
+    z = 1e+2;
+  return z*normalized_pt;
+}
+
 void Pipeline::SupplyMappoints(const Qth& qth, Frame* frame) {
   const double min_mpt_distance = 10.;
   const auto& keypoints = frame->GetKeypoints();
@@ -737,20 +729,16 @@ void Pipeline::SupplyMappoints(const Qth& qth, Frame* frame) {
   const auto& mappoints = frame->GetMappoints();
   RigidGroup* rig = qth2rig_groups_.at(qth);
 
-  const auto& Tcqs = frame->GetTcqs();
   for(int n=0; n < keypoints.size(); n++){
     Instance* ins = instances[n];
     if(! rig->IsIncludedInstances(ins) )
       continue;
-    float z = depths[n];
-    if(z < 1e-5) // No depth too far
-      z = 1e+2;
-    Eigen::Vector3d Xr = z*frame->GetNormalizedPoint(n);
+    const Eigen::Vector3d Xr = ComputeXr(depths[n], frame->GetNormalizedPoint(n));
+    const Eigen::Vector3d Xq = frame->GetTcq(qth).inverse()*Xr;
     if(Mappoint* mp = mappoints[n]){
       if(!mp->GetRefFrames().count(qth)){
-        // 기존 mp에 대해, 새로운 qth RigidGroup을 위한  Xr, Xq를 입력
+        // 기존 mp에, 새로운 qth RigidGroup을 위한  Xr, Xq를 입력
         mp->SetXr(qth, Xr);
-        const Eigen::Vector3d Xq = frame->GetTcq(qth).inverse()*Xr;
         mp->AddReferenceKeyframe(qth, frame, Xq);
       }
       mp->AddKeyframe(qth, frame);
@@ -758,26 +746,22 @@ void Pipeline::SupplyMappoints(const Qth& qth, Frame* frame) {
     }
     const cv::KeyPoint& kpt = keypoints[n];
     std::list<int> neighbors = frame->SearchRadius(Eigen::Vector2d(kpt.pt.x, kpt.pt.y), min_mpt_distance);
-    bool exists = false;
+    bool too_close_mp_exist = false;
     for(int nn : neighbors){
       if(mappoints[nn]){
-        exists=true;
+        too_close_mp_exist=true;
         break;
       }
     }
-    if(exists)
+    if(too_close_mp_exist)
       continue;
-
     static Ith nMappoints = 0;
     if(!ins)
       throw -1;
     Mappoint* mp = new Mappoint(nMappoints++, ins);
-    for(auto it_Tcq : Tcqs){
-      mp->SetXr(it_Tcq.first, Xr);
-      const Eigen::Vector3d Xq = it_Tcq.second->inverse()*Xr;
-      mp->AddReferenceKeyframe(it_Tcq.first, frame, Xq);
-      mp->AddKeyframe(it_Tcq.first, frame);
-    }
+    mp->SetXr(qth, Xr);  // new mappoint를 위한 reference frame 지정.
+    mp->AddReferenceKeyframe(qth, frame, Xq);
+    mp->AddKeyframe(qth, frame);
     frame->SetMappoint(mp, n);
     ith2mappoints_[mp->GetId()] = mp;
   }
@@ -800,9 +784,6 @@ void Pipeline::SupplyMappoints(const Qth& qth, Frame* frame) {
     }
     cv::imshow("supply mappoints "+std::to_string(qth), dst);
   }
-
-  // TODO 모든 qth에 keyframe으로 추가될 필요가 없다. 수정필요.
-  //AddKeyframesAtMappoints(frame); // Call after supply mappoints
   return;
 }
 
@@ -906,7 +887,7 @@ cv::Mat Pipeline::VisualizeRigInfos(Frame* frame,
       Frame* kf = it_kf.second;
       auto t = kf->GetTcq(qth).inverse().translation();
       char text[100];
-      sprintf(text,"est : F#%2d,  (%4.3f, %4.3f, %4.3f)", kf->GetId(), t[0], t[1], t[2] );
+      sprintf(text,"est : F#%2d, KF#%2d, (%4.3f, %4.3f, %4.3f)", kf->GetId(), kf->GetKfId(qth), t[0], t[1], t[2] );
       auto size = cv::getTextSize(text, fontFace, fontScale, thickness, &baseline);
       y += size.height+2;
       cv::putText(dst_texts, text, cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
@@ -1003,14 +984,17 @@ cv::Mat Pipeline::VisualizeStates(Frame* frame,
       std::stringstream ss;
       ss << std::hex << mp->GetId(); // Convert to hexadecimal
       std::string msg = ss.str();
-      //cv::putText(dst_frame, msg, pt, cv::FONT_HERSHEY_SIMPLEX, .3, CV_RGB(255,255,255) );
-      const std::set<Frame*>& keyframes = mp->GetKeyframes(dominant_qth);
-      for(auto it = keyframes.rbegin(); it!=keyframes.rend(); it++){
-        const cv::Point2f& pt0 = (*it)->GetKeypoint( (*it)->GetIndex(mp) ).pt;
-        cv::circle(dst_frame, pt, 3, CV_RGB(0,255,0), -1);
-        cv::line(dst_frame, pt, pt0, CV_RGB(255,255,0),  1);
-        break;
+      if(mp->HasEstimate4Rig(dominant_qth)) {
+        const std::set<Frame*>& keyframes = mp->GetKeyframes(dominant_qth);
+        for(auto it = keyframes.rbegin(); it!=keyframes.rend(); it++){
+          const cv::Point2f& pt0 = (*it)->GetKeypoint( (*it)->GetIndex(mp) ).pt;
+          cv::circle(dst_frame, pt, 3, CV_RGB(0,255,0), -1);
+          cv::line(dst_frame, pt, pt0, CV_RGB(255,255,0),  1);
+          break;
+        }
       }
+      else
+        cv::circle(dst_frame, pt, 3, CV_RGB(255, -1,0), -1);
     }
     else {
       cv::circle(dst_frame, pt, 2, CV_RGB(150,150,150), 1);
@@ -1088,7 +1072,7 @@ cv::Mat Pipeline::VisualizeStates(Frame* frame,
       auto t = kf->GetTcq(dominant_qth).inverse().translation();
       char text[100];
 
-      sprintf(text,"est : F#%2d,  (%4.3f, %4.3f, %4.3f)", kf->GetId(), t[0], t[1], t[2] );
+      sprintf(text,"est : F#%2d, KF#%2d  (%4.3f, %4.3f, %4.3f)", kf->GetId(), kf->GetKfId(dominant_qth), t[0], t[1], t[2] );
       auto size = cv::getTextSize(text, fontFace, fontScale, thickness, &baseline);
       y += size.height+2;
       cv::putText(dst_texts, text, cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
@@ -1202,6 +1186,20 @@ cv::Mat Pipeline::VisualizeStates(Frame* frame,
   return dst;
 }
 
+cv::Mat GetClosedOutlineMask(const cv::Size size, const std::map<Pth, ShapePtr>& curr_shapes){
+  cv::Mat outline_mask = cv::Mat::zeros(size, CV_8UC1);
+  for(auto it_shape : curr_shapes){
+    ShapePtr s_ptr = it_shape.second;
+    std::vector< std::vector<cv::Point> > cnts;
+    cnts.resize(1);
+    cnts[0].reserve(s_ptr->outerior_.size() );
+    for( auto pt: s_ptr->outerior_)
+      cnts[0].push_back(cv::Point(pt.x,pt.y));
+    cv::drawContours(outline_mask, cnts, 0, 255, 20);
+  }
+  return outline_mask;
+}
+
 void Pipeline::Put(const cv::Mat gray,
                    const cv::Mat depth,
                    const cv::Mat flow0,
@@ -1217,21 +1215,10 @@ void Pipeline::Put(const cv::Mat gray,
   float density_threshold = 1. / 70. / 70.; // NxN pixel에 한개 이상의 mappoint가 존재해야 dense instance
   const bool verbose_flowmatch = false;
 
-  cv::Mat outline_mask = cv::Mat::zeros(gray.size(), CV_8UC1);
-  for(auto it_shape : curr_shapes){
-    ShapePtr s_ptr = it_shape.second;
-    std::vector< std::vector<cv::Point> > cnts;
-    cnts.resize(1);
-    cnts[0].reserve(s_ptr->outerior_.size() );
-    for( auto pt: s_ptr->outerior_)
-      cnts[0].push_back(cv::Point(pt.x,pt.y));
-    cv::drawContours(outline_mask, cnts, 0, 255, 20);
-
-    const Pth& pth = it_shape.first;
-    if(pth2instances_.count(pth) )
-      continue;
-    pth2instances_[pth] = new Instance(pth);
-  }
+  cv::Mat outline_mask = GetClosedOutlineMask(gray.size(), curr_shapes);
+  for(auto it_shape : curr_shapes)
+    if(!pth2instances_.count(it_shape.first) )
+      pth2instances_[it_shape.first] = new Instance(it_shape.first);
 
   static Jth nFrames = 0;
   Frame* curr_frame = new Frame(nFrames++, vis_rgb);
@@ -1239,39 +1226,35 @@ void Pipeline::Put(const cv::Mat gray,
   curr_frame->SetInstances(curr_shapes, pth2instances_);
   curr_frame->SetMeasuredDepths(depth);
 #if 1
-  if(!prev_frame_){
-    RigidGroup* rig_new = new RigidGroup(0, curr_frame);
-    qth2rig_groups_[rig_new->GetId()] = rig_new;
-    const Qth& qth = rig_new->GetId();
-    curr_frame->SetTcq(rig_new->GetId(), g2o::SE3Quat() );
+  Qth dominant_qth = -1; {
+    // Initiate pipeline for first frame.
     auto& instances = curr_frame->GetInstances();
-    for(size_t n=0; n<instances.size(); n++){
-      Instance*& ins = instances[n];
-      if(ins)
-        continue;
-      ins = rig_new->GetBgInstance(); // Fill bg instance
-    }
-    // curr_frame의 instnace 중, 속한 group이 없는 ins는 기존 모든 curr_rigs 에 포함시킨다.
-    std::set<Qth> curr_rigs = {qth, };
-    UpdateRigGroups(qth, curr_frame);
-    SupplyMappoints(rig_new->GetId(), curr_frame);
-    keyframes_[qth][curr_frame->GetId()] = curr_frame;
-    every_keyframes_.insert(curr_frame->GetId());
+    if(!prev_frame_){
+      RigidGroup* rig_new = new RigidGroup(0, curr_frame);
+      qth2rig_groups_[rig_new->GetId()] = rig_new;
+      const Qth& qth = rig_new->GetId();
+      curr_frame->SetTcq(rig_new->GetId(), g2o::SE3Quat() );
+      for(size_t n=0; n<instances.size(); n++)
+        if(!instances[n])
+          instances[n] = rig_new->GetBgInstance(); // Fill bg instance
+      std::set<Qth> curr_rigs = {qth, };
+      UpdateRigGroups(qth, curr_frame);
+      SupplyMappoints(rig_new->GetId(), curr_frame);
 
-    prev_frame_ = curr_frame;
-    prev_dominant_qth_ = qth;
-    return;
-  }
-  RigidGroup* dominant_rig = qth2rig_groups_.at(0);// TODO 일반화.
-  Qth dominant_qth = dominant_rig->GetId();
-  {
-    auto& instances = curr_frame->GetInstances();
-    for(size_t n=0; n<instances.size(); n++){
-      Instance*& ins = instances[n];
-      if(ins)
-        continue;
-      ins = dominant_rig->GetBgInstance(); // Fill bg instance
-    }
+      keyframes_[qth][curr_frame->GetId()] = curr_frame;
+      curr_frame->SetKfId(qth, keyframes_.at(qth).size()-1 ); // kf_id는 0이어야한다.
+      every_keyframes_.insert(curr_frame->GetId());
+      prev_frame_ = curr_frame;
+      prev_dominant_qth_ = qth;
+      return;
+    } 
+
+    // Set non instance points as a member of dominant rigid body group.
+    RigidGroup* dominant_rig = qth2rig_groups_.at(0);// TODO 일반화.
+    dominant_qth = dominant_rig->GetId();
+    for(size_t n=0; n<instances.size(); n++)
+      if(!instances[n])
+        instances[n] = dominant_rig->GetBgInstance(); // Fill bg instance
     UpdateRigGroups(dominant_qth, curr_frame);
   }
 #endif
@@ -1317,8 +1300,7 @@ void Pipeline::Put(const cv::Mat gray,
     std::map<Jth, Frame* >  neighbor_frames;
     GetNeighbors(latest_kf, qth, neighbor_mappoints, neighbor_frames);
     if(neighbor_mappoints.empty()){
-      std::cout << "qth = " << qth << ", failure to get mappoints" << std::endl;
-      GetNeighbors(latest_kf, qth, neighbor_mappoints, neighbor_frames);
+      std::cerr << "qth = " << qth << ", failure to get mappoints" << std::endl;
       throw -1;
     }
 #if 0
@@ -1327,16 +1309,15 @@ void Pipeline::Put(const cv::Mat gray,
     SetMatches(flow_matches, proj_matches, curr_frame);
 #endif
     std::set<Pth> fixed_instances;
-    if(qth == dominant_qth){
+    if(qth == dominant_qth)
       for(auto it_density : density_scores)
         if(it_density.second < 1.)
           fixed_instances.insert(it_density.first);
-    }
+
     bool vis_verbose = true;
     std::map<Pth,float> switch_states\
-      = mapper_->ComputeLBA(camera_,qth, neighbor_mappoints, neighbor_frames, curr_frame, prev_frame_,
-                            fixed_instances,
-                            gradx, grady, valid_grad, vis_verbose);
+      = mapper_->ComputeLBA(camera_,qth, neighbor_mappoints, neighbor_frames,
+                            curr_frame, prev_frame_, fixed_instances, gradx, grady, valid_grad, vis_verbose);
     std::set<Pth> ins_in_other_rigs;
     for(auto it : segmented_instances)
       ins_in_other_rigs.insert(it.second.begin(), it.second.end());
@@ -1352,14 +1333,17 @@ void Pipeline::Put(const cv::Mat gray,
     }
 
     int nmappoints = 0;
-    for(Pth pth : outlier_instances){
+    for(Pth pth : outlier_instances)
       if(ins2mappoints.count(pth))// mp 없는 instance도 있으니까.
          nmappoints += ins2mappoints.at(pth);
-    }
 
     Qth qth_next = -1;
     if(segmented_instances.empty()){
+#if 1
       if(nmappoints > 10){
+#else
+      if(true){
+#endif
         // 새로운 rig를 생성해서 segmented_instances에 추가.
         qth_next = qth2rig_groups_.rbegin()->first + 1;
         RigidGroup* rig_new = new RigidGroup(qth_next, curr_frame);
@@ -1367,10 +1351,11 @@ void Pipeline::Put(const cv::Mat gray,
         curr_frame->SetTcq(rig_new->GetId(), g2o::SE3Quat() );
         for(Pth pth : outlier_instances){
           Instance* ins = pth2instances_.at(pth);
-          rig_new->DoIncludeInstance(ins);
+          rig_new->AddInlierInstace(ins);
           segmented_instances[qth_next].insert(pth);
         }
         keyframes_[qth_next][curr_frame->GetId()] = curr_frame;
+        curr_frame->SetKfId(qth_next, keyframes_.at(qth_next).size()-1); // kf_id 0이 필요
         const auto& instances = curr_frame->GetInstances();
         const auto& depths    = curr_frame->GetMeasuredDepths();
         const auto& mappoints = curr_frame->GetMappoints();
@@ -1383,10 +1368,7 @@ void Pipeline::Put(const cv::Mat gray,
             continue;
           if(!outlier_instances.count(ins->GetId()))
             continue;
-          float z = depths[n];
-          if(z < 1e-5) // No depth too far
-            z = 1e+2;
-          Eigen::Vector3d Xr = z*curr_frame->GetNormalizedPoint(n);
+          Eigen::Vector3d Xr = ComputeXr(depths[n], curr_frame->GetNormalizedPoint(n));
           mp->SetXr(qth_next, Xr);
           const Eigen::Vector3d Xq = curr_frame->GetTcq(qth_next).inverse()*Xr;
           mp->AddReferenceKeyframe(qth_next, curr_frame, Xq);
@@ -1400,23 +1382,16 @@ void Pipeline::Put(const cv::Mat gray,
       RigidGroup* rig_next = qth2rig_groups_.at(qth_next);
       for(Pth pth : outlier_instances){
         Instance* ins = pth2instances_.at(pth);
-        rig_next->DoIncludeInstance(ins);
+        rig_next->AddInlierInstace(ins);
         segmented_instances[qth_next].insert(pth);
       }
     }
     if(qth == 0){
-      cv::Mat dst = VisualizeStates(curr_frame,
-                                    density_scores,
-                                    switch_states,
-                                    switch_threshold,
-                                    neighbor_frames,
-                                    curr_shapes,
-                                    outline_mask,
-                                    gt_Tcws);
+      cv::Mat dst = VisualizeStates(curr_frame, density_scores, switch_states, switch_threshold, neighbor_frames,
+                                    curr_shapes, outline_mask, gt_Tcws);
       cv::imshow("segslam", dst);
     } else {
-      cv::Mat dst = VisualizeRigInfos(curr_frame, qth, 
-                                      neighbor_frames, neighbor_mappoints,
+      cv::Mat dst = VisualizeRigInfos(curr_frame, qth, neighbor_frames, neighbor_mappoints,
                                       instances, switch_threshold, switch_states, curr_shapes);
       cv::imshow("Rig #"+std::to_string(qth), dst);
     }
@@ -1431,27 +1406,20 @@ void Pipeline::Put(const cv::Mat gray,
   else if (c == 's')
     stop = !stop;
 
-#if 1
   std::map<Qth,bool> need_keyframe = FrameNeedsToBeKeyframe(curr_frame);
   for(auto it : need_keyframe){
     if(!it.second)
       continue;
     RigidGroup* rig_new = nullptr;
     SupplyMappoints(it.first, curr_frame);
-    keyframes_[it.first][curr_frame->GetId()] = curr_frame;
     every_keyframes_.insert(curr_frame->GetId());
+    keyframes_[it.first][curr_frame->GetId()] = curr_frame;
+    if(keyframes_.at(it.first).size() > 1)// ComputLBA 를 포함한 while loop문에서 이미 추가된 keyframe.
+      curr_frame->SetKfId(it.first, keyframes_[it.first].size() );
   }
-#else
-  // TODO 제대로 된 keyframe 선택
-  keyframes_[0][curr_frame->GetId()] = curr_frame;
-  SupplyMappoints(curr_frame, rig_new);
-#endif
 
   prev_frame_ = curr_frame;
-#if 0
-  prev_rigs_ = curr_rigs;
   prev_dominant_qth_ = dominant_qth;
-#endif
   return;
 }
 

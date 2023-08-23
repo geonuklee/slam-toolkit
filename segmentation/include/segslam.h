@@ -124,6 +124,8 @@ public:
   const cv::KeyPoint& GetKeypoint(int i) const {  return keypoints_.at(i); }
   const float& GetDepth(int i) const { return measured_depths_.at(i); }
   const Jth GetId() const { return id_; }
+  void SetKfId(const Qth qth, int kf_id);
+  const int GetKfId(const Qth qth) const;
 
   void SetTcq(const Qth& qth, const g2o::SE3Quat& Tcq) { Tcq_[qth] = std::shared_ptr<g2o::SE3Quat>(new g2o::SE3Quat(Tcq)); }
   const g2o::SE3Quat& GetTcq(const Qth& qth) const { return *Tcq_.at(qth); }
@@ -141,6 +143,7 @@ private:
   std::map<const Mappoint*, int> mappoints_index_;
 
   std::map<Qth, std::shared_ptr<g2o::SE3Quat> > Tcq_;
+  std::map<Qth, int> kf_id_;
   cv::Mat rgb_;
   const Jth id_;
 };
@@ -196,9 +199,9 @@ struct RigidGroup {
 public:
   RigidGroup(Qth qth, Frame* first_frame);
   ~RigidGroup();
-  bool DoIncludeInstance(Instance* ins);
-  bool DoExcludeInstance(Instance* ins);
-  void DoExcludeMappoint(Mappoint* mp);
+  bool AddInlierInstace(Instance* ins);
+  bool AddOutlierInstance(Instance* ins);
+  void AddOutlierMappoint(Mappoint* mp);
 
   Instance* GetBgInstance() const { return bg_instance_; }
   bool IsIncludedInstances(Instance* ins) const {
@@ -274,7 +277,6 @@ private:
 
   // Tcq(j) : {c}amera <- {q}th group for 'j'th frame
   Frame*                      prev_frame_;
-  std::set<Qth>               prev_rigs_;
   Qth                         prev_dominant_qth_;
   std::map<Qth, RigidGroup*>                  qth2rig_groups_;
   std::map<Pth, Instance*>                    pth2instances_;

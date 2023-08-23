@@ -69,7 +69,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
   const double delta = 10./focal;
   // info : inverted covariance
 
-  const int n_iter = 20;
+  const int n_iter = 10;
   std::map<Jth, Frame*> frames = neighbor_keyframes;
   frames[curr_frame->GetId()] = curr_frame;
   /*

@@ -27,6 +27,7 @@ public:
                   const std::map<Jth, Frame*>& neighobor_frames,
                   Frame* curr_frame,
                   Frame* prev_frame,
+                  const std::set<Pth>& fixed_instances,
                   const cv::Mat& gradx,
                   const cv::Mat& grady,
                   const cv::Mat& valid_grad,
