@@ -256,7 +256,7 @@ void Mappoint::GetFeature(const Qth& qth, bool latest, cv::Mat& description, cv:
   return;
 }
 
-bool RigidGroup::AddOutlierInstance(Instance* ins) {
+bool RigidGroup::ExcludeInstance(Instance* ins) {
   const Pth pth = ins->GetId();
   bool count = included_instances_.count(pth);
   if(count) 
@@ -269,7 +269,7 @@ bool RigidGroup::AddOutlierInstance(Instance* ins) {
   return count;
 }
 
-void RigidGroup::AddOutlierMappoint(Mappoint* mp) {
+void RigidGroup::ExcludeMappoint(Mappoint* mp) {
   excluded_mappoints_[mp->GetId()] = mp;
 }
 
@@ -613,7 +613,7 @@ void GetNeighbors(Frame* keyframe,
                   const Qth& qth,
                   std::set<Mappoint*>   &neighbor_mappoints,
                   std::map<Jth, Frame*> &neighbor_keyframes) {
-  int min_kf_id = keyframe->GetKfId(qth) - 5; // TODO frame 간격이 아니라 keyframe 간격
+  int min_kf_id = keyframe->GetKfId(qth) - 10; // TODO frame 간격이 아니라 keyframe 간격
   // 1. frame에서 보이는 mappoints
   GetMappoints4Qth(keyframe, qth, neighbor_mappoints);
   // 2. '1'의 mappoint에서 보이는 nkf
@@ -731,7 +731,7 @@ void Pipeline::SupplyMappoints(const Qth& qth, Frame* frame) {
 
   for(int n=0; n < keypoints.size(); n++){
     Instance* ins = instances[n];
-    if(! rig->IsIncludedInstances(ins) )
+    if(! rig->IsInlierInstances(ins) )
       continue;
     const Eigen::Vector3d Xr = ComputeXr(depths[n], frame->GetNormalizedPoint(n));
     const Eigen::Vector3d Xq = frame->GetTcq(qth).inverse()*Xr;
@@ -861,7 +861,6 @@ cv::Mat Pipeline::VisualizeRigInfos(Frame* frame,
       cv::rectangle(dst_frame, cp-dpt-cv::Point(0,3*baseline), cp+dpt, CV_RGB(255,255,255), -1);
       cv::putText(dst_frame, msg, cp-dpt, fontFace, fontScale, CV_RGB(0,0,0));
     }
-    std::cout << "n(neighbor_mappoints) = " << neighbor_mappoints.size() << std::endl;
     for(Mappoint* mp : neighbor_mappoints){
       int n = frame->GetIndex(mp);
       if(n < 0)
@@ -891,6 +890,64 @@ cv::Mat Pipeline::VisualizeRigInfos(Frame* frame,
       auto size = cv::getTextSize(text, fontFace, fontScale, thickness, &baseline);
       y += size.height+2;
       cv::putText(dst_texts, text, cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
+    }
+
+    y+= 10;
+    std::ostringstream buffer;
+    buffer << "Include> ";
+    for(auto it : rig->GetIncludedInstances()){
+      const Pth& pth = it.first;
+      if(!curr_shapes.count(pth))
+        continue;
+      buffer << pth << ", ";
+      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
+      if(size.width < dst_texts.cols - 10)
+        continue;
+      y += size.height+2;
+      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
+      buffer.str("");
+    }
+    if(!buffer.str().empty()){
+      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
+      y += size.height+2;
+      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
+    }
+    y+= 3;
+    buffer.str("");
+    buffer << "Exclude> ";
+    for(auto it : rig->GetExcludedInstances()){
+      const Pth& pth = it.first;
+      if(!curr_shapes.count(pth))
+        continue;
+      buffer << pth << ", ";
+      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
+      if(size.width < dst_texts.cols - 10)
+        continue;
+      y += size.height+2;
+      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
+      buffer.str("");
+    }
+    if(!buffer.str().empty()){
+      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
+      y += size.height+2;
+      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
+    }
+    y+= 10;
+    buffer.str("");
+    buffer << "Pth:Switch state> ";
+    for(auto it : switch_states){
+      buffer << "(" << it.first <<  ":" << std::fixed << std::setprecision(3) << it.second << "), ";
+      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
+      if(size.width < dst_texts.cols - 100)
+        continue;
+      y += size.height+2;
+      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
+      buffer.str("");
+    }
+    if(!buffer.str().empty()){
+      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
+      y += size.height+2;
+      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
     }
   }
 
@@ -1288,6 +1345,7 @@ void Pipeline::Put(const cv::Mat gray,
     density_scores[pth] = dense / density_threshold;
   }
 
+  static std::map<Qth, std::map<Pth,size_t> > n_consecutiv_switchoff;
   int nq = 1;
   while(!segmented_instances.empty()){
     auto it_rig = segmented_instances.begin();
@@ -1299,7 +1357,7 @@ void Pipeline::Put(const cv::Mat gray,
     std::set<Mappoint*>     neighbor_mappoints;
     std::map<Jth, Frame* >  neighbor_frames;
     GetNeighbors(latest_kf, qth, neighbor_mappoints, neighbor_frames);
-    if(neighbor_mappoints.empty()){
+    if(neighbor_mappoints.empty()) {
       std::cerr << "qth = " << qth << ", failure to get mappoints" << std::endl;
       throw -1;
     }
@@ -1314,42 +1372,48 @@ void Pipeline::Put(const cv::Mat gray,
         if(it_density.second < 1.)
           fixed_instances.insert(it_density.first);
 
-    bool vis_verbose = true;
+    bool vis_verbose = false;
     std::map<Pth,float> switch_states\
       = mapper_->ComputeLBA(camera_,qth, neighbor_mappoints, neighbor_frames,
                             curr_frame, prev_frame_, fixed_instances, gradx, grady, valid_grad, vis_verbose);
-    std::set<Pth> ins_in_other_rigs;
-    for(auto it : segmented_instances)
-      ins_in_other_rigs.insert(it.second.begin(), it.second.end());
-
-    std::set<Pth> outlier_instances;
-    for(auto it : switch_states){
-      if(it.second > switch_threshold)
+    std::set<Pth> instances4next_rig;
+    std::set<Pth> switchoff_instances;
+    if(!n_consecutiv_switchoff.count(qth))
+      n_consecutiv_switchoff[qth]; // empty map 생성.
+    for(auto it_switch : switch_states){
+      const Pth& pth = it_switch.first;
+      if(it_switch.second > switch_threshold)
         continue;
-      // Instance* ins = pth2instances_.at( it.first );
-      // rig->ExcludeInstance(ins); // TODO 어느시점에서 exclude?
-      if(! ins_in_other_rigs.count(it.first) )
-        outlier_instances.insert(it.first);
+      size_t& n_consec = n_consecutiv_switchoff[qth][pth];
+      n_consec++;
+      if(n_consec > 2){ // N 번 연속 switch off 판정을 받은경우,
+        Instance* ins = pth2instances_.at( pth );
+        rig->ExcludeInstance(ins);
+        printf("Exclude Q#%d P#%d", qth, pth);
+        instances4next_rig.insert(pth);
+      }
+      else
+        switchoff_instances.insert( pth); // 현재 프레임에서 switchoff가 발생하지 않은 pthqth를 삭제하기위해.
     }
 
     int nmappoints = 0;
-    for(Pth pth : outlier_instances)
+    for(Pth pth : instances4next_rig)
       if(ins2mappoints.count(pth))// mp 없는 instance도 있으니까.
          nmappoints += ins2mappoints.at(pth);
 
     Qth qth_next = -1;
     if(segmented_instances.empty()){
 #if 1
-      if(nmappoints > 10){
+      if(nmappoints > 10) {
 #else
-      if(true){
+      if(nmappoints > 1){ // neighbor_mappoints.empty()를 예방하기 위해 필요한 최소 조건.
 #endif
-        // 새로운 rig를 생성해서 segmented_instances에 추가.
+        // 새로운 rig를 생성
         qth_next = qth2rig_groups_.rbegin()->first + 1;
         RigidGroup* rig_new = new RigidGroup(qth_next, curr_frame);
         qth2rig_groups_[rig_new->GetId()] = rig_new;
         curr_frame->SetTcq(rig_new->GetId(), g2o::SE3Quat() );
-        for(Pth pth : outlier_instances){
+        for(Pth pth : instances4next_rig){
           Instance* ins = pth2instances_.at(pth);
           rig_new->AddInlierInstace(ins);
           segmented_instances[qth_next].insert(pth);
@@ -1366,7 +1430,7 @@ void Pipeline::Put(const cv::Mat gray,
           Instance* ins = instances[n];
           if(!ins)
             continue;
-          if(!outlier_instances.count(ins->GetId()))
+          if(!instances4next_rig.count(ins->GetId()))
             continue;
           Eigen::Vector3d Xr = ComputeXr(depths[n], curr_frame->GetNormalizedPoint(n));
           mp->SetXr(qth_next, Xr);
@@ -1380,12 +1444,26 @@ void Pipeline::Put(const cv::Mat gray,
       auto it_rig_next = segmented_instances.begin();
       qth_next = it_rig_next->first;
       RigidGroup* rig_next = qth2rig_groups_.at(qth_next);
-      for(Pth pth : outlier_instances){
+      for(Pth pth : instances4next_rig){
         Instance* ins = pth2instances_.at(pth);
         rig_next->AddInlierInstace(ins);
         segmented_instances[qth_next].insert(pth);
       }
     }
+
+    if(false){
+      std::set<Pth> missing_outlier;
+      for(auto it_conseq_so : n_consecutiv_switchoff.at(qth) ){
+        const Pth& pth = it_conseq_so.first;
+        if(! switchoff_instances.count(pth) )
+          missing_outlier.insert(pth);
+      }
+      for(const Pth& it : missing_outlier)
+        n_consecutiv_switchoff[qth].erase(it);
+      if(n_consecutiv_switchoff.count(qth) && n_consecutiv_switchoff.at(qth).empty())
+        n_consecutiv_switchoff.erase(qth);
+    }
+
     if(qth == 0){
       cv::Mat dst = VisualizeStates(curr_frame, density_scores, switch_states, switch_threshold, neighbor_frames,
                                     curr_shapes, outline_mask, gt_Tcws);
@@ -1399,7 +1477,7 @@ void Pipeline::Put(const cv::Mat gray,
       break;
   }
 
-  static bool stop = true;
+  static bool stop = false;
   char c = cv::waitKey(stop?0:1);
   if(c == 'q')
     exit(1);
@@ -1410,7 +1488,6 @@ void Pipeline::Put(const cv::Mat gray,
   for(auto it : need_keyframe){
     if(!it.second)
       continue;
-    RigidGroup* rig_new = nullptr;
     SupplyMappoints(it.first, curr_frame);
     every_keyframes_.insert(curr_frame->GetId());
     keyframes_[it.first][curr_frame->GetId()] = curr_frame;

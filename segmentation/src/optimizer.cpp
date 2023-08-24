@@ -327,14 +327,15 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
       cv::Mat dst_uvinfo = cv::Mat::zeros(vis_rgb.size(), CV_8UC3);
       for(auto info : it_infos.second){
         cv::circle(dst_invdinfo, info.second.kpt.pt, 2, CV_RGB(0,255,0), -1);
-
+        /*
         {
+        // TODO Xq(0)가 없는 경우.
           std::stringstream ss;
           ss << std::setprecision(2) << info.second.mp->GetXq(0)[2] << std::endl; // TODO sprintf로 정확한 자리수 표시.
           std::string msg = ss.str();
           cv::putText(dst_invdinfo, msg, info.second.kpt.pt, cv::FONT_HERSHEY_SIMPLEX, .3, CV_RGB(255,255,255) );
         }
-
+        */
 
         double s = info.second.vswitch ? info.second.vswitch->estimate() : 1.;
         g2o::OptimizableGraph::Edge* edge = info.second.edge;

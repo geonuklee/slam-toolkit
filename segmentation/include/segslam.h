@@ -200,11 +200,11 @@ public:
   RigidGroup(Qth qth, Frame* first_frame);
   ~RigidGroup();
   bool AddInlierInstace(Instance* ins);
-  bool AddOutlierInstance(Instance* ins);
-  void AddOutlierMappoint(Mappoint* mp);
+  bool ExcludeInstance(Instance* ins);
+  void ExcludeMappoint(Mappoint* mp);
 
   Instance* GetBgInstance() const { return bg_instance_; }
-  bool IsIncludedInstances(Instance* ins) const {
+  bool IsInlierInstances(Instance* ins) const {
     const Pth pth = ins->GetId();
     if(pth < 0)
       return bg_instance_ == ins;
