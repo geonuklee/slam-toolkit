@@ -1,0 +1,15 @@
+[submodule "segmentation/others/DynaSLAM"]
+	path = segmentation/others/DynaSLAM
+	url = https://github.com/BertaBescos/DynaSLAM
+[submodule "segmentation/others/Pangolin"]
+	path = segmentation/others/Pangolin
+	url = https://github.com/stevenlovegrove/Pangolin
+[submodule "segmentation/others/staticfusion"]
+	path = segmentation/others/staticfusion
+	url = https://github.com/raluca-scona/staticfusion
+[submodule "segmentation/others/vdo_slam"]
+	path = segmentation/others/vdo_slam
+	url = https://github.com/halajun/vdo_slam
+[submodule "segmentation/others/supersurfel_fusion"]
+	path = segmentation/others/supersurfel_fusion
+	url = https://github.com/BruceCanovas/supersurfel_fusion

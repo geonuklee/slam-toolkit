@@ -25,7 +25,11 @@ cmake_policy(SET CMP0042 NEW)
 cmake_policy(SET CMP0072 OLD)
 LIST(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/../cmake_modules)
 
-find_package(OpenCV 3.4 REQUIRED PATHS $ENV{HOME}/ws/opencv_3.4.14/build)
+#find_package(OpenCV 3.4 REQUIRED PATHS $ENV{HOME}/ws/opencv_3.4.14/build)
+find_package(OpenCV 3.4.15 REQUIRED
+  PATHS $ENV{HOME}/ws/opencv_3.4.15_cuda10.2/build
+  NO_DEFAULT_PATH)
+
 include_directories( ${OpenCV_INCLUDE_DIRS} )
 find_package(Eigen3 REQUIRED)
 include_directories( ${EIGEN3_INCLUDE_DIR} )
@@ -46,6 +50,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -fdiagnostics-color=always")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pg -g") # Debug info for perf profile.
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fopenmp") # Forbid it with direct method.
 
 add_definitions(-DPACKAGE_DIR="${CMAKE_SOURCE_DIR}")
@@ -63,8 +68,10 @@ add_executable(example_segmentation ${src}
   ../pipeline/src/orb_extractor.cpp
 )
 #set_target_properties(example_segmentation PROPERTIES UNITY_BUILD_MODE BATCH UNITY_BUILD_BATCH_SIZE 10)
-set_source_files_properties(src/debug.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
+#set_source_files_properties(src/debug.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
 #set_source_files_properties(src/optimizer.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
+#set_source_files_properties(src/g2o_types.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
+#set_source_files_properties(src/seg.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
 #set_source_files_properties(src/segslam.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
 
 target_link_libraries(example_segmentation
