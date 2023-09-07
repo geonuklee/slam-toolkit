@@ -26,8 +26,8 @@ cmake_policy(SET CMP0072 OLD)
 LIST(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/../cmake_modules)
 
 #find_package(OpenCV 3.4 REQUIRED PATHS $ENV{HOME}/ws/opencv_3.4.14/build)
-find_package(OpenCV 3.4.15 REQUIRED
-  PATHS $ENV{HOME}/ws/opencv_3.4.15_cuda10.2/build
+find_package(OpenCV 3.4.20 REQUIRED
+  PATHS $ENV{HOME}/ws/opencv_3.4.20_cuda10.2/build
   NO_DEFAULT_PATH)
 
 include_directories( ${OpenCV_INCLUDE_DIRS} )

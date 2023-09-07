@@ -13,9 +13,10 @@ seq=segment-3015436519694987712_1300_000_1320_000_with_camera_labels # 적절한
     #-ex "b segslam.cpp:1380" \
     #-ex "b segslam.cpp:640 if (ins->pth_==14 && qth==1)" \
 
+msg "Build is done"
 if [ $retval -eq 0 ]; then
   #./example_segmentation waymo $seq 0
-  gdb -ex "catch throw " \
+  gdb -ex "break abort " \
     -ex "run" --args ./example_segmentation waymo $seq 0
 fi
 

@@ -50,7 +50,11 @@ mkdir build; cd build;
 # No cudacodec for https://github.com/opencv/opencv_contrib/issues/1786
 # CUDA_LEGACY는 BroxOpticalFlow 때문에필요.
 # 나머지 off는 빌드시간 절약용.
-* [ ] WITH_DEBUGINFO
+* [x] WITH_DEBUGINFO
+* WITH_IPP 에 해당하는 코드에서 충돌이지만, 이거 꺼도 어차피 다른 코드에서 충돌. 멀티 쓰레드, 다른 쓰레드에서 충돌 의심하며, 특히 cuda가 의심스러움.
+* [x] Default는 DWITH_NVCUVID=ON 이지만, 이를 끄고 테스트중
+    * 소용없음.
+
 ccmake .. -DWITH_CUDA=ON -DCMAKE_BUILD_TYPE=Release -DBUILD_PERF_TESTS=OFF -DBUILD_TESTS=OFF\
   -DBUILD_opencv_dnn=ON -DENABLE_PRECOMPILED_HEADERS=OFF \
   -DBUILD_opencv_python_bindings_g=OFF -DBUILD_opencv_python_tests=OFF -DBUILD_opencv_stitching=OFF\
@@ -58,7 +62,7 @@ ccmake .. -DWITH_CUDA=ON -DCMAKE_BUILD_TYPE=Release -DBUILD_PERF_TESTS=OFF -DBUI
   -DBUILD_opencv_cudalegacy=ON -DBUILD_opencv_xphoto=OFF -DBUILD_opencv_xobjdetect=OFF\
   -DENABLE_CXX11=ON \
   -DBUILD_opencv_cudacodec=ON \
-  -D NVCUVID=ON \
+  -DBUILD_WITH_DEBUG_INFO=ON \
   -DOPENCV_EXTRA_MODULES_PATH=../opencv_contrib/modules
 make -j4
 ```
@@ -78,15 +82,19 @@ make -j4
   sudo apt-get -y install libboost-all-dev; \
   pip2 install --user keras
   cd Thirdpart/DBoW2
-  # cmake에서 find_package(OpenCV 의 경로수정.
+  # CMakeLists.txt에서 find_package(OpenCV 의 경로수정.
   mkdir build; cd build;
   cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     && make -j4 
   cd ../../..
 
   cd Thirdpart/g2o
+  # CMakeLists.txt에서 Debug, RelWithDebInfo 에서도 eigen aligned error를 막기위해
+  # 아래 두문장 ln.57에 추가. 하지만 g2o는 그냥 Release로 빌드하는게 속편하다.
+  # SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
+  # SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=native")
   mkdir build; cd build;
-  cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  cmake .. -DCMAKE_BUILD_TYPE=Release \
     && make -j4 
   cd ../../..
 ```
