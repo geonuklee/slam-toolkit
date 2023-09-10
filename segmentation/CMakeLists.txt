@@ -67,6 +67,21 @@ add_executable(example_segmentation ${src}
   ../pipeline/src/dataset.cpp
   ../pipeline/src/orb_extractor.cpp
 )
+
+# If use HITNET for stereo dataset such as KITTI..
+set(PYBIND11_PYTHON_VERSION 3.8)
+find_package(PythonLibs ${PYBIND11_PYTHON_VERSION} EXACT REQUIRED)
+find_package(pybind11 REQUIRED PATHS
+  $ENV{HOME}/.local/lib/python${PYBIND11_PYTHON_VERSION}/site-packages/pybind11/share/cmake/pybind11
+  NO_DEFAULT_PATH)
+target_include_directories(example_segmentation PRIVATE
+  ${PYTHON_INCLUDE_DIRS}
+  ${pybind11_INCLUDE_DIR}
+  ${CMAKE_SOURCE_DIR}/../stereo_seg/include)
+target_link_libraries(example_segmentation ${CMAKE_SOURCE_DIR}/../stereo_seg/lib/libhitnetstereo.so
+  ${PYTHON_LIBRARIES}
+)
+
 #set_target_properties(example_segmentation PROPERTIES UNITY_BUILD_MODE BATCH UNITY_BUILD_BATCH_SIZE 10)
 #set_source_files_properties(src/debug.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
 #set_source_files_properties(src/optimizer.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization

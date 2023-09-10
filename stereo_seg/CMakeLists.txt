@@ -25,6 +25,11 @@ cmake_policy(SET CMP0042 NEW)
 cmake_policy(SET CMP0072 OLD)
 LIST(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/../cmake_modules)
 
+# Check if CMAKE_BUILD_TYPE is not set or is empty
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Choose the type of build." FORCE)
+endif()
+
 find_package(OpenCV 3.4.20 REQUIRED
   PATHS $ENV{HOME}/ws/opencv_3.4.20_cuda10.2/build
   NO_DEFAULT_PATH)
@@ -60,22 +65,27 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -fdiagnostics-color=always")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pg -g") # Debug info for perf profile.
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fopenmp") # Forbid it with direct method.
-
 add_definitions(-DPACKAGE_DIR="${CMAKE_SOURCE_DIR}")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib)
 
 include_directories("${CMAKE_SOURCE_DIR}/include")
 include_directories("${CMAKE_SOURCE_DIR}/..")
 include_directories("${CMAKE_SOURCE_DIR}/../pipeline/include")
 
+add_library(hitnetstereo SHARED src/hitnet.cpp)
+target_link_libraries(hitnetstereo ${PYTHON_LIBRARIES})
 
-file(GLOB src src/*.cpp)
-add_executable(stereo_seg ${src}
+add_executable(stereo_seg
+  src/main.cpp
   ../pipeline/src/camera.cpp
   ../pipeline/src/common.cpp
   ../pipeline/src/dataset.cpp
   ../pipeline/src/orb_extractor.cpp
 )
-target_link_libraries(stereo_seg ${PYTHON_LIBRARIES})
+target_link_libraries(stereo_seg hitnetstereo)
+add_dependencies(stereo_seg hitnetstereo)
+
+
 #set_target_properties(example_segmentation PROPERTIES UNITY_BUILD_MODE BATCH UNITY_BUILD_BATCH_SIZE 10)
 #set_source_files_properties(src/debug.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
 #set_source_files_properties(src/optimizer.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization

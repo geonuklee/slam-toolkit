@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2020 Geonuk Lee
+Copyright (c) 2023 Geonuk Lee
 
 Permission is hereby granted, free of charge, to any person
 obtaining a copy of this software and associated documentation
@@ -23,7 +23,6 @@ OTHER DEALINGS IN THE SOFTWARE.
 
 #include "../include/seg.h"
 #include "../include/util.h"
-#include "../include/seg.h"
 
 #include "dataset.h"
 #include "orb_extractor.h"
@@ -37,6 +36,9 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include <exception>
 #include <g2o/types/slam3d/se3quat.h>
 
+#include <pybind11/embed.h>
+#include "hitnet.h"
+
 int TestKitti(int argc, char** argv) {
   //Seq :"02",("13" "20");
   std::string seq(argv[2]);
@@ -49,22 +51,54 @@ int TestKitti(int argc, char** argv) {
   std::cout << "Distortion = " << D.transpose() << std::endl;
   const StereoCamera* camera = dynamic_cast<const StereoCamera*>(dataset.GetCamera());
   assert(camera);
-  Segmentor segmentor;
 
+  const auto Trl_ = camera->GetTrl();
+  const float base_line = -Trl_.translation().x();
+  const float fx = camera->GetK()(0,0);
+
+  pybind11::scoped_interpreter python; // 이 인스턴스가 파괴되면 인터프리터 종료.
+  HITNetStereoMatching hitnet(base_line, fx);
+  Segmentor segmentor;
+  seg::CvFeatureDescriptor extractor;
+  seg::Pipeline pipeline(camera, &extractor);
+
+  bool visualize_segment = true;
   bool stop = true;
   for(int i=0; i<dataset.Size(); i+=1){
     std::cout << "F# " << i << std::endl;
     const cv::Mat rgb   = dataset.GetImage(i, cv::IMREAD_COLOR);
     const cv::Mat rgb_r = dataset.GetRightImage(i, cv::IMREAD_COLOR);
-    cv::Mat gray, gray_r, flow0, gradx, grady, valid_grad;
-    cv::cvtColor(rgb,gray,cv::COLOR_BGR2GRAY);
-    cv::cvtColor(rgb_r,gray_r,cv::COLOR_BGR2GRAY);
-    segmentor.Put(gray, gray_r, *camera, rgb, flow0, gradx, grady, valid_grad);
+    cv::Mat gray, gray_r;
+    cv::cvtColor(rgb, gray, cv::COLOR_BGR2GRAY);
+    cv::cvtColor(rgb_r, gray_r, cv::COLOR_BGR2GRAY);
+
+    // small input to reserve time.
+    cv::Mat depth; {
+      const float max_depth = 200.;
+      cv::Mat small_gray, small_gray_r;
+      cv::pyrDown(gray, small_gray);
+      cv::pyrDown(gray_r, small_gray_r);
+      depth = hitnet.Put(small_gray, small_gray_r);
+      depth *= 2.; // Restore scale for pyrDown.
+
+      cv::Mat mask = (depth > max_depth);
+      depth.setTo(0., mask);
+      cv::resize(depth, depth, rgb.size());
+    }
+    cv::Mat ndisp = 0.01*depth;
+    cv::imshow("depth", ndisp);
+    cv::Mat flow0, gradx, grady, valid_grad;
+    const std::map<seg::Pth, ShapePtr>& shapes = segmentor.Put(gray, depth, camera, 
+                                                               visualize_segment ? rgb : cv::Mat(), flow0, gradx, grady, valid_grad);
+#if 0
+    pipeline.Put(gray, depth, flow0, shapes, gradx, grady, valid_grad, rgb, &Tcws);
+#else
     char c = cv::waitKey(stop?0:1);
     if(c == 'q')
       break;
     else if (c == 's')
       stop = !stop;
+#endif
   }
   std::cout << "Done. The end of the sequence" << std::endl;
   return 1;
@@ -81,18 +115,8 @@ int TestWaymodataset(int argc, char** argv) {
   assert(camera);
   Segmentor segmentor;
 
-  int nfeatures = 2000;
-  float scale_factor = 1.2;
-  int nlevels = 8;
-  int initial_fast_th = 20;
-  int min_fast_th = 7;
-#if 1
   seg::CvFeatureDescriptor extractor;
-#else
-  seg::OrbSlam2FeatureDescriptor extractor(nfeatures, scale_factor, nlevels, initial_fast_th, min_fast_th);
-#endif
   seg::Pipeline pipeline(camera, &extractor);
-
   bool visualize_segment = true;
 
   //std::cout << "Intrinsic = \n" << camera->GetK() << std::endl;
@@ -105,7 +129,7 @@ int TestWaymodataset(int argc, char** argv) {
     const cv::Mat depth = dataset.GetDepthImage(i);
     cv::Mat gray, flow0, gradx, grady, valid_grad;
     cv::cvtColor(rgb,gray,cv::COLOR_BGR2GRAY);
-    const std::map<seg::Pth, ShapePtr>& shapes = segmentor.Put(gray, depth, *camera, 
+    const std::map<seg::Pth, ShapePtr>& shapes = segmentor.Put(gray, depth, camera, 
                                                                visualize_segment ? rgb : cv::Mat(), flow0, gradx, grady, valid_grad);
     pipeline.Put(gray, depth, flow0, shapes, gradx, grady, valid_grad, rgb, &Tcws);
     /*

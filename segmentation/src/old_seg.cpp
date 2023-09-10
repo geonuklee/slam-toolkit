@@ -6,36 +6,6 @@
 #include "../include/seg.h"
 #include "../include/util.h"
 
-const std::map<int, ShapePtr>& Segmentor::Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera, cv::Mat vis_rgb, cv::Mat& flow0, cv::Mat& gradx, cv::Mat& grady, cv::Mat& valid_grad) {
-  if(camera.GetD().norm() > 1e-5){
-    std::cerr << "Not support distorted image. Put rectified image" << std::endl;
-    exit(1);
-  }
-
-  cv::cuda::GpuMat g_gray;
-  g_gray.upload(gray);
-
-  cv::cuda::GpuMat g_gray_r;
-  g_gray_r.upload(gray_r);
-  cv::Mat disparity = GetDisparity(g_gray,g_gray_r);
-
-  const auto Trl_ = camera.GetTrl();
-  const float base_line = -Trl_.translation().x();
-  const float fx = camera.GetK()(0,0);
-
-  cv::Mat depth= cv::Mat::zeros(gray.rows,gray.cols, CV_32FC1);
-  for(int r=0; r<gray.rows; r++){
-    for(int c=0; c<gray.cols; c++){
-      const float& disp = disparity.at<float>(r,c);
-      if(disp < 1.)
-        continue;
-      depth.at<float>(r,c) = base_line *  fx / disp;
-    }
-  }
-  return _Put(gray, g_gray, depth, camera, vis_rgb, flow0, gradx, grady, valid_grad);
-}
-
-
 #if 0
 void Pipeline::Put(const cv::Mat gray,
                    const cv::Mat depth,

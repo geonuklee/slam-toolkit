@@ -26,15 +26,15 @@ public:
 class Segmentor {
 public:
   Segmentor();
-  const std::map<int, ShapePtr>& Put(cv::Mat gray, cv::Mat depth, const DepthCamera& camera, cv::Mat vis_rgb, cv::Mat& flow0, cv::Mat& gradx, cv::Mat& grady, cv::Mat& valid_grad);
-  const std::map<int, ShapePtr>& Put(cv::Mat gray, cv::Mat gray_r, const StereoCamera& camera, cv::Mat vis_rgb, cv::Mat& flow0, cv::Mat& gradx, cv::Mat& grady, cv::Mat& valid_grad);
+  const std::map<int, ShapePtr>& Put(cv::Mat gray, cv::Mat depth, const Camera* camera,
+                                     cv::Mat vis_rgb, cv::Mat& flow0, cv::Mat& gradx, cv::Mat& grady, cv::Mat& valid_grad);
 
 private:
 
   const std::map<int, ShapePtr>& _Put(cv::Mat gray,
             cv::cuda::GpuMat g_gray,
             cv::Mat depth,
-            const Camera& camera,
+            const Camera* camera,
             cv::Mat vis_rgb, // for visualization
             cv::Mat& flow0,
             cv::Mat& gradx,

@@ -341,7 +341,7 @@ std::map<int,int> TrackShapes(const std::map<int, ShapePtr>& local_shapes,
 
 
 void GetGrad(const cv::Mat depth , const cv::Mat valid_mask,
-             const Camera& camera,
+             const Camera* camera,
              cv::Mat& gradx,
              cv::Mat& grady,
              cv::Mat& valid_grad
@@ -351,8 +351,8 @@ void GetGrad(const cv::Mat depth , const cv::Mat valid_mask,
   valid_grad = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
   // sample offset, [meter]
   const float s = 0.1;
-  const float sfx = s*camera.GetK()(0,0);
-  const float sfy = s*camera.GetK()(1,1);
+  const float sfx = s*camera->GetK()(0,0);
+  const float sfy = s*camera->GetK()(1,1);
 #if 1
   cv::Mat dst;
 #else
@@ -420,7 +420,7 @@ cv::Mat GetConcaveEdges(const cv::Mat gradx,
                      const cv::Mat grady,
                      const cv::Mat depth,
                      const cv::Mat valid_mask,
-                     const Camera& camera){
+                     const Camera* camera){
   cv::Mat hessian = cv::Mat::zeros(depth.rows, depth.cols, CV_32FC1);
 
   // TODO Hessian 의 dl도 gradients 처럼 [meter] unit으로 변경
@@ -433,9 +433,9 @@ cv::Mat GetConcaveEdges(const cv::Mat gradx,
   const float fx = camera.GetK()(0,0);
   const float fy = camera.GetK()(1,1);
 #endif
-  const float sfx = s*camera.GetK()(0,0);
-  const float sfy = s*camera.GetK()(1,1);
-  const float Rfx = R*camera.GetK()(0,0);
+  const float sfx = s*camera->GetK()(0,0);
+  const float sfy = s*camera->GetK()(1,1);
+  const float Rfx = R*camera->GetK()(0,0);
   //const float Rfy = R*camera.GetK()(1,1);
 
   for(int r=0; r < depth.rows-0; r++) {
@@ -560,7 +560,7 @@ cv::Mat FilterThinNoise(const cv::Mat edges){
 }
 
 cv::Mat GetDDEdges(const cv::Mat depth, const cv::Mat valid_mask,
-                   const Camera& camera){
+                   const Camera* camera){
   cv::Mat edge = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
   std::vector<cv::Point2i> samples = {
     cv::Point2i(1,0),
@@ -728,7 +728,7 @@ cv::Mat EntireVisualization(const cv::Mat _rgb,
 const std::map<int, ShapePtr>& Segmentor::_Put(cv::Mat gray,
                cv::cuda::GpuMat g_gray,
                cv::Mat depth,
-               const Camera& camera,
+               const Camera* camera,
                cv::Mat vis_rgb,
                cv::Mat& flow0,
                cv::Mat& gradx,
@@ -810,7 +810,7 @@ const std::map<int, ShapePtr>& Segmentor::_Put(cv::Mat gray,
   return global_shapes_;
 }
 
-const std::map<int, ShapePtr>& Segmentor::Put(cv::Mat gray, cv::Mat depth, const DepthCamera& camera, cv::Mat vis_rgb,
+const std::map<int, ShapePtr>& Segmentor::Put(cv::Mat gray, cv::Mat depth, const Camera* camera, cv::Mat vis_rgb,
                                               cv::Mat& flow0, cv::Mat& gradx, cv::Mat& grady, cv::Mat& valid_grad) {
   cv::cuda::GpuMat g_gray;
   g_gray.upload(gray);
