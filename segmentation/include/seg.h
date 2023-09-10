@@ -78,5 +78,18 @@ std::map<int,int> TrackShapes(const std::map<int, ShapePtr>& local_shapes,
                               std::map<int, ShapePtr>& global_shapes,
                               int& n_shapes);
 
+void GetGrad(const cv::Mat depth , const cv::Mat valid_mask,
+             const Camera* camera,
+             cv::Mat& gradx,
+             cv::Mat& grady,
+             cv::Mat& valid_grad
+             );
+cv::Mat GetConcaveEdges(const cv::Mat gradx,
+                     const cv::Mat grady,
+                     const cv::Mat depth,
+                     const cv::Mat valid_mask,
+                     const Camera* camera);
+
+cv::Mat GetDDEdges(const cv::Mat depth, const cv::Mat valid_mask, const Camera* camera);
 
 #endif

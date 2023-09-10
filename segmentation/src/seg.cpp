@@ -1,4 +1,4 @@
-#include <opencv2/core/types.hpp>
+
 #include <opencv2/cudaoptflow.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
@@ -584,7 +584,8 @@ cv::Mat GetDDEdges(const cv::Mat depth, const cv::Mat valid_mask,
           if(!valid_mask.at<unsigned char>(pt1))
             continue;
           const float& z1 = depth.at<float>(pt1);
-          float th = std::max<float>(0.01*z0, 2.);
+          float th = std::max<float>(0.05*z0, 2.);
+          //float th = 0.1;
           if(std::abs(z1-z0) < th)
             continue;
           e = true;

@@ -58,10 +58,16 @@ int TestKitti(int argc, char** argv) {
   const float base_line = -Trl_.translation().x();
   const float fx = camera->GetK()(0,0);
 
-  pybind11::scoped_interpreter python; // 이 인스턴스가 파괴되면 인터프리터 종료.
-  HITNetStereoMatching hitnet(base_line, fx);
+  // Parameters for goodFeaturesToTrack
+  int maxCorners = 100;  // Maximum number of corners to detect
+  double qualityLevel = 0.01;  // Quality level threshold
+  double minDistance = 10.0;  // Minimum distance between detected corners
 
-  bool stop = false;
+
+  pybind11::scoped_interpreter python; // 이 인스턴스가 파괴되면 인터프리터 종료.
+  HITNetStereoMatching hitnet;
+
+  bool stop = true;
   for(int i=0; i<dataset.Size(); i+=1){
     cv::Mat rgb   = dataset.GetImage(i, cv::IMREAD_COLOR);
     cv::Mat rgb_r = dataset.GetRightImage(i, cv::IMREAD_COLOR);
@@ -69,22 +75,28 @@ int TestKitti(int argc, char** argv) {
     cv::Mat gray, gray_r;
     cv::cvtColor(rgb, gray, cv::COLOR_BGR2GRAY);
     cv::cvtColor(rgb_r, gray_r, cv::COLOR_BGR2GRAY);
- 
+
+    std::vector<cv::Point2f> corners;
+    cv::goodFeaturesToTrack(gray, corners, maxCorners, qualityLevel, minDistance);
+
+
     // small input to reserve time.
-    cv::pyrDown(gray, gray);
-    cv::pyrDown(gray_r, gray_r);
+    cv::Mat disp = hitnet.GetDisparity(gray, gray_r);
 
-    auto t0 = std::chrono::steady_clock::now();
-    cv::Mat depth = hitnet.Put(gray, gray_r);
-    depth *= 2.; // Restore scale for pyrDown.
-    auto t1 = std::chrono::steady_clock::now();
-    std::cout << "etime = " << std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count() << "[msec]" << std::endl;
+    cv::Mat dst;
+    cv::vconcat(rgb, rgb_r, dst);
+    for(auto pt : corners){
+      cv::circle(dst, pt, 5, CV_RGB(0,0,255),1);
+      float dp = disp.at<float>(pt);
+      cv::Point2f pt2(pt.x-dp, pt.y+rgb.rows);
+      cv::line(dst, pt, pt2, CV_RGB(0,255,0),1 );
+      cv::circle(dst, pt2, 5, CV_RGB(0,0,255),1);
+    }
+    cv::imshow("stereo", dst);
 
-    cv::resize(depth, depth, rgb.size());
-
-    cv::Mat ndisp = 0.01*depth;
-    //cv::normalize(depth, ndisp, 0, 255, cv::NORM_MINMAX, CV_8U);
-    cv::imshow("depth", ndisp);
+    cv::Mat ndisp;
+    cv::normalize(disp, ndisp, 0, 255, cv::NORM_MINMAX, CV_8U);
+    cv::imshow("ndisp", ndisp);
     cv::imshow("rgb", rgb);
 
     char c = cv::waitKey(stop?0:1);

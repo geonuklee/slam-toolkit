@@ -57,13 +57,15 @@ int TestKitti(int argc, char** argv) {
   const float fx = camera->GetK()(0,0);
 
   pybind11::scoped_interpreter python; // 이 인스턴스가 파괴되면 인터프리터 종료.
-  HITNetStereoMatching hitnet(base_line, fx);
+  HITNetStereoMatching hitnet;
+  std::cout << "!!!!!!!!!! Loding HITNet is done !!!!!!!!!!!!!!!" << std::endl;
+  std::cout << "base_line = " << base_line << ", fx = " << fx << std::endl;
   Segmentor segmentor;
   seg::CvFeatureDescriptor extractor;
   seg::Pipeline pipeline(camera, &extractor);
 
   bool visualize_segment = true;
-  bool stop = true;
+  bool stop = false;
   for(int i=0; i<dataset.Size(); i+=1){
     std::cout << "F# " << i << std::endl;
     const cv::Mat rgb   = dataset.GetImage(i, cv::IMREAD_COLOR);
@@ -73,25 +75,19 @@ int TestKitti(int argc, char** argv) {
     cv::cvtColor(rgb_r, gray_r, cv::COLOR_BGR2GRAY);
 
     // small input to reserve time.
+    cv::Mat disp = hitnet.GetDisparity(gray, gray_r);
     cv::Mat depth; {
-      const float max_depth = 200.;
-      cv::Mat small_gray, small_gray_r;
-      cv::pyrDown(gray, small_gray);
-      cv::pyrDown(gray_r, small_gray_r);
-      depth = hitnet.Put(small_gray, small_gray_r);
-      depth *= 2.; // Restore scale for pyrDown.
-
-      cv::Mat mask = (depth > max_depth);
-      depth.setTo(0., mask);
-      cv::resize(depth, depth, rgb.size());
+      cv::Mat mask = disp < 1.;
+      disp.setTo(1., mask);
+      depth = base_line*fx / disp;
+      depth.setTo(0., depth > 50.);
     }
-    cv::Mat ndisp = 0.01*depth;
-    cv::imshow("depth", ndisp);
+    //cv::imshow("depth", 0.01*depth);
     cv::Mat flow0, gradx, grady, valid_grad;
     const std::map<seg::Pth, ShapePtr>& shapes = segmentor.Put(gray, depth, camera, 
                                                                visualize_segment ? rgb : cv::Mat(), flow0, gradx, grady, valid_grad);
-#if 0
-    pipeline.Put(gray, depth, flow0, shapes, gradx, grady, valid_grad, rgb, &Tcws);
+#if 1
+    pipeline.Put(gray, depth, flow0, shapes, gradx, grady, valid_grad, rgb, Tcws.empty()?nullptr:&Tcws);
 #else
     char c = cv::waitKey(stop?0:1);
     if(c == 'q')
@@ -132,6 +128,7 @@ int TestWaymodataset(int argc, char** argv) {
     const std::map<seg::Pth, ShapePtr>& shapes = segmentor.Put(gray, depth, camera, 
                                                                visualize_segment ? rgb : cv::Mat(), flow0, gradx, grady, valid_grad);
     pipeline.Put(gray, depth, flow0, shapes, gradx, grady, valid_grad, rgb, &Tcws);
+    //cv::imshow("depth", 0.01*depth);
     /*
     if(i<1)
       continue;
