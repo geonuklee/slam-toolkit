@@ -35,9 +35,39 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include "segslam.h"
 #include <exception>
 #include <g2o/types/slam3d/se3quat.h>
+#include <filesystem>
 
 #include <pybind11/embed.h>
 #include "hitnet.h"
+
+cv::Mat Disparit2Depth(cv::Mat disp,
+                       const float base_line,
+                       const float fx,
+                       const float min_disp) {
+  cv::Mat depth;
+  cv::Mat mask = disp < min_disp;
+  disp.setTo(1., mask);
+  depth = base_line*fx / disp;
+  return depth;
+}
+
+void WriteKittiTrajectory(const g2o::SE3Quat& Tcw,
+                          std::ofstream& output_file) {
+  output_file << std::scientific;
+  g2o::SE3Quat Twc = Tcw.inverse();
+  Eigen::Matrix<double,3,4> Rt = Twc.to_homogeneous_matrix().block<3,4>(0,0).cast<double>();
+  for(size_t i = 0; i < 3; i++){
+    for(size_t j = 0; j < 4; j++){
+      output_file << Rt(i,j);
+      if(i==2 && j==3)
+        continue;
+      output_file << " ";
+    }
+  }
+  output_file << std::endl;
+  output_file.flush();
+  return;
+}
 
 int TestKitti(int argc, char** argv) {
   //Seq :"02",("13" "20");
@@ -55,14 +85,21 @@ int TestKitti(int argc, char** argv) {
   const auto Trl_ = camera->GetTrl();
   const float base_line = -Trl_.translation().x();
   const float fx = camera->GetK()(0,0);
+  const float min_disp = 1.;
 
   pybind11::scoped_interpreter python; // 이 인스턴스가 파괴되면 인터프리터 종료.
   HITNetStereoMatching hitnet;
-  std::cout << "!!!!!!!!!! Loding HITNet is done !!!!!!!!!!!!!!!" << std::endl;
-  std::cout << "base_line = " << base_line << ", fx = " << fx << std::endl;
+  //std::cout << "!!!!!!!!!! Loding HITNet is done !!!!!!!!!!!!!!!" << std::endl;
   Segmentor segmentor;
   seg::CvFeatureDescriptor extractor;
   seg::Pipeline pipeline(camera, &extractor);
+
+  std::string output_fn = std::string(PACKAGE_DIR)+"/output.txt";
+  std::ofstream output_file(output_fn);
+  if(! output_file.is_open() ){
+    std::cout << "can't open " << output_fn << std::endl;
+    throw -1;
+  }
 
   bool visualize_segment = true;
   bool stop = false;
@@ -73,30 +110,33 @@ int TestKitti(int argc, char** argv) {
     cv::Mat gray, gray_r;
     cv::cvtColor(rgb, gray, cv::COLOR_BGR2GRAY);
     cv::cvtColor(rgb_r, gray_r, cv::COLOR_BGR2GRAY);
-
-    // small input to reserve time.
     cv::Mat disp = hitnet.GetDisparity(gray, gray_r);
-    cv::Mat depth; {
-      cv::Mat mask = disp < 1.;
-      disp.setTo(1., mask);
-      depth = base_line*fx / disp;
-      depth.setTo(0., depth > 50.);
-    }
-    //cv::imshow("depth", 0.01*depth);
+    cv::Mat depth = Disparit2Depth(disp,base_line,fx, min_disp);
+    depth.setTo(0., depth > 50.);
     cv::Mat flow0, gradx, grady, valid_grad;
     const std::map<seg::Pth, ShapePtr>& shapes = segmentor.Put(gray, depth, camera, 
                                                                visualize_segment ? rgb : cv::Mat(), flow0, gradx, grady, valid_grad);
-#if 1
-    pipeline.Put(gray, depth, flow0, shapes, gradx, grady, valid_grad, rgb, Tcws.empty()?nullptr:&Tcws);
-#else
+    seg::Frame* frame = nullptr;
+    try {
+      frame = pipeline.Put(gray, depth, flow0, shapes, gradx, grady, valid_grad, rgb, Tcws.empty()?nullptr:&Tcws);
+    }
+    catch(const std::exception& e) {
+      if(std::string(e.what())=="termination")
+        exit(1);
+    }
+    WriteKittiTrajectory(frame->GetTcq(0), output_file);
+    /*
     char c = cv::waitKey(stop?0:1);
     if(c == 'q')
       break;
     else if (c == 's')
       stop = !stop;
-#endif
+      */
   }
+  //WriteKittiTrajectory(estaamted_poses, write_file);
+  output_file.close();
   std::cout << "Done. The end of the sequence" << std::endl;
+  std::cout << "Output on " << output_fn << std::endl;
   return 1;
 }
 

@@ -226,6 +226,12 @@ private:
 };
 
 class Mapper;
+
+class ExceptionTermination : public std::exception {
+public:
+  virtual const char *what() const throw() { return "termination"; }
+};
+
 class Pipeline {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -233,7 +239,7 @@ public:
            FeatureDescriptor*const extractor
           );
   ~Pipeline();
-  void Put(const cv::Mat gray,
+  Frame* Put(const cv::Mat gray,
            const cv::Mat depth,
            const cv::Mat flow0,
            const std::map<Pth, ShapePtr>& shapes,

@@ -1257,7 +1257,7 @@ cv::Mat GetClosedOutlineMask(const cv::Size size, const std::map<Pth, ShapePtr>&
   return outline_mask;
 }
 
-void Pipeline::Put(const cv::Mat gray,
+Frame* Pipeline::Put(const cv::Mat gray,
                    const cv::Mat depth,
                    const cv::Mat flow0,
                    const std::map<Pth, ShapePtr>& curr_shapes,
@@ -1303,7 +1303,7 @@ void Pipeline::Put(const cv::Mat gray,
       every_keyframes_.insert(curr_frame->GetId());
       prev_frame_ = curr_frame;
       prev_dominant_qth_ = qth;
-      return;
+      return curr_frame;
     } 
 
     // Set non instance points as a member of dominant rigid body group.
@@ -1480,7 +1480,7 @@ void Pipeline::Put(const cv::Mat gray,
   static bool stop = false;
   char c = cv::waitKey(stop?0:1);
   if(c == 'q')
-    exit(1);
+    throw ExceptionTermination();
   else if (c == 's')
     stop = !stop;
 
@@ -1497,7 +1497,7 @@ void Pipeline::Put(const cv::Mat gray,
 
   prev_frame_ = curr_frame;
   prev_dominant_qth_ = dominant_qth;
-  return;
+  return curr_frame;
 }
 
     /* 

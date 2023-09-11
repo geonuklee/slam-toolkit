@@ -13,3 +13,6 @@
 [submodule "segmentation/others/supersurfel_fusion"]
 	path = segmentation/others/supersurfel_fusion
 	url = https://github.com/BruceCanovas/supersurfel_fusion
+[submodule "thirdparty/evo"]
+	path = thirdparty/evo
+	url = https://github.com/MichaelGrupp/evo
