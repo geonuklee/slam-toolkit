@@ -15,10 +15,12 @@ def kitti_viewer():
     dataset = KittiTrackingDataset(root,seq,label_path)
 
     vi = Viewer(box_type="Kitti")
-    #vi.set_ob_color_map('gnuplot')
+    P2, P3, V2C = dataset.P2, dataset.P3, dataset.V2C
 
     for i in range(len(dataset)):
-        P2, V2C, points, image, labels, label_names = dataset[i]
+        points, image, r_image, oxt, pose, labels, label_names = dataset[i]
+        import pdb; pdb.set_trace()
+
         mask = label_names=="Car"
         if mask is not None:
             labels = labels[mask]

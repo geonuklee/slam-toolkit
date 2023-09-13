@@ -36,8 +36,6 @@ def read_kittiodom_poses(filename):
             import pdb; pdb.set_trace()
         Rt = numpy.array(values).reshape((3,4))
         rot = mat2rot(Rt[:,:3])
-        qx,qy,qz,qw = rot.as_quat()
-        tx,ty,tz=Rt[:,3]
         output[timestamp] = Rt[:,3].tolist() + rot.as_quat().tolist()
         timestamp += 1. # 임의의 timestamp
     return output
