@@ -129,7 +129,6 @@ https://github.com/utiasSTARS/pykitti/blob/0.3.1/pykitti/utils.py#L12
 https://github.com/utiasSTARS/pykitti/blob/0.3.1/pykitti/utils.py#L85
 
 input: oxts txt path
-return : TODO
 """
 def read_oxts(oxts_path):
     # Scale for Mercator projection (from first lat value)
@@ -151,7 +150,6 @@ def read_oxts(oxts_path):
             if origin is None:
                 origin = t
             Twi = transform_from_rot_trans(R, t - origin) # T_w_imu
-            # TODO 좌표변환. T_w_c 구현.
             oxts.append(OxtsData(packet, Twi))
     if len(oxts) == 0:
         oxts = None
@@ -271,7 +269,6 @@ def read_tracking_label(path):
                 else:
                     frame_dict[frame_id] = [line]
                     names_dict[frame_id] = [this_name]
-
     return frame_dict,names_dict
 
 if __name__ == '__main__':

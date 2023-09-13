@@ -54,7 +54,9 @@ class KittiTrackingDataset:
         T_c0_c2[:3,-1] = t_c0_c2
         T_i_c2 = np.matmul(np.matmul(T_i_v,T_v_c0),T_c0_c2)
 
-        # TODO odometry poses start with Identity, for camera_2's coordinate.
+        self.T_c2_v = InvTransform( np.matmul(T_v_i, T_i_c2) )
+
+        # odometry poses start with Identity, for camera_2's coordinate.
         if 'from_dcm' in dir(rotation_util):
             mat2rot = rotation_util.from_dcm
         else:

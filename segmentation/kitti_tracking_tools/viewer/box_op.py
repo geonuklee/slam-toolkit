@@ -205,7 +205,7 @@ def get_line_boxes(boxes,
 
     return return_list
 
-def get_box_points(points, pose=None,show_box_heading=True):
+def get_box_points(points, pose=None, point_num=200, show_box_heading=True):
     """
     box to points
     :param points: (7,),box
@@ -219,9 +219,6 @@ def get_box_points(points, pose=None,show_box_heading=True):
 
     h,w,l = point[5],point[4],point[3]
     x,y,z = point[0],point[1],point[2]
-
-
-    point_num=200
     i=1
     label=1
     z_vector = np.arange(- h / 2, h / 2, h / point_num)[0:point_num]
