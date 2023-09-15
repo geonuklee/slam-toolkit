@@ -75,16 +75,20 @@ include_directories("${CMAKE_SOURCE_DIR}/../pipeline/include")
 add_library(hitnetstereo SHARED src/hitnet.cpp)
 target_link_libraries(hitnetstereo ${PYTHON_LIBRARIES})
 
-add_executable(stereo_seg
-  src/main.cpp
+add_executable(test_hitnet
+  src/test_hitnet.cpp
   ../pipeline/src/camera.cpp
   ../pipeline/src/common.cpp
   ../pipeline/src/dataset.cpp
-  ../pipeline/src/orb_extractor.cpp
 )
-target_link_libraries(stereo_seg hitnetstereo)
-add_dependencies(stereo_seg hitnetstereo)
+target_link_libraries(test_hitnet hitnetstereo)
+add_dependencies(test_hitnet hitnetstereo)
 
+add_executable(test_fasterseg
+  src/test_fasterseg.cpp
+  src/simd.cpp
+)
+set_source_files_properties(src/simd.cpp PROPERTIES COMPILE_FLAGS "-mavx2")
 
 #set_target_properties(example_segmentation PROPERTIES UNITY_BUILD_MODE BATCH UNITY_BUILD_BATCH_SIZE 10)
 #set_source_files_properties(src/debug.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
@@ -93,21 +97,7 @@ add_dependencies(stereo_seg hitnetstereo)
 #set_source_files_properties(src/seg.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
 #set_source_files_properties(src/segslam.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
 
-target_link_libraries(stereo_seg
-${OpenCV_LIBS}
-${Boost_LIBRARIES}
-${FLANN_LIBRARY}
-${PROJECT_SOURCE_DIR}/../thirdparty/DBoW2/lib/libDBoW2.so
-optimized g2o_core
-optimized g2o_stuff
-optimized g2o_types_sba
-#optimized g2o_types_slam3d
-
-debug g2o_core_d
-debug g2o_stuff_d
-debug g2o_types_sba_d
-#optimized g2o_types_slam3d_d
-stdc++fs
-)
+target_link_libraries(test_hitnet ${OpenCV_LIBS} ${Boost_LIBRARIES} stdc++fs)
+target_link_libraries(test_fasterseg ${OpenCV_LIBS} )
 
 

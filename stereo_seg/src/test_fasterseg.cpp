@@ -65,31 +65,55 @@ int TestFasterSeg(int argc, char** argv) {
   float font_scale = .4;
 
   bool stop_flag = false;
+  int n = 0;
   while(true){
     cv::imshow("depth", 0.01*depth);
-    {
-      auto start = std::chrono::steady_clock::now();
-      cv::Mat dd_edges =GetDDEdges(depth,false); 
-      auto stop = std::chrono::steady_clock::now();
-      std::string etime_msg = std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(stop-start).count())+ "[micro sec]";
-      std::cout << etime_msg << std::endl;
-      cv::Mat dst;
-      cv::cvtColor(255*dd_edges, dst, cv::COLOR_GRAY2BGR);
-      cv::putText(dst, etime_msg, cv::Point(40,15), font_face, font_scale, CV_RGB(255,0,0) );
-      cv::imshow("Old edge", dst);
-    }
-    {
-      auto start = std::chrono::steady_clock::now();
-      cv::Mat dd_edges =GetDDEdges(depth,true); 
-      auto stop = std::chrono::steady_clock::now();
-      std::string etime_msg = std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(stop-start).count())+ "[micro sec]";
-      std::cout << etime_msg << std::endl;
-      cv::Mat dst;
-      cv::cvtColor(255*dd_edges, dst, cv::COLOR_GRAY2BGR);
-      cv::putText(dst, etime_msg, cv::Point(40,15), font_face, font_scale, CV_RGB(255,0,0) );
-      cv::imshow("avx edge", dst);
+    float fx = 512.;
+    float fy = fx;
+    int sample_offset = 4;
+
+    for(bool with_simd : {false, true}){
+      cv::Mat dd_edges = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
+      cv::Mat gradx = cv::Mat::zeros(depth.rows, depth.cols, CV_32FC1);
+      cv::Mat grady = cv::Mat::zeros(depth.rows, depth.cols, CV_32FC1);
+      cv::Mat valid_grad = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
+      cv::Mat concave_edges = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
+      cv::Mat valid_mask = depth > 0.;
+
+      {
+        auto start = std::chrono::steady_clock::now();
+        GetDDEdges(depth,dd_edges,true); 
+        auto stop = std::chrono::steady_clock::now();
+        std::string etime_msg = std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(stop-start).count())+ "[micro sec]";
+        cv::Mat dst;
+        cv::cvtColor(255*dd_edges, dst, cv::COLOR_GRAY2BGR);
+        cv::putText(dst, etime_msg, cv::Point(40,15), font_face, font_scale, CV_RGB(255,0,0) );
+        cv::imshow( with_simd?"avx edge":"old edge", dst);
+      }
+      {
+        auto start = std::chrono::steady_clock::now();
+        GetGrad(depth, fx, fy, valid_mask, sample_offset, gradx, grady, valid_grad, with_simd);
+        auto stop = std::chrono::steady_clock::now();
+        std::string etime_msg = std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(stop-start).count())+ "[micro sec]";
+        cv::Mat dst = VisualizeGrad(gradx, grady);
+        cv::putText(dst, etime_msg, cv::Point(40,15), font_face, font_scale, CV_RGB(255,0,0) );
+        cv::imshow( with_simd?"avx grad":"old grad", dst);
+      }
+      {
+        auto start = std::chrono::steady_clock::now();
+        GetConcaveEdges(gradx,grady,depth,valid_mask,sample_offset, fx,fy, concave_edges, with_simd);
+        auto stop = std::chrono::steady_clock::now();
+        std::string etime_msg = std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(stop-start).count())+ "[micro sec]";
+        cv::Mat dst;
+        cv::cvtColor(255*concave_edges, dst, cv::COLOR_GRAY2BGR);
+        cv::putText(dst, etime_msg, cv::Point(40,15), font_face, font_scale, CV_RGB(255,0,0) );
+        cv::imshow( with_simd?"avx concave":"old concave", dst);
+      }
     }
 
+    n = (n+1) % 5; // cpu 혹사 방지...
+    if(n == 0)
+      stop_flag = true;
     char c= cv::waitKey(stop_flag?0:1);
     if(c=='q')
       break;
