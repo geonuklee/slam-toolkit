@@ -4,6 +4,7 @@
 #include "camera.h"
 #include <exception>
 #include <g2o/types/slam3d/se3quat.h>
+#include <opencv2/core.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -11,6 +12,7 @@
 #include <chrono>
 
 #include "hitnet.h"
+#include "simd.h"
 #include <pybind11/embed.h>
 
 // https://stackoverflow.com/questions/17735863/opencv-save-cv-32fc1-images
@@ -75,12 +77,16 @@ int TestHitNet(int argc, char** argv) {
   const auto Trl_ = camera->GetTrl();
   const float base_line = -Trl_.translation().x();
   const float fx = camera->GetK()(0,0);
+  const float fy = camera->GetK()(1,1);
   // Parameters for goodFeaturesToTrack
   int maxCorners = 100;  // Maximum number of corners to detect
   double qualityLevel = 0.01;  // Quality level threshold
   double minDistance = 10.0;  // Minimum distance between detected corners
   pybind11::scoped_interpreter python; // 이 인스턴스가 파괴되면 인터프리터 종료.
   HITNetStereoMatching hitnet;
+
+  int sample_offset = 4;
+
   bool stop = true;
   for(int i=0; i<dataset.Size(); i+=1){
     cv::Mat rgb   = dataset.GetImage(i, cv::IMREAD_COLOR);
@@ -103,20 +109,33 @@ int TestHitNet(int argc, char** argv) {
     }
 
     cv::Mat depth = Disparit2Depth(disp,base_line,fx,1.);
-    writeRawImage(depth, "depth.raw");
-    /*
-    cv::Mat fdepth;
-    readRawImage(fdepth, "depth.raw");
-    cv::imshow("depth_from_file", 0.01*fdepth);
-    */
 
-    cv::waitKey();
+    cv::Mat dd_edges = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
+    cv::Mat gradx = cv::Mat::zeros(depth.rows, depth.cols, CV_32FC1);
+    cv::Mat grady = cv::Mat::zeros(depth.rows, depth.cols, CV_32FC1);
+    cv::Mat valid_grad = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
+    cv::Mat concave_edges = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
+    cv::Mat valid_mask = depth > 0.;
 
+    auto t0 = std::chrono::steady_clock::now();
+    GetDDEdges(depth,dd_edges,true); 
+    GetGrad(depth, fx, fy, valid_mask, sample_offset, gradx, grady, valid_grad, true);
+    GetConcaveEdges(gradx,grady,depth,valid_mask,sample_offset, fx,fy, -100., concave_edges, true);
+    auto t1 = std::chrono::steady_clock::now();
+    std::string etime_msg = std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(t1-t0).count())+ "[micro sec]";
+
+    //writeRawImage(depth, "depth.raw");
     cv::imshow("stereo", dst);
     cv::Mat ndisp;
     cv::normalize(disp, ndisp, 0, 255, cv::NORM_MINMAX, CV_8U);
     cv::imshow("ndisp", ndisp);
     cv::imshow("rgb", rgb);
+
+    cv::Mat dst_concave;
+    cv::cvtColor(255*concave_edges, dst_concave, cv::COLOR_GRAY2BGR);
+    cv::putText(dst_concave, etime_msg, cv::Point(40,15), cv::FONT_HERSHEY_SIMPLEX, .4, CV_RGB(255,0,0) );
+    cv::imshow("avx concave", dst_concave);
+
     char c = cv::waitKey(stop?0:1);
     if(c == 'q')
       break;

@@ -2,12 +2,9 @@
 #include <immintrin.h> // sse or avx
 
 /*
-
 * Referenced tutorials, codes 
   * for SIMD programming : http://supercomputingblog.com/windows/image-processing-with-sse/
   * for image process    : https://github.com/opencv/opencv/blob/4790a3732e725b102f6c27858e7b43d78aee2c3e/modules/imgproc/src/segmentation.cpp#L88
-
-
 */
 
 void GetDDEdges(const cv::Mat _depth,
@@ -60,7 +57,8 @@ void GetDDEdges(const cv::Mat _depth,
     T m_ratio = _mm256_set1_ps(0.1);
     T m_d_min = _mm256_set1_ps(0.001); // invalid depth
     T m_th_min = _mm256_set1_ps(2.);
-    T m_zero = _mm256_set1_ps(-0.0f); // 주의 :  -0.0f != 0.0f
+    T m_ps_zero = _mm256_set1_ps(-0.0f); // 주의 :  -0.0f != 0.0f
+    T m_i_zero  = _mm256_set1_ps(0.f);
     T m_dcp, m_ath, m_n1, m_n2, m_n3, m_n4, m_adiff, m_edges, m_results;
 
     long bit_mask;
@@ -77,24 +75,28 @@ void GetDDEdges(const cv::Mat _depth,
 
         m_n1      = _mm256_loadu_ps(d_cp-1);
         m_n3      = _mm256_loadu_ps(d_cp-dstep);
+
         m_adiff   = _mm256_sub_ps(m_dcp, m_n1);
-        m_adiff   = _mm256_andnot_ps(m_zero, m_adiff); // 절대값
+        m_adiff   = _mm256_andnot_ps(m_ps_zero, m_adiff); // 절대값
         m_edges   = _mm256_cmp_ps(m_adiff, m_ath, _CMP_GE_OS);
-        m_results = _mm256_blendv_ps(m_edges, m_zero, _mm256_cmp_ps(m_n1, m_d_min, _CMP_LE_OS) ); // ignore results from invalid n1
+        m_results = _mm256_blendv_ps(m_edges, m_i_zero, _mm256_cmp_ps(m_n1, m_d_min, _CMP_LE_OS) ); // ignore results from invalid n1
         //m_results = m_edges;
 
         m_adiff   = _mm256_sub_ps(m_dcp, m_n3);
-        m_adiff   = _mm256_andnot_ps(m_zero, m_adiff);
+        m_adiff   = _mm256_andnot_ps(m_ps_zero, m_adiff);
         m_edges   = _mm256_or_ps(m_edges, _mm256_cmp_ps(m_adiff, m_ath, _CMP_GE_OS));
-        m_edges   = _mm256_blendv_ps(m_edges, m_zero, _mm256_cmp_ps(m_n3, m_d_min, _CMP_LE_OS) ); // ignore results from invalid n3
+        m_edges   = _mm256_blendv_ps(m_edges, m_i_zero, _mm256_cmp_ps(m_n3, m_d_min, _CMP_LE_OS) ); // ignore results from invalid n3
+
         m_results = _mm256_or_ps(m_results, m_edges);
-        m_results = _mm256_blendv_ps(m_results, m_zero, _mm256_cmp_ps(m_dcp, m_d_min, _CMP_LE_OS) ); // ignore results from invalid cp
+        m_results = _mm256_blendv_ps(m_results, m_i_zero, _mm256_cmp_ps(m_dcp, m_d_min, _CMP_LE_OS) ); // ignore results from invalid cp
 
         bit_mask      = _mm256_movemask_ps(m_results);
         for (k = 0; k < vstep; k++) 
           e[k] = (bit_mask >> k) & 1;
       }
     }
+    /*
+    */
   }
   return;
 }
@@ -179,11 +181,18 @@ void GetGrad(const cv::Mat _depth, float fx, float fy, const cv::Mat _valid_mask
     const int vstep = sizeof(T) / sizeof(Real);
     Real* gradx = _gradx.ptr<Real>();
     Real* grady = _grady.ptr<Real>();
+    uchar* valid_grad = _valid_grad.ptr<uchar>();
     const Real* depth = _depth.ptr<Real>();
     const int dstep = int(_depth.step/sizeof(depth[0]));
     const int gstep = int(_gradx.step/sizeof(gradx[0]));
-    int v, u;
-    T m_cp, m_dx0, m_dx1, m_dy0, m_dy1, m_gx, m_gy, m_zeromask;
+    const int valid_step = int(_valid_grad.step/sizeof(valid_grad[0]));
+    long bit_mask;
+    int v, u,k ;
+    T m_cp, m_dx0, m_dx1, m_dy0, m_dy1, m_gx, m_gy, m_valid;
+    T m_d_min  = _mm256_set1_ps(0.001); // invalid depth
+    T m_i_zero = _mm256_set1_ps(0.f);
+    T m_i_one  = _mm256_set1_ps(1.f);
+    T m_not_valid;
 
     const int offset_step = offset*dstep;
     T m_hfx = _mm256_set1_ps(.5 * fx / (float) offset);
@@ -193,13 +202,13 @@ void GetGrad(const cv::Mat _depth, float fx, float fy, const cv::Mat _valid_mask
       depth += dstep;
       gradx += gstep;
       grady += gstep;
+      valid_grad+=valid_step;
     }
-
     for( v = offset; v < size.height-offset; v++ ) {
       for( u = offset; u < size.width-offset-vstep; u+=vstep ) {
         const Real* cp = depth + u;
+        uchar* valid_p = valid_grad + u;
         m_cp      = _mm256_loadu_ps(cp);
-        m_zeromask = _mm256_cmp_ps(m_cp, _mm256_setzero_ps(), _CMP_EQ_OQ);
         m_dx0     = _mm256_loadu_ps(cp-offset);
         m_dx1     = _mm256_loadu_ps(cp+offset);
         m_dy0     = _mm256_loadu_ps(cp-offset_step);
@@ -212,11 +221,29 @@ void GetGrad(const cv::Mat _depth, float fx, float fy, const cv::Mat _valid_mask
         */
         m_gx      = _mm256_sub_ps(m_dx1, m_dx0);
         m_gx      = _mm256_div_ps(_mm256_mul_ps(m_hfx,m_gx), m_cp );
-        m_gx       = _mm256_andnot_ps(m_zeromask, m_gx);
+        //m_gx = _mm256_blendv_ps(m_gx, m_i_zero, _mm256_cmp_ps(m_cp,  m_d_min, _CMP_LE_OS) );
+        //m_gx = _mm256_blendv_ps(m_gx, m_i_zero, _mm256_cmp_ps(m_dx0, m_d_min, _CMP_LE_OS) );
+        //m_gx = _mm256_blendv_ps(m_gx, m_i_zero, _mm256_cmp_ps(m_dx1, m_d_min, _CMP_LE_OS) );
 
         m_gy      = _mm256_sub_ps(m_dy1, m_dy0);
         m_gy      = _mm256_div_ps(_mm256_mul_ps(m_hfy,m_gy), m_cp );
-        m_gy      = _mm256_andnot_ps(m_zeromask, m_gy);
+        //m_gy = _mm256_blendv_ps(m_gy, m_i_zero, _mm256_cmp_ps(m_cp,  m_d_min, _CMP_LE_OS) );
+        //m_gy = _mm256_blendv_ps(m_gy, m_i_zero, _mm256_cmp_ps(m_dy0, m_d_min, _CMP_LE_OS) );
+        //m_gy = _mm256_blendv_ps(m_gy, m_i_zero, _mm256_cmp_ps(m_dy1, m_d_min, _CMP_LE_OS) );
+
+        m_valid = _mm256_cmp_ps(m_cp,  m_d_min, _CMP_GE_OS);
+        m_valid = _mm256_blendv_ps(m_valid, m_i_zero, _mm256_cmp_ps(m_dx0, m_d_min, _CMP_LE_OS) );
+        m_valid = _mm256_blendv_ps(m_valid, m_i_zero, _mm256_cmp_ps(m_dx1, m_d_min, _CMP_LE_OS) );
+        m_valid = _mm256_blendv_ps(m_valid, m_i_zero, _mm256_cmp_ps(m_dy0, m_d_min, _CMP_LE_OS) );
+        m_valid = _mm256_blendv_ps(m_valid, m_i_zero, _mm256_cmp_ps(m_dy1, m_d_min, _CMP_LE_OS) );
+
+        m_not_valid = _mm256_cmp_ps(m_valid, m_i_one, _CMP_LE_OS); // Inverted mask
+        m_gx = _mm256_blendv_ps(m_gx, m_i_zero, m_not_valid);
+        m_gy = _mm256_blendv_ps(m_gy, m_i_zero, m_not_valid);
+
+        bit_mask      = _mm256_movemask_ps(m_valid);
+        for (k = 0; k < vstep; k++) 
+          valid_p[k] = (bit_mask >> k) & 1;
 
         _mm256_storeu_ps(gradx+u, m_gx);
         _mm256_storeu_ps(grady+u, m_gy);
@@ -224,6 +251,7 @@ void GetGrad(const cv::Mat _depth, float fx, float fy, const cv::Mat _valid_mask
       depth += dstep;
       gradx += gstep;
       grady += gstep;
+      valid_grad+=valid_step;
     }
   } // if !with_simd
   return;
@@ -243,6 +271,7 @@ void GetConcaveEdges(const cv::Mat& _gradx,
                      const cv::Mat _valid_mask,
                      const int offset,
                      float fx, float fy,
+                     float _neg_hessian_threshold, // -100.f
                      cv::Mat& _edge,
                      bool with_simd) {
   if(_edge.empty())
@@ -342,20 +371,29 @@ void GetConcaveEdges(const cv::Mat& _gradx,
     const Real* gradx = _gradx.ptr<Real>();
     const Real* grady = _grady.ptr<Real>();
     const Real* depth = _depth.ptr<Real>();
+
+    cv::Mat inv_valid_mask = ~_valid_mask;
+    const uchar* valid_mask = inv_valid_mask.ptr<uchar>();
     uchar* edge = _edge.ptr<uchar>();
 
     const int dstep = int(_depth.step/sizeof(depth[0]));
     const int gstep = int(_gradx.step/sizeof(gradx[0]));
     const int estep = int(_edge.step/sizeof(edge[0]));
+    const int valid_step = int(_valid_mask.step/sizeof(valid_mask[0]));
 
     T m_hfx = _mm256_set1_ps(.5*fx);
     T m_hfy = _mm256_set1_ps(.5*fy);
 
     long bit_mask;
     int u, v, k;
-    T m_cp, m_gx0, m_gx1, m_gy0, m_gy1, m_hxx, m_hyy, m_zeromask, m_edges, m_results;
+    T m_cp, m_gx0, m_gx1, m_gy0, m_gy1, m_hxx, m_hyy, m_zeromask, m_edges, m_trace; //, m_vx0, m_vx1, m_vy0, m_vy1;
 
-    T m_neg_h_th = _mm256_set1_ps(-100.);
+    T m_neg_h_th = _mm256_set1_ps(_neg_hessian_threshold);
+    T m_w_min   = _mm256_set1_ps(1.);
+    T m_w_depth = _mm256_set1_ps(20.); // [meter]
+    T m_min_depth = _mm256_set1_ps(1e-5);
+    T m_i_zero  = _mm256_set1_ps(0.f);
+    T m_weighted_h_th;
 
     const int e_offset_step = offset*estep;
     const int g_offset_step = offset*gstep;
@@ -364,16 +402,17 @@ void GetConcaveEdges(const cv::Mat& _gradx,
       gradx += gstep;
       grady += gstep;
       edge  += estep;
+      valid_mask += valid_step;
     }
     for( v = offset; v < size.height-offset; v++ ) {
       for( u = offset; u < size.width-offset-vstep; u+=vstep ) {
         const Real* d_cp = depth + u;
         const Real* gx_cp = gradx + u;
         const Real* gy_cp = grady + u;
+        const uchar* v_cp = valid_mask + u;
         uchar* e = edge + u;
 
         m_cp       = _mm256_loadu_ps(d_cp);
-        m_zeromask = _mm256_cmp_ps(m_cp, _mm256_setzero_ps(), _CMP_EQ_OQ);
 
         m_gx0      = _mm256_loadu_ps(gx_cp-offset);
         m_gx1      = _mm256_loadu_ps(gx_cp+offset);
@@ -388,16 +427,27 @@ void GetConcaveEdges(const cv::Mat& _gradx,
         */
         m_hxx      = _mm256_sub_ps(m_gx1, m_gx0);
         m_hxx      = _mm256_div_ps(_mm256_mul_ps(m_hfx, m_hxx), m_cp);
-        m_hxx      = _mm256_andnot_ps(m_zeromask, m_hxx);
-        m_results  = _mm256_cmp_ps(m_hxx, m_neg_h_th, _CMP_LE_OS);
 
         m_hyy      = _mm256_sub_ps(m_gy1, m_gy0);
         m_hyy      = _mm256_div_ps(_mm256_mul_ps(m_hfy, m_hyy), m_cp);
-        m_hyy      = _mm256_andnot_ps(m_zeromask, m_hyy);
-        m_edges    = _mm256_cmp_ps(m_hyy, m_neg_h_th, _CMP_LE_OS);
-        m_results = _mm256_or_ps(m_results, m_edges);
 
-        bit_mask      = _mm256_movemask_ps(m_results);
+        m_weighted_h_th = _mm256_max_ps(m_w_min, _mm256_div_ps(m_w_depth,m_cp) );
+        m_weighted_h_th = _mm256_mul_ps(m_weighted_h_th, m_neg_h_th);
+
+        m_trace  = _mm256_add_ps(m_hxx, m_hyy);
+        m_edges    = _mm256_cmp_ps(m_trace, m_weighted_h_th, _CMP_LE_OS);
+
+        m_zeromask = _mm256_cmp_ps(m_cp, m_min_depth, _CMP_LE_OS); // TOOD valid_grad 감안하기.
+
+        __m256i m_vx0 = _mm256_loadu_si256((__m256i*)v_cp-offset);
+        __m256i m_vx1 = _mm256_loadu_si256((__m256i*)v_cp+offset);
+        __m256i m_vy0 = _mm256_loadu_si256((__m256i*)v_cp-valid_step);
+        __m256i m_vy1 = _mm256_loadu_si256((__m256i*)v_cp+valid_step);
+        m_edges = _mm256_blendv_ps(m_edges, m_i_zero, _mm256_castsi256_ps(m_vx0));
+        m_edges = _mm256_blendv_ps(m_edges, m_i_zero, _mm256_castsi256_ps(m_vx1));
+        m_edges = _mm256_blendv_ps(m_edges, m_i_zero, _mm256_castsi256_ps(m_vy0));
+        m_edges = _mm256_blendv_ps(m_edges, m_i_zero, _mm256_castsi256_ps(m_vy1));
+        bit_mask      = _mm256_movemask_ps(m_edges);
         for (k = 0; k < vstep; k++) 
           e[k] = (bit_mask >> k) & 1;
       }
@@ -405,8 +455,8 @@ void GetConcaveEdges(const cv::Mat& _gradx,
       gradx += gstep;
       grady += gstep;
       edge  += estep;
+      valid_mask += valid_step;
     }
-
 
   } // if !with_simd
   return;

@@ -77,6 +77,7 @@ target_link_libraries(hitnetstereo ${PYTHON_LIBRARIES})
 
 add_executable(test_hitnet
   src/test_hitnet.cpp
+  src/simd.cpp
   ../pipeline/src/camera.cpp
   ../pipeline/src/common.cpp
   ../pipeline/src/dataset.cpp
@@ -87,8 +88,13 @@ add_dependencies(test_hitnet hitnetstereo)
 add_executable(test_fasterseg
   src/test_fasterseg.cpp
   src/simd.cpp
+  src/watershed.cpp
+  ../pipeline/src/camera.cpp
+  ../pipeline/src/common.cpp
+  ../pipeline/src/dataset.cpp
 )
 set_source_files_properties(src/simd.cpp PROPERTIES COMPILE_FLAGS "-mavx2")
+set_source_files_properties(src/watershed.cpp PROPERTIES COMPILE_FLAGS "-mavx2")
 
 #set_target_properties(example_segmentation PROPERTIES UNITY_BUILD_MODE BATCH UNITY_BUILD_BATCH_SIZE 10)
 #set_source_files_properties(src/debug.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
@@ -98,6 +104,6 @@ set_source_files_properties(src/simd.cpp PROPERTIES COMPILE_FLAGS "-mavx2")
 #set_source_files_properties(src/segslam.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
 
 target_link_libraries(test_hitnet ${OpenCV_LIBS} ${Boost_LIBRARIES} stdc++fs)
-target_link_libraries(test_fasterseg ${OpenCV_LIBS} )
+target_link_libraries(test_fasterseg ${OpenCV_LIBS} ${Boost_LIBRARIES} stdc++fs)
 
 
