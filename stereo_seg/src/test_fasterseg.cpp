@@ -227,7 +227,9 @@ int TestFromOutlineImageFile(int argc, char** argv) {
 
     auto t2 = std::chrono::steady_clock::now();
     cv::Mat mask_new;
-    NEW::Segment(outline_edges, mask_new);
+    int n_octave = 6;
+    int n_downsample = 2; 
+    NEW::Segment(outline_edges, n_octave, n_downsample, mask_new);
     auto t3 = std::chrono::steady_clock::now();
 
     cv::Mat dst_new = GetColoredLabel(mask_new,true); 

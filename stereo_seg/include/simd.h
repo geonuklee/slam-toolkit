@@ -28,7 +28,10 @@ cv::Mat Segment(const cv::Mat outline_edge,
 }
 
 namespace NEW {
-void Segment(const cv::Mat outline_edges, cv::Mat& output);
+void Segment(const cv::Mat outline_edges, 
+             int n_octave,
+             int n_downsample,
+             cv::Mat& output);
 }
 
 #endif
