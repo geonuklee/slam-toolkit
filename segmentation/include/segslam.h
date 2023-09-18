@@ -6,6 +6,7 @@
 #include "Eigen/src/Core/Matrix.h"
 #include "stdafx.h"
 #include "seg.h"
+#include "common.h"
 
 namespace ORB_SLAM2{ class ORBextractor; }
 

@@ -2,7 +2,6 @@
 #define SEGMENT_SEG_H_
 
 #include "stdafx.h"
-#include "camera.h"
 
 class Shape;
 typedef std::shared_ptr<Shape> ShapePtr;
@@ -23,6 +22,87 @@ public:
   bool HasCollision(const int& x, const int& y, bool check_contour) const;
 };
 
+class OutlineEdgeDetector {
+public:
+  virtual void PutDepth(cv::Mat depth, float fx, float fy) = 0;
+
+  cv::Mat GetGradx() const { return gradx_; }
+  cv::Mat GetGrady() const { return grady_; }
+  cv::Mat GetOutline() const { return outline_edges_; }
+  cv::Mat GetValidMask() const { return valid_mask_; }
+  
+
+protected:
+  cv::Mat gradx_, grady_, outline_edges_, valid_mask_;
+
+};
+
+class OutlineEdgeDetectorWithoutSIMD : public OutlineEdgeDetector {
+public:
+  OutlineEdgeDetectorWithoutSIMD() { }
+  virtual void PutDepth(cv::Mat depth, float fx, float fy);
+};
+
+class OutlineEdgeDetectorWithSIMD : public OutlineEdgeDetector {
+public:
+  OutlineEdgeDetectorWithSIMD() { }
+  virtual void PutDepth(cv::Mat depth, float fx, float fy);
+private:
+  cv::Mat dd_edges_; // assume constant shape.
+  cv::Mat concave_edges_;
+};
+
+class Segmentor {
+public:
+  virtual void Put(cv::Mat outline_edges, cv::Mat valid_mask) = 0;
+
+  cv::Mat GetMarker() const { return marker_; }
+public:
+  cv::Mat marker_;
+};
+
+class SegmentorOld : public Segmentor {
+  public:
+  virtual void Put(cv::Mat outline_edges, cv::Mat valid_mask);
+};
+
+class SegmentorNew : public Segmentor {
+public:
+  SegmentorNew();
+  virtual void Put(cv::Mat outline_edges, cv::Mat valid_mask);
+};
+
+class ShapeTracker {
+public:
+  virtual const std::map<int, ShapePtr>& Put(cv::Mat gray, cv::Mat marker) = 0;
+  cv::Mat GetFlow0() const { return flow0_; }
+
+protected:
+  cv::Mat flow0_;
+
+};
+
+class ShapeTrackerOld :public ShapeTracker {
+public:
+  ShapeTrackerOld();
+
+  virtual const std::map<int, ShapePtr>& Put(cv::Mat gray, cv::Mat marker);
+
+private:
+
+  void PutKeyframe(cv::Mat gray, cv::cuda::GpuMat g_gray);
+  cv::Mat GetFlow(cv::cuda::GpuMat g_gray);
+
+  cv::Ptr<cv::cuda::DenseOpticalFlow> optical_flow_;
+  cv::Mat gray0_;
+  cv::cuda::GpuMat g_gray0_;
+  std::map<int, ShapePtr> global_shapes_; // 최근까지 제대로 추적되던 instance의 모음.
+  int n_shapes_;
+};
+
+
+
+/*
 class Segmentor {
 public:
   Segmentor();
@@ -56,12 +136,13 @@ private:
   std::map<int, ShapePtr> global_shapes_; // 최근까지 제대로 추적되던 instance의 모음.
   int n_shapes_;
 };
+*/
 
+namespace OLD{
 cv::Mat Segment(const cv::Mat outline_edge,
                 cv::Mat valid_mask=cv::Mat() ,
                 bool limit_expand_range=true,
                 cv::Mat rgb4vis=cv::Mat() );
-
 void DistanceWatershed(const cv::Mat dist_fromedge,
                        cv::Mat& markers,
                        bool limit_expand_range,
@@ -75,9 +156,22 @@ std::map<int,int> TrackShapes(const std::map<int, ShapePtr>& local_shapes,
                               const cv::Mat& local_marker,
                               const cv::Mat& flow0,
                               const float min_iou,
+                              const float boundary,
                               std::map<int, ShapePtr>& global_shapes,
                               int& n_shapes);
 
+} // namespace OLD
+
+namespace NEW {
+void Segment(const cv::Mat outline_edges, 
+             int n_octave,
+             int n_downsample,
+             cv::Mat& output);
+
+} //namespace NEW
+
+
+/*
 void GetGrad(const cv::Mat depth , const cv::Mat valid_mask,
              const Camera* camera,
              cv::Mat& gradx,
@@ -91,5 +185,6 @@ cv::Mat GetConcaveEdges(const cv::Mat gradx,
                      const Camera* camera);
 
 cv::Mat GetDDEdges(const cv::Mat depth, const cv::Mat valid_mask, const Camera* camera);
+*/
 
 #endif

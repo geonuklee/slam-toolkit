@@ -37,19 +37,11 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include <g2o/types/slam3d/se3quat.h>
 #include <filesystem>
 
+#include <iomanip>
+#include <memory>
+#include <opencv2/imgcodecs.hpp>
 #include <pybind11/embed.h>
 #include "hitnet.h"
-
-cv::Mat Disparit2Depth(cv::Mat disp,
-                       const float base_line,
-                       const float fx,
-                       const float min_disp) {
-  cv::Mat depth;
-  cv::Mat mask = disp < min_disp;
-  disp.setTo(1., mask);
-  depth = base_line*fx / disp;
-  return depth;
-}
 
 void WriteKittiTrajectory(const g2o::SE3Quat& Tcw,
                           std::ofstream& output_file) {
@@ -85,14 +77,20 @@ int TestKitti(int argc, char** argv) {
   const auto Trl_ = camera->GetTrl();
   const float base_line = -Trl_.translation().x();
   const float fx = camera->GetK()(0,0);
+  const float fy = camera->GetK()(1,1);
   const float min_disp = 1.;
 
   pybind11::scoped_interpreter python; // 이 인스턴스가 파괴되면 인터프리터 종료.
   HITNetStereoMatching hitnet;
-  //std::cout << "!!!!!!!!!! Loding HITNet is done !!!!!!!!!!!!!!!" << std::endl;
-  Segmentor segmentor;
+
+  //std::shared_ptr<OutlineEdgeDetector> edge_detector( new OutlineEdgeDetectorWithoutSIMD ); // Before   76 [milli sec]
+  std::shared_ptr<OutlineEdgeDetector> edge_detector( new OutlineEdgeDetectorWithSIMD );      // After   2.5 [milli sec]
+  //std::shared_ptr<Segmentor> segmentor( new SegmentorOld );                                 // Before  110 [milli sec]
+  std::shared_ptr<Segmentor> segmentor( new SegmentorNew );                                   // After  5~10 [milli sec]
+  std::shared_ptr<ShapeTracker> shape_tracker( new ShapeTrackerOld);                          // Before  250 [milli sec]
+
   seg::CvFeatureDescriptor extractor;
-  seg::Pipeline pipeline(camera, &extractor);
+  seg::Pipeline pipeline(camera, &extractor);                                                 //  150 [milli sec]
 
   std::string output_fn = std::string(PACKAGE_DIR)+"/output.txt";
   std::ofstream output_file(output_fn);
@@ -110,12 +108,39 @@ int TestKitti(int argc, char** argv) {
     cv::Mat gray, gray_r;
     cv::cvtColor(rgb, gray, cv::COLOR_BGR2GRAY);
     cv::cvtColor(rgb_r, gray_r, cv::COLOR_BGR2GRAY);
-    cv::Mat disp = hitnet.GetDisparity(gray, gray_r);
+    cv::Mat disp  = hitnet.GetDisparity(gray, gray_r);
     cv::Mat depth = Disparit2Depth(disp,base_line,fx, min_disp);
-    depth.setTo(0., depth > 50.);
-    cv::Mat flow0, gradx, grady, valid_grad;
-    const std::map<seg::Pth, ShapePtr>& shapes = segmentor.Put(gray, depth, camera, 
-                                                               visualize_segment ? rgb : cv::Mat(), flow0, gradx, grady, valid_grad);
+
+    auto t0 = std::chrono::steady_clock::now();
+    edge_detector->PutDepth(depth, fx, fy);
+    auto t1 = std::chrono::steady_clock::now();
+
+    cv::Mat gradx = edge_detector->GetGradx();
+    cv::Mat grady = edge_detector->GetGrady();
+    cv::Mat outline_edges = edge_detector->GetOutline();
+    cv::Mat valid_mask = edge_detector->GetValidMask();
+    cv::Mat valid_grad = valid_mask;
+
+    auto t2 = std::chrono::steady_clock::now();
+    segmentor->Put(outline_edges, valid_mask);
+    cv::Mat marker = segmentor->GetMarker();
+    auto t3 = std::chrono::steady_clock::now();
+    std::cout << "outline edge : " << std::setprecision(3) <<
+      std::chrono::duration<float, std::milli>(t1-t0).count() << "[milli sec]" << std::endl;
+
+    std::cout << "segment : " << std::setprecision(3) <<
+      std::chrono::duration<float, std::milli>(t3-t2).count() << "[milli sec]" << std::endl;
+
+    //depth.setTo(0., depth > 50.);
+    auto t4 = std::chrono::steady_clock::now();
+    const std::map<seg::Pth, ShapePtr>& shapes = shape_tracker->Put(gray, marker);
+    auto t5 = std::chrono::steady_clock::now();
+    std::cout << "track shapes : " << std::setprecision(3) <<
+      std::chrono::duration<float, std::milli>(t5-t4).count() << "[milli sec]" << std::endl;
+
+    cv::Mat flow0 = shape_tracker->GetFlow0();
+
+    auto t6 = std::chrono::steady_clock::now();
     seg::Frame* frame = nullptr;
     try {
       frame = pipeline.Put(gray, depth, flow0, shapes, gradx, grady, valid_grad, rgb, Tcws.empty()?nullptr:&Tcws);
@@ -124,16 +149,28 @@ int TestKitti(int argc, char** argv) {
       if(std::string(e.what())=="termination")
         exit(1);
     }
+    auto t7 = std::chrono::steady_clock::now();
+    std::cout << "vslam piepline : " << std::setprecision(3) <<
+      std::chrono::duration<float, std::milli>(t7-t6).count() << "[milli sec]" << std::endl;
+
     WriteKittiTrajectory(frame->GetTcq(0), output_file);
-    /*
+
+    cv::imshow("rgb", rgb);
+    cv::imshow("outline", 255*outline_edges);
+    cv::imshow("depth", .01*depth);
+    cv::imshow("segment", GetColoredLabel(marker) );
     char c = cv::waitKey(stop?0:1);
     if(c == 'q')
       break;
+    else if (c == 'f'){
+      /*
+      cv::imwrite("outline.bmp", outline_edges);
+      cv::imwrite("rgb.bmp", rgb);
+      */
+    }
     else if (c == 's')
       stop = !stop;
-      */
   }
-  //WriteKittiTrajectory(estaamted_poses, write_file);
   output_file.close();
   std::cout << "Done. The end of the sequence" << std::endl;
   std::cout << "Output on " << output_fn << std::endl;
@@ -149,7 +186,7 @@ int TestWaymodataset(int argc, char** argv) {
   KittiDataset dataset(seq,dataset_path);
   const DepthCamera* camera = dynamic_cast<const DepthCamera*>(dataset.GetCamera());
   assert(camera);
-  Segmentor segmentor;
+  //Segmentor segmentor;
 
   seg::CvFeatureDescriptor extractor;
   seg::Pipeline pipeline(camera, &extractor);
@@ -165,9 +202,8 @@ int TestWaymodataset(int argc, char** argv) {
     const cv::Mat depth = dataset.GetDepthImage(i);
     cv::Mat gray, flow0, gradx, grady, valid_grad;
     cv::cvtColor(rgb,gray,cv::COLOR_BGR2GRAY);
-    const std::map<seg::Pth, ShapePtr>& shapes = segmentor.Put(gray, depth, camera, 
-                                                               visualize_segment ? rgb : cv::Mat(), flow0, gradx, grady, valid_grad);
-    pipeline.Put(gray, depth, flow0, shapes, gradx, grady, valid_grad, rgb, &Tcws);
+    //const std::map<seg::Pth, ShapePtr>& shapes = segmentor.Put(gray, depth, camera, visualize_segment ? rgb : cv::Mat(), flow0, gradx, grady, valid_grad);
+    //pipeline.Put(gray, depth, flow0, shapes, gradx, grady, valid_grad, rgb, &Tcws);
     //cv::imshow("depth", 0.01*depth);
     /*
     if(i<1)

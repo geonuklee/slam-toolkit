@@ -1469,9 +1469,10 @@ Frame* Pipeline::Put(const cv::Mat gray,
                                     curr_shapes, outline_mask, gt_Tcws);
       cv::imshow("segslam", dst);
     } else {
-      cv::Mat dst = VisualizeRigInfos(curr_frame, qth, neighbor_frames, neighbor_mappoints,
-                                      instances, switch_threshold, switch_states, curr_shapes);
-      cv::imshow("Rig #"+std::to_string(qth), dst);
+      // TODO 적절한 rig visualization.
+      //cv::Mat dst = VisualizeRigInfos(curr_frame, qth, neighbor_frames, neighbor_mappoints,
+      //                                instances, switch_threshold, switch_states, curr_shapes);
+      //cv::imshow("Rig #"+std::to_string(qth), dst);
     }
     if(++nq > 3) // N 번만 수행.
       break;

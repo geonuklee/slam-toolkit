@@ -1,6 +1,6 @@
 #ifndef SEG_OPTIMIZER_
 #define SEG_OPTIMIZER_
-//#include "camera.h"
+#include "camera.h"
 #include "segslam.h"
 #include <g2o/core/sparse_optimizer.h>
 

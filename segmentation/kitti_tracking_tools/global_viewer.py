@@ -143,7 +143,7 @@ class GlobalViewer:
                 else:
                     t_err = 0.
                     self.T0_for_id[id] = T_w_b
-                if t_err > 2:
+                if t_err > 2.:
                     self.set_dynamic_obj.add(id)
                 is_dynamic = id in self.set_dynamic_obj
 
@@ -174,7 +174,7 @@ class GlobalViewer:
                 img_pts = all_img_pts[show_index]
                 x, y = img_pts[:, 0] / img_pts[:, 2], img_pts[:, 1] / img_pts[:, 2]
                 if len(x) <= 0:
-                    continue
+                        continue
                 x = np.clip(x, 2, W-2)
                 y = np.clip(y, 2, H-2)
                 x = x.astype(np.int32)

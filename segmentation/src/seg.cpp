@@ -7,7 +7,41 @@
 #include "../include/seg.h"
 #include "../include/util.h"
 
-Segmentor::Segmentor()
+void SegmentorOld::Put(cv::Mat outline_edges, cv::Mat valid_mask) {
+  const float limit_expand_range = 10.;
+  marker_ = OLD::Segment(outline_edges,valid_mask,limit_expand_range);
+  /*
+  std::map<int, ShapePtr> local_shapes = ConvertMarker2Instances(marker);
+  const float min_iou = .3;
+  const float boundary = 5.;
+  std::map<int,int> l2g = TrackShapes(local_shapes, marker, flow0, min_iou, boundary, global_shapes_, n_shapes_);
+  if(!is_keyframe){
+    cv::waitKey(1);
+    return global_shapes_;
+  }
+  if(is_keyframe)
+    PutKeyframe(gray, g_gray);
+  auto stop = std::chrono::steady_clock::now();
+  //std::cout << "etime = " << std::chrono::duration_cast<std::chrono::milliseconds>(stop-start).count() << "[msec]" << std::endl;
+  if(!vis_rgb.empty()){
+    cv::Mat dst = EntireVisualization(vis_rgb, valid_depth, outline_edges, global_shapes_, marker);
+    cv::imshow("vis", dst);
+  }
+  */
+  return;
+}
+
+SegmentorNew::SegmentorNew() {
+}
+
+void SegmentorNew::Put(cv::Mat outline_edges, cv::Mat valid_mask) {
+  int n_octave = 6;
+  int n_downsample =2;
+  NEW::Segment(outline_edges, n_octave, n_downsample, marker_);
+}
+
+
+ShapeTrackerOld::ShapeTrackerOld() 
 : n_shapes_(0) {
   //optical_flow_ = cv::cuda::FarnebackOpticalFlow::create(5, 0.5, true, 15); // 30
   optical_flow_ = cv::cuda::BroxOpticalFlow::create(0.197f, 50.0f, 0.8f, 5, 150, 10); // 가장좋은결과.
@@ -15,45 +49,13 @@ Segmentor::Segmentor()
   //optical_flow_ = cv::cuda::DensePyrLKOpticalFlow::create(cv::Size(13,13),3);
 }
 
-bool Segmentor::IsKeyframe(cv::Mat flow, cv::Mat rgb) {
-#if 1
-  return true;
-#else
-  const float flow_threshold = 20.;
-  bool is_keyframe = false;
-  // Keyframe 판정을 위한 'Median flow' 획득.
-  std::vector<float> norm_flows;
-  norm_flows.reserve(corners0_.size());
-  for(const cv::Point2f& pt0 : corners0_){
-    const cv::Point2f& dpt = flow.at<cv::Point2f>(pt0);
-    if(dpt.x==0. && dpt.y==0.)
-      continue;
-    norm_flows.push_back(cv::norm(dpt));
-  }
-  std::sort(norm_flows.begin(),norm_flows.end(), std::greater<int>());
-  int n = .2 * norm_flows.size();
-  float median = norm_flows.at(n);
-  is_keyframe = median > flow_threshold;
-  if(!rgb.empty()){
-    cv::Mat dst = rgb.clone();
-    const auto& color = is_keyframe?CV_RGB(255,0,0):CV_RGB(0,0,255);
-    for(const cv::Point2f& pt0 : corners0_){
-      const cv::Point2f& dpt = flow.at<cv::Point2f>(pt0);
-      cv::arrowedLine(dst, pt0, pt0+dpt, color, 1); // verbose
-    }
-    cv::imshow("FeatureTrack", dst);//verbose
-  }
-  return is_keyframe;
-#endif
-}
-
-void Segmentor::PutKeyframe(cv::Mat gray, cv::cuda::GpuMat g_gray){
+void ShapeTrackerOld::PutKeyframe(cv::Mat gray, cv::cuda::GpuMat g_gray){
   gray0_ = gray;
   g_gray0_ = g_gray;
   return;
 }
 
-cv::Mat Segmentor::GetFlow(cv::cuda::GpuMat g_gray) {
+cv::Mat ShapeTrackerOld::GetFlow(cv::cuda::GpuMat g_gray) {
   cv::Mat flow;
   cv::cuda::GpuMat g_flow;
   // ref: https://docs.opencv.org/3.4/dc/d6b/group__video__track.html#ga5d10ebbd59fe09c5f650289ec0ece5af 
@@ -71,126 +73,176 @@ cv::Mat Segmentor::GetFlow(cv::cuda::GpuMat g_gray) {
   return flow;
 }
 
-std::vector<cv::Point2f> SimplifyContour(const std::vector<cv::Point>& given_cnt){
-  const float min_l = 20.;
-  std::vector<cv::Point2f> simple_cnt;
-  simple_cnt.reserve(given_cnt.size());
 
-  const cv::Point2f pt0(given_cnt.begin()->x, given_cnt.begin()->y);
-  simple_cnt.push_back(pt0);
-  cv::Point2f pt_prev(pt0);
-  for(const auto& _pt : given_cnt){
-    cv::Point2f pt(_pt.x,_pt.y);
-    cv::Point2f dpt = pt - pt_prev;
-    //float l = cv::norm(dpt);
-    float l = std::abs(dpt.x)+std::abs(dpt.y);
-    if(l  < min_l)
-      continue;
-    simple_cnt.push_back(pt);
-    pt_prev = pt;
+const std::map<int, ShapePtr>& ShapeTrackerOld::Put(cv::Mat gray, cv::Mat marker) {
+  cv::cuda::GpuMat g_gray;
+  g_gray.upload(gray);
+  if(gray0_.empty()){
+    PutKeyframe(gray, g_gray);
+    return global_shapes_;
   }
 
-  if(simple_cnt.size() < 3)
-    simple_cnt.clear();
-  return simple_cnt;
-}
-
-std::map<int, ShapePtr> ConvertMarker2Instances(const cv::Mat marker) {
-  cv::Mat fg = GetBoundary(marker) < 1;
-  const int mode   = cv::RETR_TREE;
-  const int method = cv::CHAIN_APPROX_SIMPLE;
-  std::vector<std::vector<cv::Point> > contours;
-  std::vector<cv::Vec4i> hierarchy;
-  cv::findContours(fg,contours,hierarchy,mode,method);
-
-  std::map<int, ShapePtr > shapes;
-  std::map<int, float> areas;
-  for(int i = 0; i < contours.size(); i++){
-    // Ref) https://076923.github.io/posts/Python-opencv-21/
-    // const cv::Vec4i& h = hierarchy.at(i); // h[0:3] : '이전윤곽', '다음윤곽', '내곽윤곽', '외곽윤곽(부모)'
-    const std::vector<cv::Point>& _contour = contours.at(i);
-    std::vector<cv::Point2f> contour = SimplifyContour(_contour);
-    if(contour.empty())
-      continue;
-    const int& l = marker.at<int>(*contour.begin()); // Binary이미지에서 contour를 따내므로, 경계선 문제없이 라빌 획득됨.
-    if(l < 1)
-      continue;
-    const float area = cv::contourArea(contour);
-    if(area < 50)
-      continue;
-    if( !shapes.count(l) ){
-      shapes[l] = std::make_shared<Shape>();
-      areas[l]  = area;
+  const bool is_keyframe = true;
+  //cv::Mat flow;
+  if(!gray0_.empty()){
+    // flow  : {1} coordinate의 0->1 flow
+    // flow0 : {0} coordinate의 0->1 flow
+    flow0_ = GetFlow(g_gray); // Flow for tracking shape.
+    /*
+    flow0 = cv::Mat::zeros(flow.rows,flow.cols,CV_32FC2);
+    for(int r1=0; r1<flow.rows; r1++){
+      for(int c1=0; c1<flow.cols; c1++){
+        // dpt01 : {1} coordinate에서 0->1 변위 벡터, 
+        const auto& dpt01 = flow.at<cv::Point2f>(r1,c1);
+        if(std::abs(dpt01.x)+std::abs(dpt01.y) < 1e-10)
+          continue;
+        cv::Point2f pt0(c1-dpt01.x, r1-dpt01.y);
+        if(pt0.x < 0 || pt0.y < 0 || pt0.x > flow.cols-1 || pt0.y > flow.rows-1)
+          continue;
+        // {0} coordinate에 0->1 변위벡터 맵핑.
+        flow0.at<cv::Point2f>(pt0) = dpt01;
+      }
     }
-    else if(areas.at(l) > area)
-      continue;
-    ShapePtr s_ptr = shapes[l];
-    s_ptr->label_ = l;
-    s_ptr->outerior_ = contour;
-    s_ptr->area_ = area;
+    */
   }
-  for(auto it : shapes)
-    it.second->UpdateBB();
-  return shapes;
+
+  std::map<int, ShapePtr> local_shapes = OLD::ConvertMarker2Instances(marker);
+  const float min_iou = .3;
+  const float boundary = 5.;
+  std::map<int,int> l2g = OLD::TrackShapes(local_shapes, marker, flow0_, min_iou, boundary, global_shapes_, n_shapes_);
+
+  if(!is_keyframe){
+    cv::waitKey(1);
+    return global_shapes_;
+  }
+
+  if(is_keyframe)
+    PutKeyframe(gray, g_gray);
+
+  auto stop = std::chrono::steady_clock::now();
+  //std::cout << "etime = " << std::chrono::duration_cast<std::chrono::milliseconds>(stop-start).count() << "[msec]" << std::endl;
+  /*
+  if(!vis_rgb.empty()){
+    cv::Mat dst = EntireVisualization(vis_rgb, valid_depth, outline_edges, global_shapes_, marker);
+    cv::imshow("vis", dst);
+  }
+  */
+
+  return global_shapes_;
 }
 
-void Shape::UpdateBB() {
-  {
-    cv::Point2f x0(9999999.f,9999999.f);
-    cv::Point2f x1(-x0);
-    for(const auto& pt : outerior_){
-      x0.x = std::min<float>(x0.x, pt.x);
-      x0.y = std::min<float>(x0.y, pt.y);
-      x1.x = std::max<float>(x1.x, pt.x);
-      x1.y = std::max<float>(x1.y, pt.y);
+namespace OLD{
+void HighlightValidmask(const cv::Mat valid_mask, cv::Mat& rgb){
+  const int diff = 100;
+  for(int r=0; r<valid_mask.rows;r++){
+    for(int c=0; c<valid_mask.cols;c++){
+      auto& color = rgb.at<cv::Vec3b>(r,c);
+      if(valid_mask.at<uchar>(r,c))
+        continue;
+      for(int k=0; k<3; k++){
+        color[k] = std::max<int>(0, (int)color[k]-diff);
+      }
     }
-    outerior_bb_ = cv::Rect2f(x0.x,x0.y,x1.x-x0.x,x1.y-x0.y);
   }
   return;
 }
 
-static bool BbCollision(const cv::Rect2f& bb, const float& x, const float& y) {
-  //bb.width;
-  if(x < bb.x )
-    return false;
-  if(x > bb.x+bb.width)
-    return false;
-  if(y < bb.y)
-    return false;
-  if(y > bb.y+bb.width)
-    return false;
-  return true;
-}
+cv::Mat EntireVisualization(const cv::Mat _rgb,
+                            const cv::Mat valid_depth,
+                            const cv::Mat outline_edges,
+                            const std::map<int, ShapePtr>& global_shapes,
+                            const cv::Mat local_marker
+                            ) {
+  cv::Mat rgb = _rgb.clone();
+  HighlightValidmask(valid_depth, rgb);
+  cv::Mat vis_edges_marker;
+  cv::addWeighted(rgb, 1.,
+                  GetColoredLabel(local_marker), .5,
+                  1., vis_edges_marker);
 
-bool Shape::HasCollision(const int& _x, const int& _y, bool check_contour) const {
-   
-  // *[x] global shape에 대해 BB 충돌체크.
-  // *[x] contour에 대해 충돌체크
-  const float x = _x;
-  const float y = _y;
-  cv::Point2f pt(x,y);
+  cv::Mat vis_trackedshapes;
+  cv::Mat colored_shapes = rgb.clone();
 
-  if( !BbCollision(outerior_bb_, x, y) )
-    return false;
-  if(!check_contour)
-    return true;
+  const int fontFace = cv::FONT_HERSHEY_SIMPLEX;
+  const double fontScale = .3;
+  const int fontThick = 1;
 
-  // Interior contour과 충돌 없는 경우, outerior contour와 충돌체크
-  bool b_outerior_collision = cv::pointPolygonTest(outerior_, pt, false) > 0.;
-  return b_outerior_collision;
-}
+  std::set<int> draw_contours;
+  for(auto it : global_shapes){
+    ShapePtr ptr = it.second;
+    if(!ptr->stabilized_)
+      continue;
+    if(ptr->n_missing_ > 0) // TODO?
+      continue;
+    draw_contours.insert(it.first);
+    std::vector< std::vector<cv::Point> > cnts;
+    cnts.resize(1);
+    cnts[0].reserve(ptr->outerior_.size() );
+    for( auto pt: ptr->outerior_)
+      cnts[0].push_back(cv::Point(pt.x,pt.y));
+    const auto& color = colors.at(it.first % colors.size() );
+    cv::drawContours(colored_shapes, cnts, 0, color, -1);
+  }
 
+  cv::addWeighted(rgb, 1.,
+                  colored_shapes, .5,
+                  1., vis_trackedshapes);
+  for(auto it : global_shapes){
+    ShapePtr ptr = it.second;
+    if(!draw_contours.count(it.first) )
+      continue;
+    std::vector< std::vector<cv::Point> > cnts;
+    cnts.resize(1);
+    cnts[0].reserve(ptr->outerior_.size() );
+    for( auto pt: ptr->outerior_)
+      cnts[0].push_back(cv::Point(pt.x,pt.y));
+    const auto& color0 = colors.at(it.first % colors.size() );
 
-bool IsInFrame(const cv::Size size, const cv::Point2f& pt, const float boundary){
-  if(pt.x < boundary)
-    return false;
-  if(pt.y < boundary)
-    return false;
-  if(pt.x > size.width-boundary)
-    return false;
-  if(pt.y > size.height-boundary)
-    return false;
-  return true;
+    const auto& bb = ptr->outerior_bb_;
+    const std::string txt = "#" + std::to_string(it.first);
+    int baseline=0;
+    auto size = cv::getTextSize(txt, fontFace, fontScale, fontThick, &baseline);
+    cv::Point cp(bb.x+.5*bb.width, bb.y+.5*bb.height);
+    cv::Point dpt(.5*size.width, .5*size.height);
+    cv::rectangle(vis_trackedshapes,
+                  cp-dpt-cv::Point(0,3*baseline),
+                  cp+dpt,
+                  CV_RGB(255,255,255), -1);
+    cv::putText(vis_trackedshapes, txt, cp-dpt,fontFace, fontScale,
+                color0, fontThick);
+    cv::drawContours(vis_trackedshapes, cnts, 0, color0, 2);
+  }
+
+  for(int r=0; r<rgb.rows; r++){
+    for(int c=0; c<rgb.cols; c++){
+      if( !outline_edges.at<uchar>(r,c) )
+        continue;
+      auto& color = vis_edges_marker.at<cv::Vec3b>(r,c);
+      color[0] = 0;
+      color[1] = 0;
+      color[2] = 255;
+    }
+  }
+
+  cv::pyrDown(vis_edges_marker,vis_edges_marker);
+
+  cv::Mat dst = cv::Mat::zeros(std::max<int>(vis_edges_marker.rows, vis_trackedshapes.rows),
+                               vis_edges_marker.cols + vis_trackedshapes.cols,
+                               CV_8UC3);
+  {
+    cv::Rect rect(0, 0, vis_edges_marker.cols, vis_edges_marker.rows);
+    cv::Mat roi(dst, rect);
+    vis_edges_marker.copyTo(roi);
+    cv::rectangle(dst, rect, CV_RGB(0,255,0), 2);
+  }
+  {
+    cv::Rect rect(vis_edges_marker.cols,0,
+                  vis_trackedshapes.cols, vis_trackedshapes.rows);
+    cv::Mat roi(dst, rect);
+    vis_trackedshapes.copyTo(roi);
+    cv::rectangle(dst, rect, CV_RGB(0,255,0), 2);
+  }
+  return dst;
 }
 
 std::map<int,int> TrackShapes(const std::map<int, ShapePtr>& local_shapes,
@@ -338,6 +390,292 @@ std::map<int,int> TrackShapes(const std::map<int, ShapePtr>& local_shapes,
 #endif
   return matches;
 }
+
+std::vector<cv::Point2f> SimplifyContour(const std::vector<cv::Point>& given_cnt){
+  const float min_l = 20.;
+  std::vector<cv::Point2f> simple_cnt;
+  simple_cnt.reserve(given_cnt.size());
+
+  const cv::Point2f pt0(given_cnt.begin()->x, given_cnt.begin()->y);
+  simple_cnt.push_back(pt0);
+  cv::Point2f pt_prev(pt0);
+  for(const auto& _pt : given_cnt){
+    cv::Point2f pt(_pt.x,_pt.y);
+    cv::Point2f dpt = pt - pt_prev;
+    //float l = cv::norm(dpt);
+    float l = std::abs(dpt.x)+std::abs(dpt.y);
+    if(l  < min_l)
+      continue;
+    simple_cnt.push_back(pt);
+    pt_prev = pt;
+  }
+
+  if(simple_cnt.size() < 3)
+    simple_cnt.clear();
+  return simple_cnt;
+}
+
+std::map<int, ShapePtr> ConvertMarker2Instances(const cv::Mat marker) {
+  cv::Mat fg = GetBoundary(marker) < 1;
+  const int mode   = cv::RETR_TREE;
+  const int method = cv::CHAIN_APPROX_SIMPLE;
+  std::vector<std::vector<cv::Point> > contours;
+  std::vector<cv::Vec4i> hierarchy;
+  cv::findContours(fg,contours,hierarchy,mode,method);
+
+  std::map<int, ShapePtr > shapes;
+  std::map<int, float> areas;
+  for(int i = 0; i < contours.size(); i++){
+    // Ref) https://076923.github.io/posts/Python-opencv-21/
+    // const cv::Vec4i& h = hierarchy.at(i); // h[0:3] : '이전윤곽', '다음윤곽', '내곽윤곽', '외곽윤곽(부모)'
+    const std::vector<cv::Point>& _contour = contours.at(i);
+    std::vector<cv::Point2f> contour = SimplifyContour(_contour);
+    if(contour.empty())
+      continue;
+    const int& l = marker.at<int>(*contour.begin()); // Binary이미지에서 contour를 따내므로, 경계선 문제없이 라빌 획득됨.
+    if(l < 1)
+      continue;
+    const float area = cv::contourArea(contour);
+    if(area < 50)
+      continue;
+    if( !shapes.count(l) ){
+      shapes[l] = std::make_shared<Shape>();
+      areas[l]  = area;
+    }
+    else if(areas.at(l) > area)
+      continue;
+    ShapePtr s_ptr = shapes[l];
+    s_ptr->label_ = l;
+    s_ptr->outerior_ = contour;
+    s_ptr->area_ = area;
+  }
+  for(auto it : shapes)
+    it.second->UpdateBB();
+  return shapes;
+}
+
+
+}// namespace OLD
+
+void Shape::UpdateBB() {
+  {
+    cv::Point2f x0(9999999.f,9999999.f);
+    cv::Point2f x1(-x0);
+    for(const auto& pt : outerior_){
+      x0.x = std::min<float>(x0.x, pt.x);
+      x0.y = std::min<float>(x0.y, pt.y);
+      x1.x = std::max<float>(x1.x, pt.x);
+      x1.y = std::max<float>(x1.y, pt.y);
+    }
+    outerior_bb_ = cv::Rect2f(x0.x,x0.y,x1.x-x0.x,x1.y-x0.y);
+  }
+  return;
+}
+
+static bool BbCollision(const cv::Rect2f& bb, const float& x, const float& y) {
+  //bb.width;
+  if(x < bb.x )
+    return false;
+  if(x > bb.x+bb.width)
+    return false;
+  if(y < bb.y)
+    return false;
+  if(y > bb.y+bb.width)
+    return false;
+  return true;
+}
+
+bool Shape::HasCollision(const int& _x, const int& _y, bool check_contour) const {
+   
+  // *[x] global shape에 대해 BB 충돌체크.
+  // *[x] contour에 대해 충돌체크
+  const float x = _x;
+  const float y = _y;
+  cv::Point2f pt(x,y);
+
+  if( !BbCollision(outerior_bb_, x, y) )
+    return false;
+  if(!check_contour)
+    return true;
+
+  // Interior contour과 충돌 없는 경우, outerior contour와 충돌체크
+  bool b_outerior_collision = cv::pointPolygonTest(outerior_, pt, false) > 0.;
+  return b_outerior_collision;
+}
+
+
+bool IsInFrame(const cv::Size size, const cv::Point2f& pt, const float boundary){
+  if(pt.x < boundary)
+    return false;
+  if(pt.y < boundary)
+    return false;
+  if(pt.x > size.width-boundary)
+    return false;
+  if(pt.y > size.height-boundary)
+    return false;
+  return true;
+}
+
+
+
+#if 0
+Segmentor::Segmentor()
+: n_shapes_(0) {
+  //optical_flow_ = cv::cuda::FarnebackOpticalFlow::create(5, 0.5, true, 15); // 30
+  optical_flow_ = cv::cuda::BroxOpticalFlow::create(0.197f, 50.0f, 0.8f, 5, 150, 10); // 가장좋은결과.
+  //optical_flow_   = cv::cuda::OpticalFlowDual_TVL1::create();
+  //optical_flow_ = cv::cuda::DensePyrLKOpticalFlow::create(cv::Size(13,13),3);
+}
+
+bool Segmentor::IsKeyframe(cv::Mat flow, cv::Mat rgb) {
+#if 1
+  return true;
+#else
+  const float flow_threshold = 20.;
+  bool is_keyframe = false;
+  // Keyframe 판정을 위한 'Median flow' 획득.
+  std::vector<float> norm_flows;
+  norm_flows.reserve(corners0_.size());
+  for(const cv::Point2f& pt0 : corners0_){
+    const cv::Point2f& dpt = flow.at<cv::Point2f>(pt0);
+    if(dpt.x==0. && dpt.y==0.)
+      continue;
+    norm_flows.push_back(cv::norm(dpt));
+  }
+  std::sort(norm_flows.begin(),norm_flows.end(), std::greater<int>());
+  int n = .2 * norm_flows.size();
+  float median = norm_flows.at(n);
+  is_keyframe = median > flow_threshold;
+  if(!rgb.empty()){
+    cv::Mat dst = rgb.clone();
+    const auto& color = is_keyframe?CV_RGB(255,0,0):CV_RGB(0,0,255);
+    for(const cv::Point2f& pt0 : corners0_){
+      const cv::Point2f& dpt = flow.at<cv::Point2f>(pt0);
+      cv::arrowedLine(dst, pt0, pt0+dpt, color, 1); // verbose
+    }
+    cv::imshow("FeatureTrack", dst);//verbose
+  }
+  return is_keyframe;
+#endif
+}
+
+void Segmentor::PutKeyframe(cv::Mat gray, cv::cuda::GpuMat g_gray){
+  gray0_ = gray;
+  g_gray0_ = g_gray;
+  return;
+}
+
+const std::map<int, ShapePtr>& Segmentor::_Put(cv::Mat gray,
+               cv::cuda::GpuMat g_gray,
+               cv::Mat depth,
+               const Camera* camera,
+               cv::Mat vis_rgb,
+               cv::Mat& flow0,
+               cv::Mat& gradx,
+               cv::Mat& grady,
+               cv::Mat& valid_grad
+               ) {
+  auto start = std::chrono::steady_clock::now();
+  std::vector<cv::Point2f> corners = GetCorners(gray);
+  if(corners.empty())
+    return global_shapes_;
+  /*
+  if(gray0_.empty()){
+    PutKeyframe(gray, g_gray);
+    return global_shapes_;
+  }
+  */
+  const bool is_keyframe = true;
+  //cv::Mat flow;
+  if(!gray0_.empty()){
+    // flow  : {1} coordinate의 0->1 flow
+    // flow0 : {0} coordinate의 0->1 flow
+    flow0 = GetFlow(g_gray); // Flow for tracking shape.
+    /*
+    flow0 = cv::Mat::zeros(flow.rows,flow.cols,CV_32FC2);
+    for(int r1=0; r1<flow.rows; r1++){
+      for(int c1=0; c1<flow.cols; c1++){
+        // dpt01 : {1} coordinate에서 0->1 변위 벡터, 
+        const auto& dpt01 = flow.at<cv::Point2f>(r1,c1);
+        if(std::abs(dpt01.x)+std::abs(dpt01.y) < 1e-10)
+          continue;
+        cv::Point2f pt0(c1-dpt01.x, r1-dpt01.y);
+        if(pt0.x < 0 || pt0.y < 0 || pt0.x > flow.cols-1 || pt0.y > flow.rows-1)
+          continue;
+        // {0} coordinate에 0->1 변위벡터 맵핑.
+        flow0.at<cv::Point2f>(pt0) = dpt01;
+      }
+    }
+    */
+  }
+  cv::Mat valid_depth = depth > 0.;
+  cv::Mat filtered_depth;
+  cv::erode(valid_depth,valid_depth,cv::Mat::ones(13,13,CV_32FC1) );
+  cv::GaussianBlur(depth,filtered_depth, cv::Size(7,7), 0., 0.); // Shallow groove가 필요없어서 그냥 Gaussian
+
+  GetGrad(filtered_depth, valid_depth, camera, gradx, grady, valid_grad);
+  cv::Mat valid;
+  cv::bitwise_and(valid_depth, valid_grad, valid);
+  cv::Mat concave_edges = GetConcaveEdges(gradx,grady,depth,valid,camera);
+  //concave_edges = FilterThinNoise(concave_edges);
+
+  cv::Mat dd_edges = GetDDEdges(filtered_depth, valid_depth, camera); // concave_edge를 보완해주는 positive detection이 없음.
+  cv::Mat outline_edges;
+  cv::bitwise_or(concave_edges, dd_edges, outline_edges);
+  outline_edges = FilterThinNoise(outline_edges);
+
+  bool limit_expand_range = false;
+  cv::Mat marker = Segment(outline_edges,valid_depth,limit_expand_range); // Sgement(error_edges,rgb);
+
+  std::map<int, ShapePtr> local_shapes = ConvertMarker2Instances(marker);
+  const float min_iou = .3;
+  const float boundary = 5.;
+  std::map<int,int> l2g = TrackShapes(local_shapes, marker, flow0, min_iou, boundary, global_shapes_, n_shapes_);
+
+  if(!is_keyframe){
+    cv::waitKey(1);
+    return global_shapes_;
+  }
+
+  if(is_keyframe)
+    PutKeyframe(gray, g_gray);
+
+  auto stop = std::chrono::steady_clock::now();
+  //std::cout << "etime = " << std::chrono::duration_cast<std::chrono::milliseconds>(stop-start).count() << "[msec]" << std::endl;
+  if(!vis_rgb.empty()){
+    cv::Mat dst = EntireVisualization(vis_rgb, valid_depth, outline_edges, global_shapes_, marker);
+    cv::imshow("vis", dst);
+  }
+
+  return global_shapes_;
+}
+
+const std::map<int, ShapePtr>& Segmentor::Put(cv::Mat gray, cv::Mat depth, const Camera* camera, cv::Mat vis_rgb,
+                                              cv::Mat& flow0, cv::Mat& gradx, cv::Mat& grady, cv::Mat& valid_grad) {
+  cv::cuda::GpuMat g_gray;
+  g_gray.upload(gray);
+  return _Put(gray, g_gray, depth, camera, vis_rgb, flow0, gradx, grady, valid_grad);
+}
+
+cv::Mat Segmentor::GetFlow(cv::cuda::GpuMat g_gray) {
+  cv::Mat flow;
+  cv::cuda::GpuMat g_flow;
+  // ref: https://docs.opencv.org/3.4/dc/d6b/group__video__track.html#ga5d10ebbd59fe09c5f650289ec0ece5af 
+  if(optical_flow_->getDefaultName() == "DenseOpticalFlow.BroxOpticalFlow"){
+    cv::cuda::GpuMat g_f_gray,g_f_gray0;
+    g_gray0_.convertTo(g_f_gray0,CV_32FC1, 1./255.);
+    g_gray.convertTo(g_f_gray,CV_32FC1, 1./255.);
+    //optical_flow_->calc(g_f_gray, g_f_gray0, g_flow);
+    optical_flow_->calc(g_f_gray0, g_f_gray, g_flow);
+  }
+  else{
+    optical_flow_->calc(g_gray0_, g_gray, g_flow);
+  }
+  g_flow.download(flow); // flow : 2ch float image
+  return flow;
+}
+
+#endif
 
 
 void GetGrad(const cv::Mat depth , const cv::Mat valid_mask,
@@ -556,49 +894,10 @@ cv::Mat FilterThinNoise(const cv::Mat edges){
   cv::Mat output;
   cv::morphologyEx(edges, output, cv::MORPH_OPEN, kernel );
 #endif
-  return output;
+
 }
 
-cv::Mat GetDDEdges(const cv::Mat depth, const cv::Mat valid_mask,
-                   const Camera* camera){
-  cv::Mat edge = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
-  std::vector<cv::Point2i> samples = {
-    cv::Point2i(1,0),
-    cv::Point2i(-1,0),
-    cv::Point2i(0,1),
-    cv::Point2i(0,-1),
-  };
-
-  for(int r0 = 0; r0 < depth.rows; r0++) {
-    for(int c0 = 0; c0 < depth.cols; c0++) {
-      const cv::Point2i pt0(c0,r0);
-      if(!valid_mask.at<unsigned char>(pt0))
-        continue;
-      const float& z0 = depth.at<float>(pt0);
-      unsigned char& e = edge.at<unsigned char>(pt0);
-      for(int l=1; l < 4; l++){
-        for(const auto& dpt : samples){
-          const cv::Point2i pt1 = pt0+l*dpt;
-          if(pt1.x < 0 || pt1.x >= depth.cols || pt1.y < 0 || pt1.y >= depth.rows)
-            continue;
-          if(!valid_mask.at<unsigned char>(pt1))
-            continue;
-          const float& z1 = depth.at<float>(pt1);
-          float th = std::max<float>(0.05*z0, 2.);
-          //float th = 0.1;
-          if(std::abs(z1-z0) < th)
-            continue;
-          e = true;
-          break;
-        }
-        if(e)
-          break;
-      }
-    }
-  }
-  return edge;
-}
-
+/*
 std::vector<cv::Point2f> GetCorners(const cv::Mat gray) {
   // ref: https://docs.opencv.org/3.4/d8/dd8/tutorial_good_features_to_track.html
   std::vector<cv::Point2f> corners;
@@ -612,208 +911,6 @@ std::vector<cv::Point2f> GetCorners(const cv::Mat gray) {
                           blockSize, gradientSize, useHarrisDetector,k);
   return corners;
 }
+*/
 
-void HighlightValidmask(const cv::Mat valid_mask, cv::Mat& rgb){
-  const int diff = 100;
-  for(int r=0; r<valid_mask.rows;r++){
-    for(int c=0; c<valid_mask.cols;c++){
-      auto& color = rgb.at<cv::Vec3b>(r,c);
-      if(valid_mask.at<uchar>(r,c))
-        continue;
-      for(int k=0; k<3; k++){
-        color[k] = std::max<int>(0, (int)color[k]-diff);
-      }
-    }
-  }
-  return;
-}
 
-cv::Mat EntireVisualization(const cv::Mat _rgb,
-                            const cv::Mat valid_depth,
-                            const cv::Mat outline_edges,
-                            const std::map<int, ShapePtr>& global_shapes,
-                            const cv::Mat local_marker
-                            ) {
-  cv::Mat rgb = _rgb.clone();
-  HighlightValidmask(valid_depth, rgb);
-  cv::Mat vis_edges_marker;
-  cv::addWeighted(rgb, 1.,
-                  GetColoredLabel(local_marker), .5,
-                  1., vis_edges_marker);
-
-  cv::Mat vis_trackedshapes;
-  cv::Mat colored_shapes = rgb.clone();
-
-  const int fontFace = cv::FONT_HERSHEY_SIMPLEX;
-  const double fontScale = .3;
-  const int fontThick = 1;
-
-  std::set<int> draw_contours;
-  for(auto it : global_shapes){
-    ShapePtr ptr = it.second;
-    if(!ptr->stabilized_)
-      continue;
-    if(ptr->n_missing_ > 0) // TODO?
-      continue;
-    draw_contours.insert(it.first);
-    std::vector< std::vector<cv::Point> > cnts;
-    cnts.resize(1);
-    cnts[0].reserve(ptr->outerior_.size() );
-    for( auto pt: ptr->outerior_)
-      cnts[0].push_back(cv::Point(pt.x,pt.y));
-    const auto& color = colors.at(it.first % colors.size() );
-    cv::drawContours(colored_shapes, cnts, 0, color, -1);
-  }
-
-  cv::addWeighted(rgb, 1.,
-                  colored_shapes, .5,
-                  1., vis_trackedshapes);
-  for(auto it : global_shapes){
-    ShapePtr ptr = it.second;
-    if(!draw_contours.count(it.first) )
-      continue;
-    std::vector< std::vector<cv::Point> > cnts;
-    cnts.resize(1);
-    cnts[0].reserve(ptr->outerior_.size() );
-    for( auto pt: ptr->outerior_)
-      cnts[0].push_back(cv::Point(pt.x,pt.y));
-    const auto& color0 = colors.at(it.first % colors.size() );
-
-    const auto& bb = ptr->outerior_bb_;
-    const std::string txt = "#" + std::to_string(it.first);
-    int baseline=0;
-    auto size = cv::getTextSize(txt, fontFace, fontScale, fontThick, &baseline);
-    cv::Point cp(bb.x+.5*bb.width, bb.y+.5*bb.height);
-    cv::Point dpt(.5*size.width, .5*size.height);
-    cv::rectangle(vis_trackedshapes,
-                  cp-dpt-cv::Point(0,3*baseline),
-                  cp+dpt,
-                  CV_RGB(255,255,255), -1);
-    cv::putText(vis_trackedshapes, txt, cp-dpt,fontFace, fontScale,
-                color0, fontThick);
-    cv::drawContours(vis_trackedshapes, cnts, 0, color0, 2);
-  }
-
-  for(int r=0; r<rgb.rows; r++){
-    for(int c=0; c<rgb.cols; c++){
-      if( !outline_edges.at<uchar>(r,c) )
-        continue;
-      auto& color = vis_edges_marker.at<cv::Vec3b>(r,c);
-      color[0] = 0;
-      color[1] = 0;
-      color[2] = 255;
-    }
-  }
-
-  cv::pyrDown(vis_edges_marker,vis_edges_marker);
-
-  cv::Mat dst = cv::Mat::zeros(std::max<int>(vis_edges_marker.rows, vis_trackedshapes.rows),
-                               vis_edges_marker.cols + vis_trackedshapes.cols,
-                               CV_8UC3);
-  {
-    cv::Rect rect(0, 0, vis_edges_marker.cols, vis_edges_marker.rows);
-    cv::Mat roi(dst, rect);
-    vis_edges_marker.copyTo(roi);
-    cv::rectangle(dst, rect, CV_RGB(0,255,0), 2);
-  }
-  {
-    cv::Rect rect(vis_edges_marker.cols,0,
-                  vis_trackedshapes.cols, vis_trackedshapes.rows);
-    cv::Mat roi(dst, rect);
-    vis_trackedshapes.copyTo(roi);
-    cv::rectangle(dst, rect, CV_RGB(0,255,0), 2);
-  }
-  return dst;
-}
-
-const std::map<int, ShapePtr>& Segmentor::_Put(cv::Mat gray,
-               cv::cuda::GpuMat g_gray,
-               cv::Mat depth,
-               const Camera* camera,
-               cv::Mat vis_rgb,
-               cv::Mat& flow0,
-               cv::Mat& gradx,
-               cv::Mat& grady,
-               cv::Mat& valid_grad
-               ) {
-  auto start = std::chrono::steady_clock::now();
-  std::vector<cv::Point2f> corners = GetCorners(gray);
-  if(corners.empty())
-    return global_shapes_;
-  /*
-  if(gray0_.empty()){
-    PutKeyframe(gray, g_gray);
-    return global_shapes_;
-  }
-  */
-  const bool is_keyframe = true;
-  //cv::Mat flow;
-  if(!gray0_.empty()){
-    // flow  : {1} coordinate의 0->1 flow
-    // flow0 : {0} coordinate의 0->1 flow
-    flow0 = GetFlow(g_gray); // Flow for tracking shape.
-    /*
-    flow0 = cv::Mat::zeros(flow.rows,flow.cols,CV_32FC2);
-    for(int r1=0; r1<flow.rows; r1++){
-      for(int c1=0; c1<flow.cols; c1++){
-        // dpt01 : {1} coordinate에서 0->1 변위 벡터, 
-        const auto& dpt01 = flow.at<cv::Point2f>(r1,c1);
-        if(std::abs(dpt01.x)+std::abs(dpt01.y) < 1e-10)
-          continue;
-        cv::Point2f pt0(c1-dpt01.x, r1-dpt01.y);
-        if(pt0.x < 0 || pt0.y < 0 || pt0.x > flow.cols-1 || pt0.y > flow.rows-1)
-          continue;
-        // {0} coordinate에 0->1 변위벡터 맵핑.
-        flow0.at<cv::Point2f>(pt0) = dpt01;
-      }
-    }
-    */
-  }
-  cv::Mat valid_depth = depth > 0.;
-  cv::Mat filtered_depth;
-  cv::erode(valid_depth,valid_depth,cv::Mat::ones(13,13,CV_32FC1) );
-  cv::GaussianBlur(depth,filtered_depth, cv::Size(7,7), 0., 0.); // Shallow groove가 필요없어서 그냥 Gaussian
-
-  GetGrad(filtered_depth, valid_depth, camera, gradx, grady, valid_grad);
-  cv::Mat valid;
-  cv::bitwise_and(valid_depth, valid_grad, valid);
-  cv::Mat concave_edges = GetConcaveEdges(gradx,grady,depth,valid,camera);
-  //concave_edges = FilterThinNoise(concave_edges);
-
-  cv::Mat dd_edges = GetDDEdges(filtered_depth, valid_depth, camera); // concave_edge를 보완해주는 positive detection이 없음.
-  cv::Mat outline_edges;
-  cv::bitwise_or(concave_edges, dd_edges, outline_edges);
-  outline_edges = FilterThinNoise(outline_edges);
-
-  bool limit_expand_range = false;
-  cv::Mat marker = Segment(outline_edges,valid_depth,limit_expand_range); // Sgement(error_edges,rgb);
-
-  std::map<int, ShapePtr> local_shapes = ConvertMarker2Instances(marker);
-  const float min_iou = .3;
-  const float boundary = 5.;
-  std::map<int,int> l2g = TrackShapes(local_shapes, marker, flow0, min_iou, boundary, global_shapes_, n_shapes_);
-
-  if(!is_keyframe){
-    cv::waitKey(1);
-    return global_shapes_;
-  }
-
-  if(is_keyframe)
-    PutKeyframe(gray, g_gray);
-
-  auto stop = std::chrono::steady_clock::now();
-  //std::cout << "etime = " << std::chrono::duration_cast<std::chrono::milliseconds>(stop-start).count() << "[msec]" << std::endl;
-  if(!vis_rgb.empty()){
-    cv::Mat dst = EntireVisualization(vis_rgb, valid_depth, outline_edges, global_shapes_, marker);
-    cv::imshow("vis", dst);
-  }
-
-  return global_shapes_;
-}
-
-const std::map<int, ShapePtr>& Segmentor::Put(cv::Mat gray, cv::Mat depth, const Camera* camera, cv::Mat vis_rgb,
-                                              cv::Mat& flow0, cv::Mat& gradx, cv::Mat& grady, cv::Mat& valid_grad) {
-  cv::cuda::GpuMat g_gray;
-  g_gray.upload(gray);
-  return _Put(gray, g_gray, depth, camera, vis_rgb, flow0, gradx, grady, valid_grad);
-}

@@ -82,6 +82,8 @@ target_link_libraries(example_segmentation ${CMAKE_SOURCE_DIR}/../stereo_seg/lib
   ${PYTHON_LIBRARIES}
 )
 
+set_source_files_properties(src/edge.cpp PROPERTIES COMPILE_FLAGS "-mavx2") # No optmization
+
 #set_target_properties(example_segmentation PROPERTIES UNITY_BUILD_MODE BATCH UNITY_BUILD_BATCH_SIZE 10)
 #set_source_files_properties(src/debug.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
 #set_source_files_properties(src/optimizer.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
