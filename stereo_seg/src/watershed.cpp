@@ -925,48 +925,6 @@ cv::Mat Segment(const cv::Mat outline_edge,
 
 #include <immintrin.h> // sse or avx
 namespace NEW {
-/*
-void Maxpooling(const cv::Mat _input, cv::Mat& _output){
-  const cv::Size& output_size = _output.size();
-
-  const uchar* input = _input.ptr<uchar>();
-  const int istep = int(_input.step/sizeof(input[0])); // output kernel이 1씩 움직일때마다, input은 2씩 움직인다.
-
-  typedef uchar CV_TYPE;
-  CV_TYPE* output = _output.ptr<uchar>();
-  int ostep = int(_output.step/sizeof(output[0]));
-
-  typedef __m256i T;
-  const int vstep = sizeof(T) / sizeof(int);
-
-  int ix,iy,ox,oy;
-  for( oy = 1; oy < output_size.height-1; oy++ ) {
-    output += ostep;
-    input += 2*istep;
-    for( ox = 1; ox < output_size.width-1; ox+=1 ) {
-      const uchar* i = input + 2*ox;
-      uchar* o = output + ox;
-      //int arr[4] = { *(i-1), *(i+1), *(i-istep), *(i+istep), };
-      //__m256i m_input = _mm256_loadu_si256((__m256i*)arr);
-      T m_input = _mm256_set_epi32( *(i-1), *(i+1), *(i-istep), *(i+istep),
-                                    *(i-1-istep), *(i-1+istep), *(i+1+istep), *i );
-
-      // Find the maximum value within the AVX2 vector
-      __m256i max_vector = _mm256_max_epu32(m_input, _mm256_permute2x128_si256(m_input, m_input, 0x1));
-      // Now, max_vector contains the maximum value in its first 4 elements
-      // To get the overall maximum, we can do one more pairwise comparison
-      max_vector = _mm256_max_epu32(max_vector, _mm256_shuffle_epi32(max_vector, _MM_SHUFFLE(1, 0, 3, 2)));
-      max_vector = _mm256_max_epu32(max_vector, _mm256_shuffle_epi32(max_vector, _MM_SHUFFLE(2, 3, 0, 1)));
-
-      // Extract the result as a single integer
-      int max_value;
-      _mm256_storeu_si256((__m256i*)&max_value, max_vector);
-      *o = max_value;
-    }
-  }
-  return;
-}
-*/
 struct MarkerNode {
   int x, y;
   int* m;

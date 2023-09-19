@@ -97,7 +97,13 @@ int TestHitNet(int argc, char** argv) {
     std::vector<cv::Point2f> corners;
     cv::goodFeaturesToTrack(gray, corners, maxCorners, qualityLevel, minDistance);
     // small input to reserve time.
+    auto hitnet_t0 = std::chrono::steady_clock::now();
     cv::Mat disp = hitnet.GetDisparity(gray, gray_r);
+    cv::Mat depth = Disparit2Depth(disp,base_line,fx,1.);
+    auto hitnet_t1 = std::chrono::steady_clock::now();
+    std::cout <<"etime of HitNet for " << depth.size() << " : " << std::setprecision(3) <<
+      std::chrono::duration<float, std::milli>(hitnet_t1-hitnet_t0).count() << "[milli sec]" << std::endl;
+
     cv::Mat dst;
     cv::vconcat(rgb, rgb_r, dst);
     for(auto pt : corners){
@@ -108,33 +114,12 @@ int TestHitNet(int argc, char** argv) {
       cv::circle(dst, pt2, 5, CV_RGB(0,0,255),1);
     }
 
-    cv::Mat depth = Disparit2Depth(disp,base_line,fx,1.);
-
-    cv::Mat dd_edges = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
-    cv::Mat gradx = cv::Mat::zeros(depth.rows, depth.cols, CV_32FC1);
-    cv::Mat grady = cv::Mat::zeros(depth.rows, depth.cols, CV_32FC1);
-    cv::Mat valid_grad = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
-    cv::Mat concave_edges = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
-    cv::Mat valid_mask = depth > 0.;
-
-    auto t0 = std::chrono::steady_clock::now();
-    GetDDEdges(depth,dd_edges,true); 
-    GetGrad(depth, fx, fy, valid_mask, sample_offset, gradx, grady, valid_grad, true);
-    GetConcaveEdges(gradx,grady,depth,valid_mask,sample_offset, fx,fy, -100., concave_edges, true);
-    auto t1 = std::chrono::steady_clock::now();
-    std::string etime_msg = std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(t1-t0).count())+ "[micro sec]";
-
     //writeRawImage(depth, "depth.raw");
     cv::imshow("stereo", dst);
     cv::Mat ndisp;
     cv::normalize(disp, ndisp, 0, 255, cv::NORM_MINMAX, CV_8U);
     cv::imshow("ndisp", ndisp);
     cv::imshow("rgb", rgb);
-
-    cv::Mat dst_concave;
-    cv::cvtColor(255*concave_edges, dst_concave, cv::COLOR_GRAY2BGR);
-    cv::putText(dst_concave, etime_msg, cv::Point(40,15), cv::FONT_HERSHEY_SIMPLEX, .4, CV_RGB(255,0,0) );
-    cv::imshow("avx concave", dst_concave);
 
     char c = cv::waitKey(stop?0:1);
     if(c == 'q')

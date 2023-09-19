@@ -67,6 +67,7 @@ int TestFromDepthImageFile(int argc, char** argv) {
   readRawImage(depth, "depth.raw");
   int font_face = cv::FONT_HERSHEY_SIMPLEX;
   float font_scale = .4;
+  std::shared_ptr<OutlineEdgeDetector> edge_detector(new OutlineEdgeDetectorWithSIMD);
 
   bool stop_flag = false;
   int n = 0;
@@ -76,44 +77,12 @@ int TestFromDepthImageFile(int argc, char** argv) {
     float fy = fx;
     int sample_offset = 4;
 
-    for(bool with_simd : {false, true}){
-      cv::Mat dd_edges = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
-      cv::Mat gradx = cv::Mat::zeros(depth.rows, depth.cols, CV_32FC1);
-      cv::Mat grady = cv::Mat::zeros(depth.rows, depth.cols, CV_32FC1);
-      cv::Mat valid_grad = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
-      cv::Mat concave_edges = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
-      cv::Mat valid_mask = depth > 0.;
+    edge_detector->PutDepth(depth,fx, fy);
+    cv::Mat gradx = edge_detector->GetGradx();
+    cv::Mat grady = edge_detector->GetGrady();
+    cv::Mat outline_edges = edge_detector->GetOutline();
 
-      {
-        auto start = std::chrono::steady_clock::now();
-        GetDDEdges(depth,dd_edges,true); 
-        auto stop = std::chrono::steady_clock::now();
-        std::string etime_msg = std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(stop-start).count())+ "[micro sec]";
-        cv::Mat dst;
-        cv::cvtColor(255*dd_edges, dst, cv::COLOR_GRAY2BGR);
-        cv::putText(dst, etime_msg, cv::Point(40,15), font_face, font_scale, CV_RGB(255,0,0) );
-        cv::imshow( with_simd?"avx edge":"old edge", dst);
-      }
-      {
-        auto start = std::chrono::steady_clock::now();
-        GetGrad(depth, fx, fy, valid_mask, sample_offset, gradx, grady, valid_grad, with_simd);
-        auto stop = std::chrono::steady_clock::now();
-        std::string etime_msg = std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(stop-start).count())+ "[micro sec]";
-        cv::Mat dst = VisualizeGrad(gradx, grady);
-        cv::putText(dst, etime_msg, cv::Point(40,15), font_face, font_scale, CV_RGB(255,0,0) );
-        cv::imshow( with_simd?"avx grad":"old grad", dst);
-      }
-      {
-        auto start = std::chrono::steady_clock::now();
-        GetConcaveEdges(gradx,grady,depth,valid_mask,sample_offset, fx,fy, -100., concave_edges, with_simd);
-        auto stop = std::chrono::steady_clock::now();
-        std::string etime_msg = std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(stop-start).count())+ "[micro sec]";
-        cv::Mat dst;
-        cv::cvtColor(255*concave_edges, dst, cv::COLOR_GRAY2BGR);
-        cv::putText(dst, etime_msg, cv::Point(40,15), font_face, font_scale, CV_RGB(255,0,0) );
-        cv::imshow( with_simd?"avx concave":"old concave", dst);
-      }
-    }
+    cv::imshow("outline", 255*outline_edges);
 
     n = (n+1) % 5; // cpu 혹사 방지...
     if(n == 0)
@@ -140,50 +109,19 @@ int TestWaymodataset(int argc, char** argv) {
   float fy = camera->GetK()(1,1);
   int sample_offset = 6;
 
+  std::shared_ptr<OutlineEdgeDetector> edge_detector(new OutlineEdgeDetectorWithSIMD);
   int font_face = cv::FONT_HERSHEY_SIMPLEX;
   float font_scale = .4;
   bool stop_flag = true;
   for(int i=0; i<dataset.Size(); i+=1){
     const cv::Mat rgb   = dataset.GetImage(i,cv::IMREAD_UNCHANGED);
     const cv::Mat depth = dataset.GetDepthImage(i);
-    cv::Mat dd_edges = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
-    cv::Mat gradx = cv::Mat::zeros(depth.rows, depth.cols, CV_32FC1);
-    cv::Mat grady = cv::Mat::zeros(depth.rows, depth.cols, CV_32FC1);
-    cv::Mat valid_grad = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
-    cv::Mat concave_edges = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
     cv::Mat valid_mask = depth > 0.;
+    edge_detector->PutDepth(depth,fx, fy);
+    cv::Mat gradx = edge_detector->GetGradx();
+    cv::Mat grady = edge_detector->GetGrady();
+    cv::Mat outline_edges = edge_detector->GetOutline();
 
-    bool with_simd = true;
-    {
-      auto start = std::chrono::steady_clock::now();
-      GetDDEdges(depth,dd_edges,true); 
-      auto stop = std::chrono::steady_clock::now();
-      std::string etime_msg = std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(stop-start).count())+ "[micro sec]";
-      cv::Mat dst;
-      cv::cvtColor(255*dd_edges, dst, cv::COLOR_GRAY2BGR);
-      cv::putText(dst, etime_msg, cv::Point(40,15), font_face, font_scale, CV_RGB(255,0,0) );
-      cv::imshow( with_simd?"avx edge":"old edge", dst);
-    }
-    {
-      auto start = std::chrono::steady_clock::now();
-      GetGrad(depth, fx, fy, valid_mask, sample_offset, gradx, grady, valid_grad, with_simd);
-      auto stop = std::chrono::steady_clock::now();
-      std::string etime_msg = std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(stop-start).count())+ "[micro sec]";
-      cv::Mat dst = VisualizeGrad(gradx, grady);
-      cv::putText(dst, etime_msg, cv::Point(40,15), font_face, font_scale, CV_RGB(255,0,0) );
-      cv::imshow( with_simd?"avx grad":"old grad", dst);
-      cv::imshow( "valid_grad", 255*valid_grad);
-    }
-    {
-      auto start = std::chrono::steady_clock::now();
-      GetConcaveEdges(gradx,grady,depth,valid_mask,sample_offset, fx,fy, -100., concave_edges, with_simd);
-      auto stop = std::chrono::steady_clock::now();
-      std::string etime_msg = std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(stop-start).count())+ "[micro sec]";
-      cv::Mat dst;
-      cv::cvtColor(255*concave_edges, dst, cv::COLOR_GRAY2BGR);
-      cv::putText(dst, etime_msg, cv::Point(40,15), font_face, font_scale, CV_RGB(255,0,0) );
-      cv::imshow( with_simd?"avx concave":"old concave", dst);
-    }
     cv::imshow("rgb", rgb);
     cv::imshow("depth", .01*depth);
     char c= cv::waitKey(stop_flag?0:1);
@@ -199,53 +137,37 @@ int TestWaymodataset(int argc, char** argv) {
 
 
 int TestFromOutlineImageFile(int argc, char** argv) {
+  /*
   cv::Mat outline_edges = cv::imread("..//outline.bmp", cv::IMREAD_GRAYSCALE);
   cv::Mat rgb = cv::imread("../rgb.bmp", cv::IMREAD_COLOR);
   cv::Mat valid_mask = cv::Mat::ones(outline_edges.size(), CV_8UC1);
+  */
 
+  std::shared_ptr<SegmentorNew> segmentor(new SegmentorNew);
   int font_face = cv::FONT_HERSHEY_SIMPLEX;
   float font_scale = .8;
-
-
-  bool stop_flag = false;
   int n = 0;
+  std::string output_images = "../../segmentation/output_images/";
+  bool stop_flag = true;
   while(true){
-    bool limit_expand_range = false;
-    //cv::Mat rgb4vis = rgb.clone();
-    cv::Mat rgb4vis;
-    auto t0 = std::chrono::steady_clock::now();
-    cv::Mat mask_old = OLD::Segment(outline_edges, valid_mask, limit_expand_range, rgb4vis);
-    auto t1 = std::chrono::steady_clock::now();
-    cv::Mat dst_old = GetColoredLabel(mask_old); {
-      std::ostringstream os;
-      os << "old : " << std::setprecision(3) <<
-        std::chrono::duration<float, std::milli>(t1-t0).count() << "[milli sec]";
-      cv::putText(dst_old, os.str(), cv::Point(10,20), font_face, font_scale, CV_RGB(255,0,0),2);
-      std::cout << os.str() << std::endl;
+    cv::Mat gray = cv::imread(output_images+"gray"+std::to_string(n)+".png", cv::IMREAD_GRAYSCALE);
+    if(gray.empty()){
+      std::cout << "end of image files" << std::endl;
+      break;
     }
-    cv::imshow("mask_old", dst_old);
+    cv::Mat outline_edges = cv::imread(output_images+"outline"+std::to_string(n)+".png", cv::IMREAD_GRAYSCALE);
+    cv::Mat depth;
+    readRawImage(depth, output_images+"depth"+std::to_string(n)+".raw");
 
-    auto t2 = std::chrono::steady_clock::now();
-    cv::Mat mask_new;
-    int n_octave = 6;
-    int n_downsample = 2; 
-    NEW::Segment(outline_edges, n_octave, n_downsample, mask_new);
-    auto t3 = std::chrono::steady_clock::now();
-
-    cv::Mat dst_new = GetColoredLabel(mask_new,true); 
-    if(true){
-      std::ostringstream os;
-      os << "new : " << std::setprecision(3) <<
-        std::chrono::duration<float, std::milli>(t3-t2).count() << "[milli sec]";
-      cv::putText(dst_new, os.str(), cv::Point(10,20), font_face, font_scale, CV_RGB(255,0,0),2);
-      std::cout << os.str() << std::endl;
-    }
-    cv::imshow("mask_new", dst_new);
-
+    //segmentor->Put(outline_edges, valid_mask);
+    //cv::Mat unsync_marker = segmentor->GetMarker();
+    //cv::Mat dst = GetColoredLabel(unsync_marker);
+    //cv::imshow("dst", dst);
+    cv::imshow("gray", gray);
+    cv::imshow("depth", 0.01*depth);
     cv::imshow("outline", 255*outline_edges);
-    n = (n+1) % 5; // cpu 혹사 방지...
-    if(n == 0)
-      stop_flag = true;
+
+    n += 1;
 
     char c= cv::waitKey(stop_flag?0:30);
     if(c=='q')
