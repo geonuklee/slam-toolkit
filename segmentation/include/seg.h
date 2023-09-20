@@ -74,6 +74,7 @@ namespace NEW {
 void Segment(const cv::Mat outline_edges, 
              int n_octave,
              int n_downsample,
+             bool keep_boundary,
              cv::Mat& output);
 } //namespace NEW
 

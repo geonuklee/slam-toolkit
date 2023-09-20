@@ -78,7 +78,9 @@ int BreadthFirstSearch(cv::Mat& _marker){
   return l_max;
 }
 
-void Merge(cv::Mat& _marker, float min_direct_contact_ratio_for_merge=.7){
+void Merge(cv::Mat& _marker, float min_direct_contact_ratio_for_merge,
+          bool keep_boundary
+           ){
   #define ws_key(i1, i2){ \
     std::make_pair(std::min(i1,i2),std::max(i1,i2))\
   }
@@ -105,7 +107,8 @@ void Merge(cv::Mat& _marker, float min_direct_contact_ratio_for_merge=.7){
     marker += mstep;
   }
 
-  cv::Mat marker_before_extension = _marker.clone();
+  cv::Mat marker_before_extension = keep_boundary?_marker.clone() : cv::Mat();
+
   _marker.setTo(0, _marker < 0);
   std::map< std::pair<int, int>, size_t > contact_after_rm_edge;
   std::priority_queue<MarkerNode> q1;
@@ -226,7 +229,9 @@ void Merge(cv::Mat& _marker, float min_direct_contact_ratio_for_merge=.7){
       converts[l] = l_o;
   }
 
-  _marker = marker_before_extension; // outline edge를 남길 경우.
+  if(keep_boundary)
+    _marker = marker_before_extension; // outline edge를 남길 경우.
+
   marker = _marker.ptr<int>();
   for( y = 0; y < size.height; y++ ) {
     for( x = 0; x < size.width; x++ ) {
@@ -255,6 +260,7 @@ void Merge(cv::Mat& _marker, float min_direct_contact_ratio_for_merge=.7){
 void Segment(const cv::Mat outline_edges,
              int n_octave,
              int n_downsample,
+             bool keep_boundary,
              cv::Mat& output) {
   //int n_octave = 6;
 
@@ -308,7 +314,7 @@ void Segment(const cv::Mat outline_edges,
     label_curr += new_labels;
 
     if(merge)
-      Merge(label_curr, n_downsample > 0 ? .4 : .7); // downsample일 경우, 병목지점의 직접접촉에 비해, edge가 상대적으로 두꺼운거 감안.
+      Merge(label_curr, n_downsample > 0 ? .4 : .7, keep_boundary); // downsample일 경우, 병목지점의 직접접촉에 비해, edge가 상대적으로 두꺼운거 감안.
 
     if(!final_lv)
       label_curr.setTo(0, edge_next);

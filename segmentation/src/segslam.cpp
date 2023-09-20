@@ -310,7 +310,7 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
     search_radius = std::max(search_radius, search_radius_min);
     search_radius = std::min(search_radius, search_radius_max);
     //const auto& dpt01 = flow0.at<cv::Point2f>(pt0);
-    cv::Point2f dpt01(flow[0].at<float>(pt0.x), flow[0].at<float>(pt0.y));
+    cv::Point2f dpt01(flow[0].at<float>(pt0.x), flow[1].at<float>(pt0.y));
     Eigen::Vector2d eig_pt1(pt0.x+dpt01.x, pt0.y+dpt01.y);
     if(!curr_frame->IsInFrame(camera,eig_pt1))  //  땅바닥 제외
       continue;
@@ -793,8 +793,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
                      const cv::Mat gradx,
                      const cv::Mat grady,
                      const cv::Mat valid_grad,
-                     const cv::Mat vis_rgb,
-                     const EigenMap<int, g2o::SE3Quat>* gt_Tcws
+                     const cv::Mat vis_rgb
                     )
 {
   const bool fill_bg_with_dominant = true;
@@ -806,7 +805,6 @@ Frame* Pipeline::Put(const cv::Mat gray,
   vinfo_switch_states_.clear();
   vinfo_neighbor_frames_.clear();
   vinfo_neighbor_mappoints_.clear();
-  vinfo_vis_rgb_ = vis_rgb;
   vinfo_synced_marker_ = synced_marker;
 
   for(const auto& it : marker_areas)

@@ -151,7 +151,7 @@ int TestKitti(int argc, char** argv) {
   }
 
   bool visualize_segment = true;
-  bool stop = false;
+  bool stop = true;
   for(int i=0; i<dataset.Size(); i+=1){
     std::cout << "F# " << i << std::endl;
     const cv::Mat rgb   = dataset.GetImage(i, cv::IMREAD_COLOR);
@@ -202,8 +202,10 @@ int TestKitti(int argc, char** argv) {
     auto t6 = std::chrono::steady_clock::now();
     seg::Frame* frame = nullptr;
     try {
-      frame = pipeline.Put(gray, depth, flow, synced_marker, marker_areas,
-                           gradx, grady, valid_grad, rgb, Tcws.empty()?nullptr:&Tcws);
+      cv::Mat modified_depth = depth.clone();
+      modified_depth.setTo(0, depth > 40.);
+      frame = pipeline.Put(gray, modified_depth, flow, synced_marker, marker_areas,
+                           gradx, grady, valid_grad, rgb);
     }
     catch(const std::exception& e) {
       if(std::string(e.what())=="termination")
@@ -213,17 +215,17 @@ int TestKitti(int argc, char** argv) {
     std::cout << "vslam piepline : " << std::setprecision(3) <<
       std::chrono::duration<float, std::milli>(t7-t6).count() << "[milli sec]" << std::endl;
     WriteKittiTrajectory(frame->GetTcq(0), output_file);
+    pipeline.Visualize(rgb, Tcws.empty()?nullptr:&Tcws);
 
-    pipeline.Visualize();
     /*
     cv::imshow("rgb", rgb);
     cv::imshow("outline", 255*outline_edges);
-    cv::imshow("depth", .01*depth);
     cv::imshow("segment", GetColoredLabel(synced_marker) );
     */
 
     // TODO vSLAM 과정의 visualization
 #ifndef USE_DEPTHFILE
+    cv::imshow("depth", .01*depth);
     cv::imwrite("../output_images/gray"+std::to_string(i)+".png",gray);
     cv::imwrite("../output_images/outline"+std::to_string(i)+".png",outline_edges);
     writeRawImage(depth, "../output_images/depth"+std::to_string(i)+".raw");

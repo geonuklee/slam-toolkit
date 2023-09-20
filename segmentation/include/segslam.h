@@ -251,10 +251,12 @@ public:
            const cv::Mat gradx,
            const cv::Mat grady,
            const cv::Mat valid_grad,
-           const cv::Mat vis_rgb=cv::Mat(),
-           const EigenMap<int,g2o::SE3Quat>* gt_Tcws = nullptr);
+           const cv::Mat vis_rgb
+           );
 
-  void Visualize(); // visualize.cpp
+  void Visualize(const cv::Mat vis_rgb,
+                 const EigenMap<int,g2o::SE3Quat>* gt_Tcws
+                 ); // visualize.cpp
 private:
   void SupplyMappoints(const Qth& qth, Frame* frame);
   void AddNewKeyframesMappoints(Frame* frame,
@@ -305,7 +307,6 @@ private:
   std::map<Qth, std::map<Pth, float> >  vinfo_switch_states_;
   std::map<Qth, std::map<Jth, Frame*> > vinfo_neighbor_frames_;
   std::map<Qth, std::set<Mappoint*> >   vinfo_neighbor_mappoints_;
-  cv::Mat                               vinfo_vis_rgb_;
   cv::Mat                               vinfo_synced_marker_;
   std::map<Pth,float>                   vinfo_density_socres_;
 };

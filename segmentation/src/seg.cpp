@@ -11,8 +11,9 @@ SegmentorNew::SegmentorNew() {
 
 void SegmentorNew::Put(cv::Mat outline_edges, cv::Mat valid_mask) {
   int n_octave = 6;
-  int n_downsample =2;
-  NEW::Segment(outline_edges, n_octave, n_downsample, marker_);
+  int n_downsample = 1;
+  bool keep_boundary = true;
+  NEW::Segment(outline_edges, n_octave, n_downsample, keep_boundary, marker_);
 }
 
 ImageTrackerNew::ImageTrackerNew() {
