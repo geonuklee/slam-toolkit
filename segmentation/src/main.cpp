@@ -28,10 +28,6 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include "orb_extractor.h"
 #include "frame.h"
 #include "camera.h"
-//#include "pipeline.h"
-//#include "qmap_viewer.h"
-//#include <QApplication>
-//#include <QWidget>
 #include "segslam.h"
 #include <exception>
 #include <g2o/types/slam3d/se3quat.h>
@@ -64,6 +60,30 @@ bool writeRawImage(const cv::Mat& image, const std::string& filename) {
     return true;
 }
 
+cv::Mat readRawImage(const std::string& filename) {
+  cv::Mat image;
+  int rows, cols, data, depth, type, channels;
+  std::ifstream file (filename, std::ios::in|std::ios::binary);
+  if (!file.is_open())
+    return image;
+  try {
+    file.read(reinterpret_cast<char *>(&rows), sizeof(rows));
+    file.read(reinterpret_cast<char *>(&cols), sizeof(cols));
+    file.read(reinterpret_cast<char *>(&depth), sizeof(depth));
+    file.read(reinterpret_cast<char *>(&type), sizeof(type));
+    file.read(reinterpret_cast<char *>(&channels), sizeof(channels));
+    file.read(reinterpret_cast<char *>(&data), sizeof(data));
+    image = cv::Mat(rows, cols, type);
+    file.read(reinterpret_cast<char *>(image.data), data);
+  } catch (...) {
+    file.close();
+    return image;
+  }
+
+  file.close();
+  return image;
+}
+
 void WriteKittiTrajectory(const g2o::SE3Quat& Tcw,
                           std::ofstream& output_file) {
   output_file << std::scientific;
@@ -81,6 +101,8 @@ void WriteKittiTrajectory(const g2o::SE3Quat& Tcw,
   output_file.flush();
   return;
 }
+
+#define USE_DEPTHFILE
 
 int TestKitti(int argc, char** argv) {
   //Seq :"02",("13" "20");
@@ -102,19 +124,24 @@ int TestKitti(int argc, char** argv) {
   const float min_disp = 1.;
   const float snyc_min_iou = .3;
 
+#ifdef USE_DEPTHFILE
+  std::string images_dir = "../output_images/";
+#else
   pybind11::scoped_interpreter python; // 이 인스턴스가 파괴되면 인터프리터 종료.
   HITNetStereoMatching hitnet;
+#endif
 
+  seg::CvFeatureDescriptor extractor;
   /* Comparison after computation time optimization */
   //std::shared_ptr<OutlineEdgeDetector> edge_detector( new OutlineEdgeDetectorWithoutSIMD ); // Before   76 [milli sec]
   //std::shared_ptr<Segmentor> segmentor( new SegmentorOld );                                 // Before  110 [milli sec]
   //std::shared_ptr<ImageTracker> img_tracker( new ImageTrackerOld);                          // Before  250 [milli sec]
+  //seg::Pipeline pipeline(camera, &extractor);                                               // Before  150 [milli sec]
 
   std::shared_ptr<OutlineEdgeDetector> edge_detector( new OutlineEdgeDetectorWithSIMD );  // After   2.5 [milli sec]
-  std::shared_ptr<Segmentor> segmentor( new SegmentorNew );                               // After  5~10 [milli sec]
+  std::shared_ptr<Segmentor> segmentor( new SegmentorNew );                               // After  5~10 [milli sec]     
   std::shared_ptr<ImageTrackerNew> img_tracker( new ImageTrackerNew);                     // Afte  10~11 [milli sec]
-  //seg::CvFeatureDescriptor extractor;
-  //seg::Pipeline pipeline(camera, &extractor);                                                 //  150 [milli sec]
+  seg::Pipeline pipeline(camera, &extractor);                                             // After   ~50 [milli sec]
 
   std::string output_fn = std::string(PACKAGE_DIR)+"/output.txt";
   std::ofstream output_file(output_fn);
@@ -132,8 +159,17 @@ int TestKitti(int argc, char** argv) {
     cv::Mat gray, gray_r;
     cv::cvtColor(rgb, gray, cv::COLOR_BGR2GRAY);
     cv::cvtColor(rgb_r, gray_r, cv::COLOR_BGR2GRAY);
+#ifdef USE_DEPTHFILE
+    std::string fn = images_dir+"depth"+std::to_string(i)+".raw";
+    cv::Mat depth = readRawImage(fn);
+    if(depth.empty()){
+      std::cout << "end of depth file, " << fn << std::endl;
+      break;
+    }
+#else
     cv::Mat disp  = hitnet.GetDisparity(gray, gray_r);
     cv::Mat depth = Disparit2Depth(disp,base_line,fx, min_disp);
+#endif
 
     auto t0 = std::chrono::steady_clock::now();
     edge_detector->PutDepth(depth, fx, fy);
@@ -154,21 +190,20 @@ int TestKitti(int argc, char** argv) {
     auto t3 = std::chrono::steady_clock::now();
     std::cout << "segment : " << std::setprecision(3) <<
       std::chrono::duration<float, std::milli>(t3-t2).count() << "[milli sec]" << std::endl;
-    //depth.setTo(0., depth > 50.);
+
     auto t4 = std::chrono::steady_clock::now();
     img_tracker->Put(gray, unsync_marker, snyc_min_iou);
     const std::vector<cv::Mat>& flow = img_tracker->GetFlow();
-    cv::Mat synced_marker = img_tracker->GetSyncedMarked();
-
+    cv::Mat synced_marker = img_tracker->GetSyncedMarker();
+    const std::map<int,size_t>& marker_areas = img_tracker->GetMarkerAreas();
     auto t5 = std::chrono::steady_clock::now();
     std::cout << "track image : " << std::setprecision(3) <<
       std::chrono::duration<float, std::milli>(t5-t4).count() << "[milli sec]" << std::endl;
-
-    /*
     auto t6 = std::chrono::steady_clock::now();
     seg::Frame* frame = nullptr;
     try {
-      frame = pipeline.Put(gray, depth, flow0, shapes, gradx, grady, valid_grad, rgb, Tcws.empty()?nullptr:&Tcws);
+      frame = pipeline.Put(gray, depth, flow, synced_marker, marker_areas,
+                           gradx, grady, valid_grad, rgb, Tcws.empty()?nullptr:&Tcws);
     }
     catch(const std::exception& e) {
       if(std::string(e.what())=="termination")
@@ -178,18 +213,21 @@ int TestKitti(int argc, char** argv) {
     std::cout << "vslam piepline : " << std::setprecision(3) <<
       std::chrono::duration<float, std::milli>(t7-t6).count() << "[milli sec]" << std::endl;
     WriteKittiTrajectory(frame->GetTcq(0), output_file);
-    */
 
+    pipeline.Visualize();
+    /*
     cv::imshow("rgb", rgb);
     cv::imshow("outline", 255*outline_edges);
     cv::imshow("depth", .01*depth);
-    //cv::imshow("segment", GetColoredLabel(marker) );
+    cv::imshow("segment", GetColoredLabel(synced_marker) );
+    */
 
-    if(false){
-      cv::imwrite("../output_images/gray"+std::to_string(i)+".png",gray);
-      cv::imwrite("../output_images/outline"+std::to_string(i)+".png",outline_edges);
-      writeRawImage(depth, "../output_images/depth"+std::to_string(i)+".raw");
-    }
+    // TODO vSLAM 과정의 visualization
+#ifndef USE_DEPTHFILE
+    cv::imwrite("../output_images/gray"+std::to_string(i)+".png",gray);
+    cv::imwrite("../output_images/outline"+std::to_string(i)+".png",outline_edges);
+    writeRawImage(depth, "../output_images/depth"+std::to_string(i)+".raw");
+#endif
 
     char c = cv::waitKey(stop?0:1);
     if(c == 'q')

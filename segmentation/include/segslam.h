@@ -15,10 +15,10 @@ class DepthCamera; // TODO 'depth' camera only?
 
 namespace seg {
 
-typedef int Jth; // jth frame
-typedef int Qth; // qth rig group
-typedef int Pth; // pth instance
-typedef int Ith; // ith mappoint
+typedef int32_t Jth; // jth frame
+typedef int32_t Qth; // qth rig group
+typedef int32_t Pth; // pth instance
+typedef int32_t Ith; // ith mappoint
 
 /* Camera coordinate 을 나타내는 클래스
 기존 ORB Frame이 mappoints를 instance, group 정보 없이 한꺼번에 가지고 있는 반면,
@@ -101,7 +101,7 @@ public:
                                     const Camera* camera,
                                     FeatureDescriptor* extractor,
                                     const cv::Mat& mask);
-  void SetInstances(const std::map<Pth, ShapePtr>& shapes, const std::map<Pth, Instance*>& instances);
+  void SetInstances(const cv::Mat synced_marker, const std::map<Pth, Instance*>& instances);
   void SetMeasuredDepths(const cv::Mat depth);
 
   std::list<int> SearchRadius(const Eigen::Vector2d& uv, double radius) const;
@@ -127,6 +127,7 @@ public:
   const Jth GetId() const { return id_; }
   void SetKfId(const Qth qth, int kf_id);
   const int GetKfId(const Qth qth) const;
+  bool IsKeyframe() const { return is_kf_; }
 
   void SetTcq(const Qth& qth, const g2o::SE3Quat& Tcq) { Tcq_[qth] = std::shared_ptr<g2o::SE3Quat>(new g2o::SE3Quat(Tcq)); }
   const g2o::SE3Quat& GetTcq(const Qth& qth) const { return *Tcq_.at(qth); }
@@ -144,9 +145,11 @@ private:
   std::map<const Mappoint*, int> mappoints_index_;
 
   std::map<Qth, std::shared_ptr<g2o::SE3Quat> > Tcq_;
-  std::map<Qth, int> kf_id_;
+  std::map<Qth, int32_t> kf_id_;
   cv::Mat rgb_;
   const Jth id_;
+
+  bool is_kf_;
 };
 
 
@@ -242,14 +245,16 @@ public:
   ~Pipeline();
   Frame* Put(const cv::Mat gray,
            const cv::Mat depth,
-           const cv::Mat flow0,
-           const std::map<Pth, ShapePtr>& shapes,
-           const cv::Mat& gradx,
-           const cv::Mat& grady,
-           const cv::Mat& valid_grad,
+           const std::vector<cv::Mat>& flow,
+           const cv::Mat synced_marker,
+           const std::map<int,size_t>& marker_areas,
+           const cv::Mat gradx,
+           const cv::Mat grady,
+           const cv::Mat valid_grad,
            const cv::Mat vis_rgb=cv::Mat(),
            const EigenMap<int,g2o::SE3Quat>* gt_Tcws = nullptr);
 
+  void Visualize(); // visualize.cpp
 private:
   void SupplyMappoints(const Qth& qth, Frame* frame);
   void AddNewKeyframesMappoints(Frame* frame,
@@ -258,13 +263,13 @@ private:
   void UpdateRigGroups(const Qth& dominant_qth,
                        Frame* frame) const;
 
+  /*
   cv::Mat VisualizeStates(Frame* frame,
                           const std::map<Pth,float>& density_scores,
                           const std::map<Pth, float>& switch_states,
                           const float& switch_threshold,
                           const std::map<Jth, Frame* >& neighbor_frames,
-                          const std::map<Pth,ShapePtr>& curr_shapes,
-                          const cv::Mat& outline_mask,
+                          const cv::Mat& synced_marker,
                           const EigenMap<int,g2o::SE3Quat>* gt_Tcws = nullptr
                          ) const;
   cv::Mat VisualizeRigInfos(Frame* frame,
@@ -277,6 +282,7 @@ private:
                             const std::map<Pth,ShapePtr>& curr_shapes
                            ) const ;
 
+   */
 
   // j -> q -> (p) -> i
   std::map<Qth, std::map<Jth, Frame*> >       keyframes_;  // jth {c}amera와 keypointt<->'i'th mappoint correspondence
@@ -292,6 +298,16 @@ private:
   const Camera*const camera_;
   FeatureDescriptor*const extractor_;
   std::shared_ptr<Mapper> mapper_;
+
+  // Collect infos for visualization
+
+  float switch_threshold_;
+  std::map<Qth, std::map<Pth, float> >  vinfo_switch_states_;
+  std::map<Qth, std::map<Jth, Frame*> > vinfo_neighbor_frames_;
+  std::map<Qth, std::set<Mappoint*> >   vinfo_neighbor_mappoints_;
+  cv::Mat                               vinfo_vis_rgb_;
+  cv::Mat                               vinfo_synced_marker_;
+  std::map<Pth,float>                   vinfo_density_socres_;
 };
 
 

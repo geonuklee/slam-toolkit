@@ -47,7 +47,7 @@ Instance::Instance(Pth pth)
 
 Frame::Frame(const Jth id,
              const cv::Mat vis_rgb)
-  : id_(id), rgb_(vis_rgb)
+  : id_(id), rgb_(vis_rgb), is_kf_(false)
 {
 
 }
@@ -155,22 +155,18 @@ void Frame::ExtractAndNormalizeKeypoints(const cv::Mat gray,
   return;
 } 
 
-void Frame::SetInstances(const std::map<Pth, ShapePtr>& shapes,
+void Frame::SetInstances(const cv::Mat synced_marker,
                          const std::map<Pth, Instance*>& pth2instance
                         ) {
   // 아직 mappoint 할당이 안된상태이므로 density상관없이 일단 keypoint 할당.
   for(size_t n=0; n<keypoints_.size(); n++){
     const cv::KeyPoint& kpt = keypoints_[n];
-    for(auto it_shape : shapes){
-      ShapePtr s_ptr = it_shape.second;
-      if(s_ptr->n_missing_ > 0)
-        continue;
-      const auto& pt = kpt.pt;
-      if(! s_ptr->HasCollision(pt.x, pt.y, true) )
-        continue;
-      const Pth& pth = it_shape.first;
+    const Pth& pth = synced_marker.at<int32_t>(kpt.pt);
+    if(pth < 1){
+      continue; // keepp instances_[n] as nullptr
+    }
+    else{
       instances_[n] = pth2instance.at(pth);
-      break;
     }
   }
   return;
@@ -201,6 +197,7 @@ void Frame::SetKfId(const Qth qth, int kf_id) {
   if(kf_id_.count(qth))
     throw  -1;
   kf_id_[qth] = kf_id;
+  is_kf_ = true;
 }
 
 
@@ -279,7 +276,7 @@ inline double lerp(double x0, double y0, double x1, double y1, double x) {
 
 std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
                                                        const FeatureDescriptor* extractor,
-                                                       const cv::Mat& flow0,
+                                                       const std::vector<cv::Mat>& flow,
                                                        const Frame* prev_frame,
                                                        bool verbose,
                                                        Frame* curr_frame) {
@@ -312,7 +309,8 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
     double search_radius = lerp(near_depth, search_radius_max, far_depth, search_radius_min, z);
     search_radius = std::max(search_radius, search_radius_min);
     search_radius = std::min(search_radius, search_radius_max);
-    const auto& dpt01 = flow0.at<cv::Point2f>(pt0);
+    //const auto& dpt01 = flow0.at<cv::Point2f>(pt0);
+    cv::Point2f dpt01(flow[0].at<float>(pt0.x), flow[0].at<float>(pt0.y));
     Eigen::Vector2d eig_pt1(pt0.x+dpt01.x, pt0.y+dpt01.y);
     if(!curr_frame->IsInFrame(camera,eig_pt1))  //  땅바닥 제외
       continue;
@@ -787,501 +785,41 @@ void Pipeline::SupplyMappoints(const Qth& qth, Frame* frame) {
   return;
 }
 
-cv::Mat Pipeline::VisualizeRigInfos(Frame* frame,
-                                    const Qth& qth,
-                                    const std::map<Jth, Frame* >& neighbor_frames,
-                                    const std::set<Mappoint*>& neighbor_mappoints,
-                                    std::set<Pth> given_instances,
-                                    const float& switch_threshold,
-                                    const std::map<Pth,float>& switch_states,
-                                    const std::map<Pth,ShapePtr>& curr_shapes
-                                   ) const {
-  const cv::Mat rgb = frame->GetRgb();
-  RigidGroup* rig = qth2rig_groups_.at(qth);
-  cv::Mat dst_frame; {
-    cv::Mat dst_fill  = rgb.clone();
-    std::set<Pth> excluded;
-    for(auto it : rig->GetExcludedInstances())
-      excluded.insert(it.first);
-    for(auto it : switch_states){
-      if(it.second > switch_threshold)
-        continue;
-      excluded.insert(it.first);
-    }
-    for(auto pth : excluded)
-      if(given_instances.count(pth))
-        given_instances.erase(pth);
-
-    for(Pth pth : given_instances){
-      if(!curr_shapes.count(pth))
-        continue;
-      ShapePtr s_ptr = curr_shapes.at(pth);
-      std::vector< std::vector<cv::Point> > cnts;
-      cnts.resize(1);
-      cnts[0].reserve(s_ptr->outerior_.size() );
-      for( auto pt: s_ptr->outerior_)
-        cnts[0].push_back(cv::Point(pt.x,pt.y));
-      cv::drawContours(dst_fill, cnts, 0, CV_RGB(0,255,0), 3);
-    }
-    for(Pth pth : excluded){
-      if(!curr_shapes.count(pth))
-        continue;
-      ShapePtr s_ptr = curr_shapes.at(pth);
-      std::vector< std::vector<cv::Point> > cnts;
-      cnts.resize(1);
-      cnts[0].reserve(s_ptr->outerior_.size() );
-      for( auto pt: s_ptr->outerior_)
-        cnts[0].push_back(cv::Point(pt.x,pt.y));
-      cv::drawContours(dst_fill, cnts, 0, CV_RGB(255,0,0), -1);
-      cv::drawContours(dst_fill, cnts, 0, CV_RGB(0,255,0), 3);
-    }
-    cv::addWeighted(rgb, .5, dst_fill, .5, 1., dst_frame);
-    int fontFace = cv::FONT_HERSHEY_SIMPLEX; double fontScale = .3; int fontThick = 1; int baseline = 0;
-    for(Pth pth : given_instances){
-      if(!curr_shapes.count(pth))
-        continue;
-      auto msg = std::to_string(pth);
-      const auto ptr = curr_shapes.at(pth);
-      const auto& bb = ptr->outerior_bb_;
-      cv::Point cp(bb.x+.5*bb.width, bb.y+.5*bb.height);
-      auto size = cv::getTextSize(msg, fontFace, fontScale, fontThick, &baseline);
-      cv::Point dpt(.5*size.width, .5*size.height);
-      cv::rectangle(dst_frame, cp-dpt-cv::Point(0,3*baseline), cp+dpt, CV_RGB(255,255,255), -1);
-      cv::putText(dst_frame, msg, cp-dpt, fontFace, fontScale, CV_RGB(0,0,0));
-    }
-    for(Pth pth : excluded){
-      if(!curr_shapes.count(pth))
-        continue;
-      auto msg = std::to_string(pth);
-      const auto ptr = curr_shapes.at(pth);
-      const auto& bb = ptr->outerior_bb_;
-      cv::Point cp(bb.x+.5*bb.width, bb.y+.5*bb.height);
-      auto size = cv::getTextSize(msg, fontFace, fontScale, fontThick, &baseline);
-      cv::Point dpt(.5*size.width, .5*size.height);
-      cv::rectangle(dst_frame, cp-dpt-cv::Point(0,3*baseline), cp+dpt, CV_RGB(255,255,255), -1);
-      cv::putText(dst_frame, msg, cp-dpt, fontFace, fontScale, CV_RGB(0,0,0));
-    }
-    for(Mappoint* mp : neighbor_mappoints){
-      int n = frame->GetIndex(mp);
-      if(n < 0)
-        continue;
-      cv::KeyPoint kpt = frame->GetKeypoint(n);
-      cv::circle(dst_frame, kpt.pt, 3, CV_RGB(0,255,0) );
-    }
-  }
-  cv::pyrDown(dst_frame, dst_frame);
-
-  cv::Mat dst_texts = cv::Mat::zeros( dst_frame.rows, 400, CV_8UC3); {
-    cv::rectangle(dst_texts,cv::Rect(0,0,dst_texts.cols, dst_texts.rows),CV_RGB(255,255,255),-1);
-    int fontFace = cv::FONT_HERSHEY_SIMPLEX;
-    double fontScale = .4;
-    int thickness = 1;
-    int baseline=0;
-    int y = 0;
-    /* Neighbor frame을 여기에 나열. */
-    std::map<Jth, Frame*> keyframes = neighbor_frames;
-    keyframes[frame->GetId()] = frame;
-    for(auto it_kf : keyframes){
-      const Jth& jth = it_kf.first;
-      Frame* kf = it_kf.second;
-      auto t = kf->GetTcq(qth).inverse().translation();
-      char text[100];
-      sprintf(text,"est : F#%2d, KF#%2d, (%4.3f, %4.3f, %4.3f)", kf->GetId(), kf->GetKfId(qth), t[0], t[1], t[2] );
-      auto size = cv::getTextSize(text, fontFace, fontScale, thickness, &baseline);
-      y += size.height+2;
-      cv::putText(dst_texts, text, cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
-    }
-
-    y+= 10;
-    std::ostringstream buffer;
-    buffer << "Include> ";
-    for(auto it : rig->GetIncludedInstances()){
-      const Pth& pth = it.first;
-      if(!curr_shapes.count(pth))
-        continue;
-      buffer << pth << ", ";
-      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
-      if(size.width < dst_texts.cols - 10)
-        continue;
-      y += size.height+2;
-      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
-      buffer.str("");
-    }
-    if(!buffer.str().empty()){
-      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
-      y += size.height+2;
-      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
-    }
-    y+= 3;
-    buffer.str("");
-    buffer << "Exclude> ";
-    for(auto it : rig->GetExcludedInstances()){
-      const Pth& pth = it.first;
-      if(!curr_shapes.count(pth))
-        continue;
-      buffer << pth << ", ";
-      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
-      if(size.width < dst_texts.cols - 10)
-        continue;
-      y += size.height+2;
-      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
-      buffer.str("");
-    }
-    if(!buffer.str().empty()){
-      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
-      y += size.height+2;
-      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
-    }
-    y+= 10;
-    buffer.str("");
-    buffer << "Pth:Switch state> ";
-    for(auto it : switch_states){
-      buffer << "(" << it.first <<  ":" << std::fixed << std::setprecision(3) << it.second << "), ";
-      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
-      if(size.width < dst_texts.cols - 100)
-        continue;
-      y += size.height+2;
-      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
-      buffer.str("");
-    }
-    if(!buffer.str().empty()){
-      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
-      y += size.height+2;
-      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
-    }
-  }
-
-  cv::Mat dst = cv::Mat::zeros(std::max<int>(dst_frame.rows, dst_texts.rows),
-                               dst_frame.cols + dst_texts.cols,
-                               CV_8UC3);
-
-  {
-    cv::Rect rect(0, 0, dst_frame.cols, dst_frame.rows);
-    cv::Mat roi(dst, rect);
-    dst_frame.copyTo(roi);
-    cv::rectangle(dst, rect, CV_RGB(0,0,0), 2);
-  }
-  {
-    cv::Rect rect(dst_frame.cols,0,
-                  dst_texts.cols, dst_texts.rows);
-    cv::Mat roi(dst, rect);
-    dst_texts.copyTo(roi);
-    cv::rectangle(dst, rect, CV_RGB(0,0,0), 2);
-  }
-  return dst;
-}
-
-cv::Mat Pipeline::VisualizeStates(Frame* frame,
-                        const std::map<Pth,float>& density_scores,
-                        const std::map<Pth, float>& switch_states,
-                        const float& switch_threshold,
-                        const std::map<Jth, Frame* >& neighbor_frames,
-                        const std::map<Pth,ShapePtr>& curr_shapes,
-                        const cv::Mat& outline_mask,
-                        const EigenMap<int,g2o::SE3Quat>* gt_Tcws
-                        ) const {
-  const Qth dominant_qth = 0;
-  const RigidGroup* dominant_rig = qth2rig_groups_.at(dominant_qth);
-  const cv::Mat rgb = frame->GetRgb();
-  cv::Mat dst_frame; {
-    cv::Mat dst_fill  = rgb.clone();
-    std::set<Pth> excluded;
-    for(auto it : dominant_rig->GetExcludedInstances())
-      excluded.insert(it.first);
-    for(auto it : switch_states){
-      if(it.second > switch_threshold)
-        continue;
-      excluded.insert(it.first);
-    }
-
-    for(auto it : excluded){
-      const Pth& pth = it;
-      if(!curr_shapes.count(pth))
-        continue;
-      ShapePtr s_ptr = curr_shapes.at(pth);
-      std::vector< std::vector<cv::Point> > cnts;
-      cnts.resize(1);
-      cnts[0].reserve(s_ptr->outerior_.size() );
-      for( auto pt: s_ptr->outerior_)
-        cnts[0].push_back(cv::Point(pt.x,pt.y));
-      cv::drawContours(dst_fill, cnts, 0, CV_RGB(255,0,0), -1);
-    }
-    cv::addWeighted(rgb, .5, dst_fill, .5, 1., dst_frame);
-    cv::Mat dst_outline;
-    cv::cvtColor(outline_mask, dst_outline, cv::COLOR_GRAY2BGR);
-    cv::addWeighted(dst_frame, 1., dst_outline, .3, 1., dst_frame);
-  }
-
-  for(auto it : curr_shapes) {
-    const Pth& pth = it.first;
-    //bool sparse = density_scores.count(pth) ? density_scores.at(pth) < 1. : true;
-    //bool dynamics = switch_states.count(pth) ? switch_states.at(pth) > switch_threshold : false;
-    ShapePtr s_ptr = it.second;
-    if(s_ptr->n_missing_ > 0)
-      continue;
-    if(s_ptr->n_belief_ < 2)
-      continue;
-    std::vector< std::vector<cv::Point> > cnts;
-    cnts.resize(1);
-    cnts[0].reserve(s_ptr->outerior_.size() );
-      for( auto pt: s_ptr->outerior_)
-        cnts[0].push_back(cv::Point(pt.x,pt.y));
-    const auto& color = colors[pth % colors.size()];
-    cv::drawContours(dst_frame, cnts, 0, color, 2);
-  }
-
-  const auto& keypoints = frame->GetKeypoints();
-  const auto& mappoints = frame->GetMappoints();
-  const auto& instances = frame->GetInstances();
-  for(size_t n=0; n<keypoints.size(); n++){
-    Instance* ins = instances[n];
-    Mappoint* mp = mappoints[n];
-    const cv::Point2f& pt = keypoints[n].pt;
-    if(mp){
-      std::stringstream ss;
-      ss << std::hex << mp->GetId(); // Convert to hexadecimal
-      std::string msg = ss.str();
-      if(mp->HasEstimate4Rig(dominant_qth)) {
-        const std::set<Frame*>& keyframes = mp->GetKeyframes(dominant_qth);
-        for(auto it = keyframes.rbegin(); it!=keyframes.rend(); it++){
-          const cv::Point2f& pt0 = (*it)->GetKeypoint( (*it)->GetIndex(mp) ).pt;
-          cv::circle(dst_frame, pt, 3, CV_RGB(0,255,0), -1);
-          cv::line(dst_frame, pt, pt0, CV_RGB(255,255,0),  1);
-          break;
-        }
-      }
-      else
-        cv::circle(dst_frame, pt, 3, CV_RGB(255, -1,0), -1);
-    }
-    else {
-      cv::circle(dst_frame, pt, 2, CV_RGB(150,150,150), 1);
-    }
-  }
-  {
-    int fontFace = cv::FONT_HERSHEY_SIMPLEX;
-    double fontScale = .3;
-    int fontThick = 1;
-    int baseline = 0;
-    for(auto it : curr_shapes){
-      const Pth& pth = it.first;
-      ShapePtr ptr = it.second;
-      const auto& bb = ptr->outerior_bb_;
-      std::string msg[3];
-      cv::Scalar txt_colors[3];
-      msg[0] = "#" + std::to_string(pth);
-      for(int k=0; k<3;k++)
-        txt_colors[k] = CV_RGB(0,0,0);
-      msg[1] = "d: "; msg[2] = "s: ";
-      if(density_scores.count(pth) ){
-        std::ostringstream oss; oss << std::fixed << std::setprecision(2);
-        oss<< density_scores.at(pth);
-        msg[1] += oss.str();
-        if(density_scores.at(pth) < 1.)
-          txt_colors[1] = CV_RGB(255,0,0);
-      }
-      else
-        msg[1] += "-";
-      if(switch_states.count(pth) ){
-        std::ostringstream oss; oss << std::fixed << std::setprecision(2);
-        oss<< switch_states.at(pth);
-        msg[2] += oss.str();
-        if(switch_states.at(pth) < switch_threshold)
-          txt_colors[2] = CV_RGB(255,0,0);
-      }
-      else
-        msg[2] += "-";
-      int offset = 2;
-      int w, h;
-      w = h = 0;
-      for(int k=0; k<3; k++){
-        auto size = cv::getTextSize(msg[k], fontFace, fontScale, fontThick, &baseline);
-        h += size.height;
-        w = std::max(size.width, w);
-      }
-      cv::Point cp(bb.x+.5*bb.width, bb.y+.5*bb.height);
-      cv::Point dpt(.5*w, .5*h);
-      cv::rectangle(dst_frame, cp-dpt-cv::Point(0,3*baseline), cp+dpt, CV_RGB(255,255,255), -1);
-
-      int x = cp.x - .5*w;
-      int y = cp.y - .5*h;
-      for(int k=0;k<3;k++){
-        cv::putText(dst_frame, msg[k], cv::Point(x,y),fontFace, fontScale, txt_colors[k], fontThick);
-        auto size = cv::getTextSize(msg[k], fontFace, fontScale, fontThick, &baseline);
-        y += size.height+offset;
-      }
-
-    }
-  }
-
-  cv::Mat dst_texts = cv::Mat::zeros( rgb.rows, 400, CV_8UC3); {
-    int fontFace = cv::FONT_HERSHEY_SIMPLEX;
-    double fontScale = .4;
-    int thickness = 1;
-    int baseline=0;
-    int y = 0;
-    cv::rectangle(dst_texts,cv::Rect(0,0,dst_texts.cols, dst_texts.rows),CV_RGB(255,255,255),-1);
-    std::map<Jth, Frame*> keyframes = neighbor_frames;
-    keyframes[frame->GetId()] = frame;
-    Frame* prev_kf = nullptr;
-    for(auto it_kf : keyframes){
-      const Jth& jth = it_kf.first;
-      Frame* kf = it_kf.second;
-      auto t = kf->GetTcq(dominant_qth).inverse().translation();
-      char text[100];
-
-      sprintf(text,"est : F#%2d, KF#%2d  (%4.3f, %4.3f, %4.3f)", kf->GetId(), kf->GetKfId(dominant_qth), t[0], t[1], t[2] );
-      auto size = cv::getTextSize(text, fontFace, fontScale, thickness, &baseline);
-      y += size.height+2;
-      cv::putText(dst_texts, text, cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
-
-      if(!gt_Tcws)
-        continue;
-      const g2o::SE3Quat& Tcw = gt_Tcws->at(jth);
-      t = Tcw.inverse().translation();
-      sprintf(text,"true: F#%2d,  (%4.3f, %4.3f, %4.3f)", kf->GetId(), t[0], t[1], t[2] );
-      size = cv::getTextSize(text, fontFace, fontScale, thickness, &baseline);
-      y += size.height+2;
-      cv::putText(dst_texts, text, cv::Point(5, y), fontFace, fontScale, CV_RGB(120,120,120), thickness);
-
-      if(!prev_kf){
-        prev_kf = kf;
-        continue;
-      }
-      // dT =Tc0 c1 = Tc0 w * Tc1 w.inverse()
-      g2o::SE3Quat est_dT = prev_kf->GetTcq(dominant_qth) * kf->GetTcq(dominant_qth).inverse();
-      g2o::SE3Quat true_dT = gt_Tcws->at(prev_kf->GetId()) * gt_Tcws->at(kf->GetId()).inverse();
-      g2o::SE3Quat err_dT = true_dT.inverse() * est_dT;
-      if(true_dT.translation().norm() < 1e-2)
-        continue;
-      float norm_ratio = est_dT.translation().norm() / true_dT.translation().norm();
-      float err_ratio = err_dT.translation().norm() / true_dT.translation().norm();
-      sprintf(text,"norm ratio: %4.3f", norm_ratio);
-      cv::putText(dst_texts, text, cv::Point(20+size.width, y), fontFace, fontScale, CV_RGB(255,0,0), thickness);
-
-      y += 2;
-      prev_kf = kf;
-    }
-
-    y+= 10;
-    std::ostringstream buffer;
-    buffer << "Include> ";
-    for(auto it : dominant_rig->GetIncludedInstances()){
-      const Pth& pth = it.first;
-      if(!curr_shapes.count(pth))
-        continue;
-      buffer << pth << ", ";
-      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
-      if(size.width < dst_texts.cols - 10)
-        continue;
-      y += size.height+2;
-      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
-      buffer.str("");
-    }
-    if(!buffer.str().empty()){
-      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
-      y += size.height+2;
-      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
-    }
-    y+= 3;
-    buffer.str("");
-    buffer << "Exclude> ";
-    for(auto it : dominant_rig->GetExcludedInstances()){
-      const Pth& pth = it.first;
-      if(!curr_shapes.count(pth))
-        continue;
-      buffer << pth << ", ";
-      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
-      if(size.width < dst_texts.cols - 10)
-        continue;
-      y += size.height+2;
-      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
-      buffer.str("");
-    }
-    if(!buffer.str().empty()){
-      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
-      y += size.height+2;
-      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
-    }
-
-    y+= 10;
-    buffer.str("");
-    buffer << "Pth:Switch state> ";
-    for(auto it : switch_states){
-      buffer << "(" << it.first <<  ":" << std::fixed << std::setprecision(3) << it.second << "), ";
-      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
-      if(size.width < dst_texts.cols - 100)
-        continue;
-      y += size.height+2;
-      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
-      buffer.str("");
-    }
-    if(!buffer.str().empty()){
-      auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
-      y += size.height+2;
-      cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
-    }
-  }
-
-  cv::Mat dst = cv::Mat::zeros(std::max<int>(dst_frame.rows, dst_texts.rows),
-                               dst_frame.cols + dst_texts.cols,
-                               CV_8UC3);
-
-  {
-    cv::Rect rect(0, 0, dst_frame.cols, dst_frame.rows);
-    cv::Mat roi(dst, rect);
-    dst_frame.copyTo(roi);
-    cv::rectangle(dst, rect, CV_RGB(0,0,0), 2);
-  }
-  {
-    cv::Rect rect(dst_frame.cols,0,
-                  dst_texts.cols, dst_texts.rows);
-    cv::Mat roi(dst, rect);
-    dst_texts.copyTo(roi);
-    cv::rectangle(dst, rect, CV_RGB(0,0,0), 2);
-  }
-
-  return dst;
-}
-
-cv::Mat GetClosedOutlineMask(const cv::Size size, const std::map<Pth, ShapePtr>& curr_shapes){
-  cv::Mat outline_mask = cv::Mat::zeros(size, CV_8UC1);
-  for(auto it_shape : curr_shapes){
-    ShapePtr s_ptr = it_shape.second;
-    std::vector< std::vector<cv::Point> > cnts;
-    cnts.resize(1);
-    cnts[0].reserve(s_ptr->outerior_.size() );
-    for( auto pt: s_ptr->outerior_)
-      cnts[0].push_back(cv::Point(pt.x,pt.y));
-    cv::drawContours(outline_mask, cnts, 0, 255, 20);
-  }
-  return outline_mask;
-}
-
 Frame* Pipeline::Put(const cv::Mat gray,
-                   const cv::Mat depth,
-                   const cv::Mat flow0,
-                   const std::map<Pth, ShapePtr>& curr_shapes,
-                   const cv::Mat& gradx, const cv::Mat& grady, const cv::Mat& valid_grad,
-                   const cv::Mat vis_rgb,
-                   const EigenMap<int, g2o::SE3Quat>* gt_Tcws
-                   )
+                     const cv::Mat depth,
+                     const std::vector<cv::Mat>& flow,
+                     const cv::Mat synced_marker,
+                     const std::map<int,size_t>& marker_areas,
+                     const cv::Mat gradx,
+                     const cv::Mat grady,
+                     const cv::Mat valid_grad,
+                     const cv::Mat vis_rgb,
+                     const EigenMap<int, g2o::SE3Quat>* gt_Tcws
+                    )
 {
   const bool fill_bg_with_dominant = true;
   const float search_radius = 30.;
-  const float switch_threshold = .3;
+  switch_threshold_ = .3;
   float density_threshold = 1. / 70. / 70.; // NxN pixel에 한개 이상의 mappoint가 존재해야 dense instance
   const bool verbose_flowmatch = false;
 
-  cv::Mat outline_mask = GetClosedOutlineMask(gray.size(), curr_shapes);
-  for(auto it_shape : curr_shapes)
-    if(!pth2instances_.count(it_shape.first) )
-      pth2instances_[it_shape.first] = new Instance(it_shape.first);
+  vinfo_switch_states_.clear();
+  vinfo_neighbor_frames_.clear();
+  vinfo_neighbor_mappoints_.clear();
+  vinfo_vis_rgb_ = vis_rgb;
+  vinfo_synced_marker_ = synced_marker;
 
+  for(const auto& it : marker_areas)
+    if(!pth2instances_.count(it.first) )
+      pth2instances_[it.first] = new Instance(it.first);
+
+  cv::Mat outline_mask = synced_marker < 1;
   static Jth nFrames = 0;
   Frame* curr_frame = new Frame(nFrames++, vis_rgb);
   curr_frame->ExtractAndNormalizeKeypoints(gray, camera_, extractor_, outline_mask);
-  curr_frame->SetInstances(curr_shapes, pth2instances_);
+  curr_frame->SetInstances(synced_marker, pth2instances_);
   curr_frame->SetMeasuredDepths(depth);
+
 #if 1
   Qth dominant_qth = -1; {
     // Initiate pipeline for first frame.
@@ -1323,7 +861,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
 
   // Optical flow를 기반으로한 feature matching은 Tcq가 필요없다.
   std::map<int, std::pair<Mappoint*, double> > flow_matches
-    = FlowMatch(camera_, extractor_, flow0, prev_frame_, verbose_flowmatch, curr_frame);
+    = FlowMatch(camera_, extractor_, flow, prev_frame_, verbose_flowmatch, curr_frame);
   std::map<Mappoint*,int> matched_mappoints;
   for(auto it : flow_matches){
     curr_frame->SetMappoint(it.second.first, it.first);
@@ -1337,11 +875,12 @@ Frame* Pipeline::Put(const cv::Mat gray,
   if(segmented_instances.empty())
     throw -1;
 
-  std::map<Pth,float> density_scores;
-  for(auto it_shape : curr_shapes){
-    const Pth& pth = it_shape.first;
+  std::map<Pth,float>& density_scores = vinfo_density_socres_;
+  for(const auto& it : marker_areas){
+    const Pth& pth = it.first;
+    const size_t& area = it.second;
     float npoints = ins2mappoints.count(pth) ? ins2mappoints.at(pth) : 0.;
-    float dense = npoints > 0 ? npoints/it_shape.second->area_ : 0.; // 최소 점의 개수도 고려.
+    float dense = npoints > 0 ? float(npoints) / float(area) : 0.; // 최소 점의 개수도 고려.
     density_scores[pth] = dense / density_threshold;
   }
 
@@ -1354,8 +893,8 @@ Frame* Pipeline::Put(const cv::Mat gray,
     segmented_instances.erase(it_rig);
     RigidGroup* rig = qth2rig_groups_.at(qth);
     Frame* latest_kf = keyframes_.at(qth).rbegin()->second;
-    std::set<Mappoint*>     neighbor_mappoints;
-    std::map<Jth, Frame* >  neighbor_frames;
+    std::set<Mappoint*>&     neighbor_mappoints = vinfo_neighbor_mappoints_[qth];
+    std::map<Jth, Frame* >&  neighbor_frames = vinfo_neighbor_frames_[qth];
     GetNeighbors(latest_kf, qth, neighbor_mappoints, neighbor_frames);
     if(neighbor_mappoints.empty()) {
       std::cerr << "qth = " << qth << ", failure to get mappoints" << std::endl;
@@ -1373,7 +912,8 @@ Frame* Pipeline::Put(const cv::Mat gray,
           fixed_instances.insert(it_density.first);
 
     bool vis_verbose = false;
-    std::map<Pth,float> switch_states\
+    std::map<Pth,float>& switch_states = vinfo_switch_states_[qth];
+    switch_states\
       = mapper_->ComputeLBA(camera_,qth, neighbor_mappoints, neighbor_frames,
                             curr_frame, prev_frame_, fixed_instances, gradx, grady, valid_grad, vis_verbose);
     std::set<Pth> instances4next_rig;
@@ -1382,7 +922,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
       n_consecutiv_switchoff[qth]; // empty map 생성.
     for(auto it_switch : switch_states){
       const Pth& pth = it_switch.first;
-      if(it_switch.second > switch_threshold)
+      if(it_switch.second > switch_threshold_)
         continue;
       size_t& n_consec = n_consecutiv_switchoff[qth][pth];
       n_consec++;
@@ -1463,10 +1003,21 @@ Frame* Pipeline::Put(const cv::Mat gray,
       if(n_consecutiv_switchoff.count(qth) && n_consecutiv_switchoff.at(qth).empty())
         n_consecutiv_switchoff.erase(qth);
     }
+    else{
+      n_consecutiv_switchoff.clear();
+    }
+    /* 
+    visualization에서 파악해야하는 상황.
+    qth 별, switch_states,
+    qth 별, neighbor frames, neighbor_mappoints
+    jth 별, synced_marker, density_scores
+    전체 - gt_Tcws
+    */
 
+    /*
     if(qth == 0){
       cv::Mat dst = VisualizeStates(curr_frame, density_scores, switch_states, switch_threshold, neighbor_frames,
-                                    curr_shapes, outline_mask, gt_Tcws);
+                                    synced_marker, gt_Tcws);
       cv::imshow("segslam", dst);
     } else {
       // TODO 적절한 rig visualization.
@@ -1474,16 +1025,10 @@ Frame* Pipeline::Put(const cv::Mat gray,
       //                                instances, switch_threshold, switch_states, curr_shapes);
       //cv::imshow("Rig #"+std::to_string(qth), dst);
     }
+    */
     if(++nq > 3) // N 번만 수행.
       break;
-  }
-
-  static bool stop = false;
-  char c = cv::waitKey(stop?0:1);
-  if(c == 'q')
-    throw ExceptionTermination();
-  else if (c == 's')
-    stop = !stop;
+  } // if(segmented_instances.empty())
 
   std::map<Qth,bool> need_keyframe = FrameNeedsToBeKeyframe(curr_frame);
   for(auto it : need_keyframe){
@@ -1495,7 +1040,8 @@ Frame* Pipeline::Put(const cv::Mat gray,
     if(keyframes_.at(it.first).size() > 1)// ComputLBA 를 포함한 while loop문에서 이미 추가된 keyframe.
       curr_frame->SetKfId(it.first, keyframes_[it.first].size() );
   }
-
+  if(prev_frame_ && ! prev_frame_->IsKeyframe() )
+    delete prev_frame_;
   prev_frame_ = curr_frame;
   prev_dominant_qth_ = dominant_qth;
   return curr_frame;

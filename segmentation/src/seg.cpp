@@ -20,16 +20,21 @@ ImageTrackerNew::ImageTrackerNew() {
   dof_ = cv::optflow::createOptFlow_DIS(cv::optflow::DISOpticalFlow::PRESET_ULTRAFAST);
 }
 
-struct MarkerStats{
+struct MarkerOverlapStats{
   size_t samples_;
   std::map<int,size_t> snyc_n_;
+};
 
+struct MarkerStats{
+  int synced_label;
+  size_t area;
+  MarkerStats() : synced_label(-1), area(0) { }
 };
 
 void ImageTrackerNew::Put(const cv::Mat _gray,
                           const cv::Mat _unsync_marker,
                           float sync_min_iou) {
-  std::map<int, int> unsync2sync;
+  std::map<int, MarkerStats> unsync2sync;
   cv::Size size = _gray.size();
   int i, j, u, v;
   if(! prev_gray_.empty()){
@@ -38,7 +43,7 @@ void ImageTrackerNew::Put(const cv::Mat _gray,
     dof_->calc(prev_gray_, _gray, flowxy);
     cv::split(flowxy, flow_);
     
-    std::map<int, MarkerStats > unsync2stats;
+    std::map<int, MarkerOverlapStats > unsync2stats;
     std::map<int, size_t> sync_smaples;
     float* flow_u = flow_[0].ptr<float>();
     float* flow_v = flow_[1].ptr<float>();
@@ -58,7 +63,7 @@ void ImageTrackerNew::Put(const cv::Mat _gray,
           continue;
         if(u > 0 && v > 0 && u < size.width && v < size.height){
           int index = v * size.width + u;
-          MarkerStats& stats = unsync2stats[unsync_l[index]];
+          MarkerOverlapStats& stats = unsync2stats[unsync_l[index]];
           stats.samples_++;
           stats.snyc_n_[l0]++;
           sync_smaples[l0]++;
@@ -81,9 +86,10 @@ void ImageTrackerNew::Put(const cv::Mat _gray,
       }
       size_t s_samples = sync_smaples.at(sl);
       float iou = float(overlap_smaples)  / float(it.second.samples_ + s_samples - overlap_smaples);
-      if(iou > sync_min_iou)
-        unsync2sync[ul] = sl;
-    } // unsync2sync
+      if(iou > sync_min_iou){
+        unsync2sync[ul].synced_label = sl;
+      }
+    } // for unsync2stats
   }
   else{
     // if prev_gray empty
@@ -96,10 +102,17 @@ void ImageTrackerNew::Put(const cv::Mat _gray,
       for(j = 0; j < size.width; j++){
         const int32_t& ul = unsyc_l[j];
         int32_t* curr_l = curr_sync_l+j;
-        if(unsync2sync.count(ul))
-          *curr_l = unsync2sync[ul];
+        if( ul < 1){
+          *curr_l = -1;
+          continue;
+        }
+        MarkerStats& ms = unsync2sync[ul]; // map 참조 최소화.
+        ms.area++;
+        if(ms.synced_label > 0){
+          *curr_l = ms.synced_label;
+        }
         else{
-          unsync2sync[ul] = ++n_instance_;
+          ms.synced_label = ++n_instance_;
           *curr_l = n_instance_;
         }
       }
@@ -107,69 +120,10 @@ void ImageTrackerNew::Put(const cv::Mat _gray,
       curr_sync_l += size.width;
   }
 
-  //cv::imshow("flow label", GetColoredLabel(sync_marker));
-  //cv::imshow("curr label", GetColoredLabel(_unsync_marker));
+  marker_areas_.clear();
+  for(auto it : unsync2sync)
+    marker_areas_[it.second.synced_label] = it.second.area;
   prev_gray_ = _gray;
   return;
 }
-void Shape::UpdateBB() {
-  {
-    cv::Point2f x0(9999999.f,9999999.f);
-    cv::Point2f x1(-x0);
-    for(const auto& pt : outerior_){
-      x0.x = std::min<float>(x0.x, pt.x);
-      x0.y = std::min<float>(x0.y, pt.y);
-      x1.x = std::max<float>(x1.x, pt.x);
-      x1.y = std::max<float>(x1.y, pt.y);
-    }
-    outerior_bb_ = cv::Rect2f(x0.x,x0.y,x1.x-x0.x,x1.y-x0.y);
-  }
-  return;
-}
-
-static bool BbCollision(const cv::Rect2f& bb, const float& x, const float& y) {
-  //bb.width;
-  if(x < bb.x )
-    return false;
-  if(x > bb.x+bb.width)
-    return false;
-  if(y < bb.y)
-    return false;
-  if(y > bb.y+bb.width)
-    return false;
-  return true;
-}
-
-bool Shape::HasCollision(const int& _x, const int& _y, bool check_contour) const {
-   
-  // *[x] global shape에 대해 BB 충돌체크.
-  // *[x] contour에 대해 충돌체크
-  const float x = _x;
-  const float y = _y;
-  cv::Point2f pt(x,y);
-
-  if( !BbCollision(outerior_bb_, x, y) )
-    return false;
-  if(!check_contour)
-    return true;
-
-  // Interior contour과 충돌 없는 경우, outerior contour와 충돌체크
-  bool b_outerior_collision = cv::pointPolygonTest(outerior_, pt, false) > 0.;
-  return b_outerior_collision;
-}
-
-
-bool IsInFrame(const cv::Size size, const cv::Point2f& pt, const float boundary){
-  if(pt.x < boundary)
-    return false;
-  if(pt.y < boundary)
-    return false;
-  if(pt.x > size.width-boundary)
-    return false;
-  if(pt.y > size.height-boundary)
-    return false;
-  return true;
-}
-
-
 
