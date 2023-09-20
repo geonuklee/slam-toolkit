@@ -43,6 +43,27 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include <pybind11/embed.h>
 #include "hitnet.h"
 
+// https://stackoverflow.com/questions/17735863/opencv-save-cv-32fc1-images
+bool writeRawImage(const cv::Mat& image, const std::string& filename) {
+  std::ofstream file;
+    file.open (filename, std::ios::out|std::ios::binary);
+    if (!file.is_open())
+        return false;
+    file.write(reinterpret_cast<const char *>(&image.rows), sizeof(int));
+    file.write(reinterpret_cast<const char *>(&image.cols), sizeof(int));
+    const int depth = image.depth();
+    const int type  = image.type();
+    const int channels = image.channels();
+    file.write(reinterpret_cast<const char *>(&depth), sizeof(depth));
+    file.write(reinterpret_cast<const char *>(&type), sizeof(type));
+    file.write(reinterpret_cast<const char *>(&channels), sizeof(channels));
+    int sizeInBytes = image.step[0] * image.rows;
+    file.write(reinterpret_cast<const char *>(&sizeInBytes), sizeof(int));
+    file.write(reinterpret_cast<const char *>(image.data), sizeInBytes);
+    file.close();
+    return true;
+}
+
 void WriteKittiTrajectory(const g2o::SE3Quat& Tcw,
                           std::ofstream& output_file) {
   output_file << std::scientific;
@@ -79,18 +100,21 @@ int TestKitti(int argc, char** argv) {
   const float fx = camera->GetK()(0,0);
   const float fy = camera->GetK()(1,1);
   const float min_disp = 1.;
+  const float snyc_min_iou = .3;
 
   pybind11::scoped_interpreter python; // 이 인스턴스가 파괴되면 인터프리터 종료.
   HITNetStereoMatching hitnet;
 
+  /* Comparison after computation time optimization */
   //std::shared_ptr<OutlineEdgeDetector> edge_detector( new OutlineEdgeDetectorWithoutSIMD ); // Before   76 [milli sec]
-  std::shared_ptr<OutlineEdgeDetector> edge_detector( new OutlineEdgeDetectorWithSIMD );      // After   2.5 [milli sec]
   //std::shared_ptr<Segmentor> segmentor( new SegmentorOld );                                 // Before  110 [milli sec]
-  std::shared_ptr<Segmentor> segmentor( new SegmentorNew );                                   // After  5~10 [milli sec]
-  std::shared_ptr<ShapeTracker> shape_tracker( new ShapeTrackerOld);                          // Before  250 [milli sec]
+  //std::shared_ptr<ImageTracker> img_tracker( new ImageTrackerOld);                          // Before  250 [milli sec]
 
-  seg::CvFeatureDescriptor extractor;
-  seg::Pipeline pipeline(camera, &extractor);                                                 //  150 [milli sec]
+  std::shared_ptr<OutlineEdgeDetector> edge_detector( new OutlineEdgeDetectorWithSIMD );  // After   2.5 [milli sec]
+  std::shared_ptr<Segmentor> segmentor( new SegmentorNew );                               // After  5~10 [milli sec]
+  std::shared_ptr<ImageTrackerNew> img_tracker( new ImageTrackerNew);                     // Afte  10~11 [milli sec]
+  //seg::CvFeatureDescriptor extractor;
+  //seg::Pipeline pipeline(camera, &extractor);                                                 //  150 [milli sec]
 
   std::string output_fn = std::string(PACKAGE_DIR)+"/output.txt";
   std::ofstream output_file(output_fn);
@@ -121,25 +145,26 @@ int TestKitti(int argc, char** argv) {
     cv::Mat valid_mask = edge_detector->GetValidMask();
     cv::Mat valid_grad = valid_mask;
 
-    auto t2 = std::chrono::steady_clock::now();
-    segmentor->Put(outline_edges, valid_mask);
-    cv::Mat marker = segmentor->GetMarker();
-    auto t3 = std::chrono::steady_clock::now();
     std::cout << "outline edge : " << std::setprecision(3) <<
       std::chrono::duration<float, std::milli>(t1-t0).count() << "[milli sec]" << std::endl;
 
+    auto t2 = std::chrono::steady_clock::now();
+    segmentor->Put(outline_edges, valid_mask);
+    cv::Mat unsync_marker = segmentor->GetMarker();
+    auto t3 = std::chrono::steady_clock::now();
     std::cout << "segment : " << std::setprecision(3) <<
       std::chrono::duration<float, std::milli>(t3-t2).count() << "[milli sec]" << std::endl;
-
     //depth.setTo(0., depth > 50.);
     auto t4 = std::chrono::steady_clock::now();
-    const std::map<seg::Pth, ShapePtr>& shapes = shape_tracker->Put(gray, marker);
+    img_tracker->Put(gray, unsync_marker, snyc_min_iou);
+    const std::vector<cv::Mat>& flow = img_tracker->GetFlow();
+    cv::Mat synced_marker = img_tracker->GetSyncedMarked();
+
     auto t5 = std::chrono::steady_clock::now();
-    std::cout << "track shapes : " << std::setprecision(3) <<
+    std::cout << "track image : " << std::setprecision(3) <<
       std::chrono::duration<float, std::milli>(t5-t4).count() << "[milli sec]" << std::endl;
 
-    cv::Mat flow0 = shape_tracker->GetFlow0();
-
+    /*
     auto t6 = std::chrono::steady_clock::now();
     seg::Frame* frame = nullptr;
     try {
@@ -152,22 +177,23 @@ int TestKitti(int argc, char** argv) {
     auto t7 = std::chrono::steady_clock::now();
     std::cout << "vslam piepline : " << std::setprecision(3) <<
       std::chrono::duration<float, std::milli>(t7-t6).count() << "[milli sec]" << std::endl;
-
     WriteKittiTrajectory(frame->GetTcq(0), output_file);
+    */
 
     cv::imshow("rgb", rgb);
     cv::imshow("outline", 255*outline_edges);
     cv::imshow("depth", .01*depth);
-    cv::imshow("segment", GetColoredLabel(marker) );
+    //cv::imshow("segment", GetColoredLabel(marker) );
+
+    if(false){
+      cv::imwrite("../output_images/gray"+std::to_string(i)+".png",gray);
+      cv::imwrite("../output_images/outline"+std::to_string(i)+".png",outline_edges);
+      writeRawImage(depth, "../output_images/depth"+std::to_string(i)+".raw");
+    }
+
     char c = cv::waitKey(stop?0:1);
     if(c == 'q')
       break;
-    else if (c == 'f'){
-      /*
-      cv::imwrite("outline.bmp", outline_edges);
-      cv::imwrite("rgb.bmp", rgb);
-      */
-    }
     else if (c == 's')
       stop = !stop;
   }

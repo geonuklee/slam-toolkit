@@ -55,7 +55,6 @@ private:
 class Segmentor {
 public:
   virtual void Put(cv::Mat outline_edges, cv::Mat valid_mask) = 0;
-
   cv::Mat GetMarker() const { return marker_; }
 public:
   cv::Mat marker_;
@@ -72,71 +71,37 @@ public:
   virtual void Put(cv::Mat outline_edges, cv::Mat valid_mask);
 };
 
-class ShapeTracker {
+class ImageTrackerOld {
 public:
-  virtual const std::map<int, ShapePtr>& Put(cv::Mat gray, cv::Mat marker) = 0;
+  ImageTrackerOld();
+  virtual void Put(cv::Mat gray, cv::Mat marker);
   cv::Mat GetFlow0() const { return flow0_; }
-
-protected:
+private:
+  void PutKeyframe(cv::Mat gray, cv::cuda::GpuMat g_gray);
+  cv::Mat GetFlow(cv::cuda::GpuMat g_gray);
+  cv::Ptr<cv::cuda::DenseOpticalFlow> optical_flow_;
+  cv::Mat gray0_;
+  cv::cuda::GpuMat g_gray0_;
+  std::map<int, ShapePtr> global_shapes_; // 최근까지 제대로 추적되던 instance의 모음.
   cv::Mat flow0_;
-
-};
-
-class ShapeTrackerOld :public ShapeTracker {
-public:
-  ShapeTrackerOld();
-
-  virtual const std::map<int, ShapePtr>& Put(cv::Mat gray, cv::Mat marker);
-
-private:
-
-  void PutKeyframe(cv::Mat gray, cv::cuda::GpuMat g_gray);
-  cv::Mat GetFlow(cv::cuda::GpuMat g_gray);
-
-  cv::Ptr<cv::cuda::DenseOpticalFlow> optical_flow_;
-  cv::Mat gray0_;
-  cv::cuda::GpuMat g_gray0_;
-  std::map<int, ShapePtr> global_shapes_; // 최근까지 제대로 추적되던 instance의 모음.
   int n_shapes_;
 };
 
-
-
-/*
-class Segmentor {
+class ImageTrackerNew {
 public:
-  Segmentor();
-  const std::map<int, ShapePtr>& Put(cv::Mat gray, cv::Mat depth, const Camera* camera,
-                                     cv::Mat vis_rgb, cv::Mat& flow0, cv::Mat& gradx, cv::Mat& grady, cv::Mat& valid_grad);
-
+  ImageTrackerNew();
+  virtual void Put(const cv::Mat gray,
+                   const cv::Mat unsync_marker,
+                   float sync_min_iou);
+  const std::vector<cv::Mat>& GetFlow() const { return flow_; }  // delta uv {0}<-{1} on coordinate {0}.
+  cv::Mat GetSyncedMarked() const { return prev_sync_marker_; }
 private:
-
-  const std::map<int, ShapePtr>& _Put(cv::Mat gray,
-            cv::cuda::GpuMat g_gray,
-            cv::Mat depth,
-            const Camera* camera,
-            cv::Mat vis_rgb, // for visualization
-            cv::Mat& flow0,
-            cv::Mat& gradx,
-            cv::Mat& grady,
-            cv::Mat& valid_grad
-            );
-
-
-  bool IsKeyframe(cv::Mat flow, cv::Mat rgb = cv::Mat());
-  void PutKeyframe(cv::Mat gray, cv::cuda::GpuMat g_gray);
-
-  cv::Mat GetFlow(cv::cuda::GpuMat g_gray);
-
-private:
-  cv::Ptr<cv::cuda::DenseOpticalFlow> optical_flow_;
-  cv::Mat gray0_;
-  cv::cuda::GpuMat g_gray0_;
-
-  std::map<int, ShapePtr> global_shapes_; // 최근까지 제대로 추적되던 instance의 모음.
-  int n_shapes_;
+  int n_instance_;
+  cv::Ptr<cv::DenseOpticalFlow> dof_;
+  std::vector<cv::Mat> flow_;
+  cv::Mat prev_gray_;
+  cv::Mat prev_sync_marker_;
 };
-*/
 
 namespace OLD{
 cv::Mat Segment(const cv::Mat outline_edge,
@@ -150,7 +115,6 @@ void DistanceWatershed(const cv::Mat dist_fromedge,
                        cv::Mat& vis_rangelimitedflood,
                        cv::Mat& vis_onedgesflood
                        );
-
 std::map<int, ShapePtr> ConvertMarker2Instances(const cv::Mat marker);
 std::map<int,int> TrackShapes(const std::map<int, ShapePtr>& local_shapes,
                               const cv::Mat& local_marker,
@@ -167,24 +131,6 @@ void Segment(const cv::Mat outline_edges,
              int n_octave,
              int n_downsample,
              cv::Mat& output);
-
 } //namespace NEW
-
-
-/*
-void GetGrad(const cv::Mat depth , const cv::Mat valid_mask,
-             const Camera* camera,
-             cv::Mat& gradx,
-             cv::Mat& grady,
-             cv::Mat& valid_grad
-             );
-cv::Mat GetConcaveEdges(const cv::Mat gradx,
-                     const cv::Mat grady,
-                     const cv::Mat depth,
-                     const cv::Mat valid_mask,
-                     const Camera* camera);
-
-cv::Mat GetDDEdges(const cv::Mat depth, const cv::Mat valid_mask, const Camera* camera);
-*/
 
 #endif

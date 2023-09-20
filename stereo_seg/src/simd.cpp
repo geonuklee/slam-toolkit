@@ -1,10 +1,159 @@
 #include "simd.h"
+
 #include <immintrin.h> // sse or avx
+#include <list>
+#include <opencv2/optflow.hpp> // DIS optical flow
+
+std::vector<cv::Scalar> colors = {
+  CV_RGB(0,180,0),
+  CV_RGB(0,100,0),
+  CV_RGB(255,0,255),
+  CV_RGB(100,0,255),
+  CV_RGB(100,0,100),
+  CV_RGB(0,0,180),
+  CV_RGB(0,0,100),
+  CV_RGB(255,255,0),
+  CV_RGB(100,255,0),
+  CV_RGB(100,100,0),
+  CV_RGB(100,0,0),
+  CV_RGB(0,255,255),
+  CV_RGB(0,100,255),
+  CV_RGB(0,255,100),
+  CV_RGB(0,100,100)
+};
+
+cv::Mat GetColoredLabel(cv::Mat mask, bool put_text){
+  cv::Mat dst = cv::Mat::zeros(mask.rows, mask.cols, CV_8UC3);
+
+  std::set<int> labels;
+
+  for(size_t i = 0; i < mask.rows; i++){
+    for(size_t j = 0; j < mask.cols; j++){
+      int idx;
+      if(mask.type() == CV_8UC1)
+        idx = mask.at<unsigned char>(i,j);
+      else if(mask.type() == CV_32S) // TODO Unify type of marker map to CV_32S
+        idx = mask.at<int>(i,j);
+      else
+        throw "Unexpected type";
+      if(mask.type() == CV_8UC1 && idx == 0)
+        continue;
+      else if(mask.type() == CV_32S && idx < 0)
+        continue;
+
+      cv::Scalar bgr;
+      if( idx == 0)
+        bgr = CV_RGB(100,100,100);
+      //else if (idx == 1)
+      //  bgr = CV_RGB(255,255,255);
+      else
+        bgr = colors.at( idx % colors.size() );
+
+      dst.at<cv::Vec3b>(i,j)[0] = bgr[0];
+      dst.at<cv::Vec3b>(i,j)[1] = bgr[1];
+      dst.at<cv::Vec3b>(i,j)[2] = bgr[2];
+
+      labels.insert(idx);
+    }
+  }
+
+  if(put_text){
+    for(int l : labels){
+      cv::Mat fg = mask == l;
+      cv::rectangle(fg, cv::Rect(cv::Point(0,0), cv::Point(fg.cols-1,fg.rows-1)), false, 2);
+
+      cv::Mat dist;
+      cv::distanceTransform(fg, dist, cv::DIST_L2, cv::DIST_MASK_3);
+      double minv, maxv;
+      cv::Point minloc, maxloc;
+      cv::minMaxLoc(dist, &minv, &maxv, &minloc, &maxloc);
+      const auto& c0 = colors.at( l % colors.size() );
+      const auto color = (c0[0]+c0[1]+c0[2] > 255*2) ? CV_RGB(0,0,0) : CV_RGB(255,255,255);
+      cv::putText(dst, std::to_string(l), maxloc, cv::FONT_HERSHEY_SIMPLEX, 0.5, color);
+    }
+  }
+  return dst;
+}
+
+
 
 /*
 * Referenced tutorials, codes 
   * for SIMD programming : http://supercomputingblog.com/windows/image-processing-with-sse/
   * for image process    : https://github.com/opencv/opencv/blob/4790a3732e725b102f6c27858e7b43d78aee2c3e/modules/imgproc/src/segmentation.cpp#L88
+*/
+
+/*
+std::vector<cv::Scalar> colors = {
+  CV_RGB(0,180,0),
+  CV_RGB(0,100,0),
+  CV_RGB(255,0,255),
+  CV_RGB(100,0,255),
+  CV_RGB(100,0,100),
+  CV_RGB(0,0,180),
+  CV_RGB(0,0,100),
+  CV_RGB(255,255,0),
+  CV_RGB(100,255,0),
+  CV_RGB(100,100,0),
+  CV_RGB(100,0,0),
+  CV_RGB(0,255,255),
+  CV_RGB(0,100,255),
+  CV_RGB(0,255,100),
+  CV_RGB(0,100,100)
+};
+
+cv::Mat GetColoredLabel(cv::Mat mask, bool put_text){
+  cv::Mat dst = cv::Mat::zeros(mask.rows, mask.cols, CV_8UC3);
+
+  std::set<int> labels;
+
+  for(size_t i = 0; i < mask.rows; i++){
+    for(size_t j = 0; j < mask.cols; j++){
+      int idx;
+      if(mask.type() == CV_8UC1)
+        idx = mask.at<unsigned char>(i,j);
+      else if(mask.type() == CV_32S) // TODO Unify type of marker map to CV_32S
+        idx = mask.at<int>(i,j);
+      else
+        throw "Unexpected type";
+      if(mask.type() == CV_8UC1 && idx == 0)
+        continue;
+      else if(mask.type() == CV_32S && idx < 0)
+        continue;
+
+      cv::Scalar bgr;
+      if( idx == 0)
+        bgr = CV_RGB(100,100,100);
+      //else if (idx == 1)
+      //  bgr = CV_RGB(255,255,255);
+      else
+        bgr = colors.at( idx % colors.size() );
+
+      dst.at<cv::Vec3b>(i,j)[0] = bgr[0];
+      dst.at<cv::Vec3b>(i,j)[1] = bgr[1];
+      dst.at<cv::Vec3b>(i,j)[2] = bgr[2];
+
+      labels.insert(idx);
+    }
+  }
+
+  if(put_text){
+    for(int l : labels){
+      cv::Mat fg = mask == l;
+      cv::rectangle(fg, cv::Rect(cv::Point(0,0), cv::Point(fg.cols-1,fg.rows-1)), false, 2);
+
+      cv::Mat dist;
+      cv::distanceTransform(fg, dist, cv::DIST_L2, cv::DIST_MASK_3);
+      double minv, maxv;
+      cv::Point minloc, maxloc;
+      cv::minMaxLoc(dist, &minv, &maxv, &minloc, &maxloc);
+      const auto& c0 = colors.at( l % colors.size() );
+      const auto color = (c0[0]+c0[1]+c0[2] > 255*2) ? CV_RGB(0,0,0) : CV_RGB(255,255,255);
+      cv::putText(dst, std::to_string(l), maxloc, cv::FONT_HERSHEY_SIMPLEX, 0.5, color);
+    }
+  }
+  return dst;
+}
 */
 
 static bool SameSign(const float& v1, const float& v2){
@@ -529,11 +678,101 @@ void OutlineEdgeDetectorWithoutSIMD::PutDepth(cv::Mat depth, float fx, float fy)
   return;
 }
 
-SegmentorNew::SegmentorNew() {
-
+ImageTrackerNew::ImageTrackerNew() {
+  n_instance_ = 0;
+  dof_ = cv::optflow::createOptFlow_DIS(cv::optflow::DISOpticalFlow::PRESET_ULTRAFAST);
 }
-void SegmentorNew::Put(cv::Mat outline_edges, cv::Mat valid_mask) {
 
+struct MarkerStats{
+  size_t samples_;
+  std::map<int,size_t> snyc_n_;
+
+};
+
+void ImageTrackerNew::Put(const cv::Mat _gray,
+                          const cv::Mat _unsync_marker,
+                          float sync_min_iou) {
+  std::map<int, int> unsync2sync;
+  cv::Size size = _gray.size();
+  int i, j, u, v;
+  if(! prev_gray_.empty()){
+    // optical flow etime : 6~7 milli sec
+    cv::Mat flowxy;
+    dof_->calc(prev_gray_, _gray, flowxy);
+    cv::split(flowxy, flow_);
+    
+    std::map<int, MarkerStats > unsync2stats;
+    std::map<int, size_t> sync_smaples;
+    float* flow_u = flow_[0].ptr<float>();
+    float* flow_v = flow_[1].ptr<float>();
+    int32_t* prev_sync_l = prev_sync_marker_.ptr<int32_t>();
+    const int32_t* unsync_l= _unsync_marker.ptr<int32_t>();
+
+    int offset = 4;
+    const int offset_step = offset * size.width;
+    const int ho = size.height-offset;
+    const int wo = size.width-offset;
+    for( i = 0; i < ho; i+=offset) {
+      for(j = 0; j < wo; j+=offset){
+        u = j + int( flow_u[j] );
+        v = i + int( flow_v[j] );
+        const int32_t& l0 = prev_sync_l[j];
+        if(l0 < 1)
+          continue;
+        if(u > 0 && v > 0 && u < size.width && v < size.height){
+          int index = v * size.width + u;
+          MarkerStats& stats = unsync2stats[unsync_l[index]];
+          stats.samples_++;
+          stats.snyc_n_[l0]++;
+          sync_smaples[l0]++;
+        }
+      }
+      flow_u += offset_step;
+      flow_v += offset_step;
+      prev_sync_l += offset_step;
+    }
+
+    for(const auto& it : unsync2stats){
+      const int& ul = it.first;
+      size_t overlap_smaples = 0;
+      int sl = -1;
+      for(auto it2 : it.second.snyc_n_){
+        if(overlap_smaples < it2.second){
+          overlap_smaples = it2.second;
+          sl = it2.first;
+        }
+      }
+      size_t s_samples = sync_smaples.at(sl);
+      float iou = float(overlap_smaples)  / float(it.second.samples_ + s_samples - overlap_smaples);
+      if(iou > sync_min_iou)
+        unsync2sync[ul] = sl;
+    } // unsync2sync
+  }
+  else{
+    // if prev_gray empty
+    prev_sync_marker_ = cv::Mat::zeros(size, CV_32SC1);
+  }
+
+  int32_t*  curr_sync_l  = prev_sync_marker_.ptr<int32_t>();
+  const int32_t*  unsyc_l = _unsync_marker.ptr<int32_t>();
+  for(i = 0; i < size.height; i++) {
+      for(j = 0; j < size.width; j++){
+        const int32_t& ul = unsyc_l[j];
+        int32_t* curr_l = curr_sync_l+j;
+        if(unsync2sync.count(ul))
+          *curr_l = unsync2sync[ul];
+        else{
+          unsync2sync[ul] = ++n_instance_;
+          *curr_l = n_instance_;
+        }
+      }
+      unsyc_l     += size.width;
+      curr_sync_l += size.width;
+  }
+
+  //cv::imshow("flow label", GetColoredLabel(sync_marker));
+  //cv::imshow("curr label", GetColoredLabel(_unsync_marker));
+  prev_gray_ = _gray;
   return;
 }
 

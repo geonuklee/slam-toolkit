@@ -143,12 +143,17 @@ int TestFromOutlineImageFile(int argc, char** argv) {
   cv::Mat valid_mask = cv::Mat::ones(outline_edges.size(), CV_8UC1);
   */
 
+  ImageTrackerNew img_tracker;
   std::shared_ptr<SegmentorNew> segmentor(new SegmentorNew);
+
+
   int font_face = cv::FONT_HERSHEY_SIMPLEX;
   float font_scale = .8;
   int n = 0;
   std::string output_images = "../../segmentation/output_images/";
   bool stop_flag = true;
+
+  cv::Mat marker0_, gray0_, outline0_;
   while(true){
     cv::Mat gray = cv::imread(output_images+"gray"+std::to_string(n)+".png", cv::IMREAD_GRAYSCALE);
     if(gray.empty()){
@@ -158,25 +163,33 @@ int TestFromOutlineImageFile(int argc, char** argv) {
     cv::Mat outline_edges = cv::imread(output_images+"outline"+std::to_string(n)+".png", cv::IMREAD_GRAYSCALE);
     cv::Mat depth;
     readRawImage(depth, output_images+"depth"+std::to_string(n)+".raw");
+    cv::Mat valid_mask = depth > 0.1;
 
-    //segmentor->Put(outline_edges, valid_mask);
-    //cv::Mat unsync_marker = segmentor->GetMarker();
-    //cv::Mat dst = GetColoredLabel(unsync_marker);
-    //cv::imshow("dst", dst);
+    segmentor->Put(outline_edges, valid_mask);
+    cv::Mat unsync_marker = segmentor->GetMarker();
+
+    float sync_min_iou = .3;
+    auto t0_track = std::chrono::steady_clock::now();
+    img_tracker.Put(gray, unsync_marker, sync_min_iou);
+    auto t1_track = std::chrono::steady_clock::now();
+    std::cout <<"etime of img_track for " << " : " << std::setprecision(3) <<
+      std::chrono::duration<float, std::milli>(t1_track-t0_track).count() << "[milli sec]" << std::endl;
+    cv::Mat synced_marker = img_tracker.GetSyncedMarked();
+    const std::vector<cv::Mat>& flow = img_tracker.GetFlow();
     cv::imshow("gray", gray);
     cv::imshow("depth", 0.01*depth);
     cv::imshow("outline", 255*outline_edges);
-
-    n += 1;
-
+    cv::imshow("synced marker", GetColoredLabel(synced_marker, true));
+    gray0_ = gray;
+    outline0_ = outline_edges;
+    marker0_ = unsync_marker;
     char c= cv::waitKey(stop_flag?0:30);
     if(c=='q')
       break;
     else if(c=='s')
       stop_flag = !stop_flag;
-
+    n+=1;
   }
-
   return 1;
 }
 

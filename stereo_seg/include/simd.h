@@ -1,8 +1,6 @@
 #ifndef SIMD_IMGPROC_
 #define SIMD_IMGPROC_
-#include <immintrin.h> // Required for SSE, AVX, and AVX2
 #include <opencv2/opencv.hpp>
-
 
 class OutlineEdgeDetector {
 public:
@@ -53,36 +51,19 @@ public:
 
 class ImageTrackerNew {
 public:
-  ImageTrackerNew() {}
-  cv::Mat GetFlow(const cv::Mat gray); // delta uv {0}<-{1} on coordinate {0}.
-  cv::Mat GetLogoddsOutline(const cv::Mat& outline_curr);
-
+  ImageTrackerNew();
+  virtual void Put(const cv::Mat gray,
+                   const cv::Mat unsync_marker,
+                   float sync_min_iou);
+  const std::vector<cv::Mat>& GetFlow() const { return flow_; }  // delta uv {0}<-{1} on coordinate {0}.
+  cv::Mat GetSyncedMarked() const { return prev_sync_marker_; }
 private:
-  cv::Mat gray0_;
+  int n_instance_;
+  cv::Ptr<cv::DenseOpticalFlow> dof_;
+  std::vector<cv::Mat> flow_;
+  cv::Mat prev_gray_;
+  cv::Mat prev_sync_marker_;
 };
-
-namespace OLD{
-cv::Mat Segment(const cv::Mat outline_edge,
-                cv::Mat valid_mask=cv::Mat() ,
-                bool limit_expand_range=true,
-                cv::Mat rgb4vis=cv::Mat() );
-void DistanceWatershed(const cv::Mat dist_fromedge,
-                       cv::Mat& markers,
-                       bool limit_expand_range,
-                       cv::Mat& vis_arealimitedflood,
-                       cv::Mat& vis_rangelimitedflood,
-                       cv::Mat& vis_onedgesflood
-                       );
-
-} // namespace OLD
-
-namespace NEW {
-void Segment(const cv::Mat outline_edges, 
-             int n_octave,
-             int n_downsample,
-             cv::Mat& output);
-} //namespace NEW
-
 
 cv::Mat GetColoredLabel(cv::Mat mask, bool put_text=false);
 

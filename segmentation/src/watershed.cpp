@@ -1192,7 +1192,7 @@ void Segment(const cv::Mat outline_edges,
   while(pyr_edges.size() < n_octave){
     cv::Mat prev = *pyr_edges.rbegin();
     cv::Mat next;
-    cv::dilate(prev, next, kernel);
+    //cv::dilate(prev, next, kernel);
     cv::resize( prev, next, cv::Size(int(prev.cols/2), int(prev.rows/2)), 0, 0);
     cv::dilate(next, next, kernel);
     pyr_edges.push_back(next>0);

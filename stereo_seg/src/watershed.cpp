@@ -4,78 +4,6 @@
 #include <opencv2/imgproc.hpp>
 #include <string>
 #include <list>
-//#include "../../segmentation/include/util.h"
-
-std::vector<cv::Scalar> colors = {
-  CV_RGB(0,180,0),
-  CV_RGB(0,100,0),
-  CV_RGB(255,0,255),
-  CV_RGB(100,0,255),
-  CV_RGB(100,0,100),
-  CV_RGB(0,0,180),
-  CV_RGB(0,0,100),
-  CV_RGB(255,255,0),
-  CV_RGB(100,255,0),
-  CV_RGB(100,100,0),
-  CV_RGB(100,0,0),
-  CV_RGB(0,255,255),
-  CV_RGB(0,100,255),
-  CV_RGB(0,255,100),
-  CV_RGB(0,100,100)
-};
-
-cv::Mat GetColoredLabel(cv::Mat mask, bool put_text){
-  cv::Mat dst = cv::Mat::zeros(mask.rows, mask.cols, CV_8UC3);
-
-  std::set<int> labels;
-
-  for(size_t i = 0; i < mask.rows; i++){
-    for(size_t j = 0; j < mask.cols; j++){
-      int idx;
-      if(mask.type() == CV_8UC1)
-        idx = mask.at<unsigned char>(i,j);
-      else if(mask.type() == CV_32S) // TODO Unify type of marker map to CV_32S
-        idx = mask.at<int>(i,j);
-      else
-        throw "Unexpected type";
-      if(mask.type() == CV_8UC1 && idx == 0)
-        continue;
-      else if(mask.type() == CV_32S && idx < 0)
-        continue;
-
-      cv::Scalar bgr;
-      if( idx == 0)
-        bgr = CV_RGB(100,100,100);
-      //else if (idx == 1)
-      //  bgr = CV_RGB(255,255,255);
-      else
-        bgr = colors.at( idx % colors.size() );
-
-      dst.at<cv::Vec3b>(i,j)[0] = bgr[0];
-      dst.at<cv::Vec3b>(i,j)[1] = bgr[1];
-      dst.at<cv::Vec3b>(i,j)[2] = bgr[2];
-
-      labels.insert(idx);
-    }
-  }
-
-  if(put_text){
-    for(int l : labels){
-      cv::Mat fg = mask == l;
-      cv::rectangle(fg, cv::Rect(cv::Point(0,0), cv::Point(fg.cols-1,fg.rows-1)), false, 2);
-
-      cv::Mat dist;
-      cv::distanceTransform(fg, dist, cv::DIST_L2, cv::DIST_MASK_3);
-      double minv, maxv;
-      cv::Point minloc, maxloc;
-      cv::minMaxLoc(dist, &minv, &maxv, &minloc, &maxloc);
-      const auto& c0 = colors.at( l % colors.size() );
-      const auto color = (c0[0]+c0[1]+c0[2] > 255*2) ? CV_RGB(0,0,0) : CV_RGB(0,0,0);
-      cv::putText(dst, std::to_string(l), maxloc, cv::FONT_HERSHEY_SIMPLEX, 0.5, color);
-    }
-  }
-  return dst;
-}
 
 
 namespace OLD {
@@ -276,6 +204,7 @@ void DistanceWatershed(const cv::Mat _dist_fromedge,
   }
 #undef ws_push
 
+  /*
   if(!vis_arealimitedflood.empty()){
     cv::Mat fg = _marker > 0;
     const int mode   = cv::RETR_EXTERNAL;
@@ -314,6 +243,7 @@ void DistanceWatershed(const cv::Mat _dist_fromedge,
     //for(i = 0; i < contours.size(); i++)
     //  cv::drawContours(vis_arealimitedflood, contours, i, CV_RGB(0,0,0), 2);
   }
+  */
 
   // Second step - Expand each instance in limited range
   if(limit_expand_range) {
@@ -385,6 +315,7 @@ void DistanceWatershed(const cv::Mat _dist_fromedge,
 #undef ws_push
 #undef ws_check
 
+/*
   if(!vis_rangelimitedflood.empty()){
     //vis_rangelimitedflood = GetColoredLabel(_marker);
     for(int r=0; r<_marker.rows; r++){
@@ -404,6 +335,7 @@ void DistanceWatershed(const cv::Mat _dist_fromedge,
       }
     }
   }
+  */
 
 #define ws_check(idx){ \
   if(k.m[idx]>0){ \
@@ -450,6 +382,7 @@ void DistanceWatershed(const cv::Mat _dist_fromedge,
     //_marker = marker0;
   }
 #undef ws_push
+/*
   if(!vis_onedgesflood.empty()){
     //vis_onedgesflood = GetColoredLabel(_marker);
     for(int r=0; r<_marker.rows; r++){
@@ -466,6 +399,7 @@ void DistanceWatershed(const cv::Mat _dist_fromedge,
       }
     }
   }
+  */
 
   int n_merge = 0;
   {  // Need fix with bug
@@ -806,6 +740,7 @@ cv::Mat Segment(const cv::Mat outline_edge,
       cv::drawContours(weights, vis_contours, i, w, -1);
     }
 
+    /*
     for(int r=0; r<marker.rows; r++){
       for(int c=0; c<marker.cols; c++){
         auto& cs = vis_seed.at<cv::Vec3b>(r,c);
@@ -839,6 +774,7 @@ cv::Mat Segment(const cv::Mat outline_edge,
         }
       }
     }
+    */
     for(int i = 0; i < vis_contours.size(); i++){
       const std::vector<cv::Point>& contour = vis_contours.at(i);
       const auto pt = contour.at(0);
@@ -1188,7 +1124,7 @@ void Segment(const cv::Mat outline_edges,
   while(pyr_edges.size() < n_octave){
     cv::Mat prev = *pyr_edges.rbegin();
     cv::Mat next;
-    cv::dilate(prev, next, kernel);
+    //cv::dilate(prev, next, kernel);
     cv::resize( prev, next, cv::Size(int(prev.cols/2), int(prev.rows/2)), 0, 0);
     cv::dilate(next, next, kernel);
     pyr_edges.push_back(next>0);
@@ -1226,8 +1162,12 @@ void Segment(const cv::Mat outline_edges,
     new_labels.setTo(0, ~zero_label);
     label_curr += new_labels;
 
-    if(merge)
+    if(merge){
+      //cv::Mat dst = GetColoredLabel(label_curr);
+      //cv::resize(dst, dst, outline_edges.size(), 0, 0, cv::INTER_NEAREST);
+      //cv::imshow("Before merge", dst);
       Merge(label_curr, n_downsample > 0 ? .4 : .7); // downsample일 경우, 병목지점의 직접접촉에 비해, edge가 상대적으로 두꺼운거 감안.
+    }
 
     if(!final_lv)
       label_curr.setTo(0, edge_next);
@@ -1252,4 +1192,18 @@ void Segment(const cv::Mat outline_edges,
 }
 
 } // namespace NEW
+
+SegmentorNew::SegmentorNew() {
+
+}
+
+void SegmentorNew::Put(cv::Mat outline_edges, cv::Mat valid_mask) {
+  int n_octave = 6;
+  int n_downsample =2;
+  NEW::Segment(outline_edges, n_octave, n_downsample, marker_);
+  return;
+}
+
+
+
 
