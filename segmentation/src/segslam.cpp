@@ -719,6 +719,64 @@ Eigen::Vector3d ComputeXr(float z, const Eigen::Vector3d& normalized_pt) {
   return z*normalized_pt;
 }
 
+
+void Pipeline::FilterOutlierMatches(Qth qth,
+                                    Frame* curr_frame) {
+  const g2o::SE3Quat& Tcq = curr_frame->GetTcq(qth);
+  const std::vector<Mappoint*>&    mappoints = curr_frame->GetMappoints();
+  const std::vector<cv::KeyPoint>& keypoints = curr_frame->GetKeypoints();
+  const std::vector<Instance*>&    instances = curr_frame->GetInstances();
+
+  // instance 별로..
+  std::vector<double> all_errors;
+  all_errors.reserve(mappoints.size());
+  std::map<Instance*, std::list<double> > valid_errors;
+  for(int n = 0; n < mappoints.size(); n++){
+    Mappoint* mp = mappoints.at(n);
+    if(!mp){
+      all_errors.push_back(0.);
+      continue;
+    }
+    Instance* ins = instances.at(n);
+    const Eigen::Vector3d Xr = mp->GetXr(qth);
+    Frame* ref = mp->GetRefFrame(qth);
+    const g2o::SE3Quat& Trq = ref->GetTcq(qth);
+    const Eigen::Vector3d Xc = Tcq * Trq.inverse() * Xr;
+    Eigen::Vector2d rprj_uv = camera_->Project(Xc);
+    const auto& pt = keypoints.at(n).pt;
+    const Eigen::Vector2d uv(pt.x, pt.y);
+    double err = (uv-rprj_uv).norm();
+    all_errors.push_back(err);
+    valid_errors[ins].push_back(err);
+  }
+
+  std::map<Instance*, double > err_thresholds;
+  for(auto it : valid_errors){
+    std::list<double>& errors = it.second;
+    errors.sort();
+    auto it_median = errors.begin();
+    std::advance(it_median, errors.size()/2);
+    err_thresholds[it.first] = 4. * (*it_median);
+  }
+
+  if(curr_frame->IsKeyframe()) //
+    throw "FilterOutlierMatches expect frame before being keyframe.";
+
+  for(int n = 0; n < mappoints.size(); n++){
+    Mappoint* mp = mappoints.at(n);
+    if(!mp)
+      continue;
+    Instance* ins = instances.at(n);
+    const double& err = all_errors.at(n);
+    const double& err_th = err_thresholds.at(ins);
+    if(err < err_th)
+      continue;
+    curr_frame->EraseMappoint(n); // keyframe이 아니라서 mp->RemoveKeyframe 등을 호출하지 않는다.
+  }
+
+  return;
+}
+
 void Pipeline::SupplyMappoints(const Qth& qth, Frame* frame) {
   const double min_mpt_distance = 10.;
   const auto& keypoints = frame->GetKeypoints();
@@ -898,8 +956,9 @@ Frame* Pipeline::Put(const cv::Mat gray,
       std::cerr << "qth = " << qth << ", failure to get mappoints" << std::endl;
       throw -1;
     }
+
 #if 0
-    // ProjectionMatch는 flow로부터 motion update와 pth0 != pth_curr 인 경우에 예외처리가 팔요해보인다.
+    // ProjectionMatch는 flow로부터 motion update와 pth(k_0)!= pth(k) 인 경우에 예외처리가 팔요해보인다.
     std::map<int, std::pair<Mappoint*, double> > proj_matches = ProjectionMatch(camera_, extractor_, neighbor_mappoints, curr_frame, qth, search_radius);
     SetMatches(flow_matches, proj_matches, curr_frame);
 #endif
@@ -914,6 +973,10 @@ Frame* Pipeline::Put(const cv::Mat gray,
     switch_states\
       = mapper_->ComputeLBA(camera_,qth, neighbor_mappoints, neighbor_frames,
                             curr_frame, prev_frame_, fixed_instances, gradx, grady, valid_grad, vis_verbose);
+
+    // LocalBA로 structure, motion 모두 추정한 다음에, rpjr error가 동일 instance내 다른 feature에 비해 유난히 큰 matching을 제거.
+    FilterOutlierMatches(qth, curr_frame);
+
     std::set<Pth> instances4next_rig;
     std::set<Pth> switchoff_instances;
     if(!n_consecutiv_switchoff.count(qth))
@@ -934,15 +997,15 @@ Frame* Pipeline::Put(const cv::Mat gray,
         switchoff_instances.insert( pth); // 현재 프레임에서 switchoff가 발생하지 않은 pthqth를 삭제하기위해.
     }
 
-    int nmappoints = 0;
+    size_t n_mappoints4next_rig = 0;
     for(Pth pth : instances4next_rig)
       if(ins2mappoints.count(pth))// mp 없는 instance도 있으니까.
-         nmappoints += ins2mappoints.at(pth);
+         n_mappoints4next_rig += ins2mappoints.at(pth);
 
     Qth qth_next = -1;
     if(segmented_instances.empty()){
 #if 1
-      if(nmappoints > 10) {
+      if(n_mappoints4next_rig > 10) {
 #else
       if(nmappoints > 1){ // neighbor_mappoints.empty()를 예방하기 위해 필요한 최소 조건.
 #endif
@@ -989,7 +1052,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
       }
     }
 
-    if(false){
+    if(true){
       std::set<Pth> missing_outlier;
       for(auto it_conseq_so : n_consecutiv_switchoff.at(qth) ){
         const Pth& pth = it_conseq_so.first;
@@ -1004,27 +1067,8 @@ Frame* Pipeline::Put(const cv::Mat gray,
     else{
       n_consecutiv_switchoff.clear();
     }
-    /* 
-    visualization에서 파악해야하는 상황.
-    qth 별, switch_states,
-    qth 별, neighbor frames, neighbor_mappoints
-    jth 별, synced_marker, density_scores
-    전체 - gt_Tcws
-    */
 
-    /*
-    if(qth == 0){
-      cv::Mat dst = VisualizeStates(curr_frame, density_scores, switch_states, switch_threshold, neighbor_frames,
-                                    synced_marker, gt_Tcws);
-      cv::imshow("segslam", dst);
-    } else {
-      // TODO 적절한 rig visualization.
-      //cv::Mat dst = VisualizeRigInfos(curr_frame, qth, neighbor_frames, neighbor_mappoints,
-      //                                instances, switch_threshold, switch_states, curr_shapes);
-      //cv::imshow("Rig #"+std::to_string(qth), dst);
-    }
-    */
-    if(++nq > 3) // N 번만 수행.
+   if(++nq > 3) // N 번만 수행.
       break;
   } // if(segmented_instances.empty())
 

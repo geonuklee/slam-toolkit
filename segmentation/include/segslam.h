@@ -172,6 +172,8 @@ public:
   bool HasEstimate4Rig(const Qth& qth) const { return ref_.count(qth); }
 
   void AddKeyframe(Qth qth, Frame* frame) { keyframes_[qth].insert(frame); }
+  void RemoveKeyframe(Qth qth, Frame* frame) { keyframes_[qth].erase(frame); }
+
   const std::map<Qth, std::set<Frame*> >& GetKeyframes() const { return keyframes_; }
   const std::set<Frame*>& GetKeyframes(Qth qth) const { return keyframes_.at(qth); }
 
@@ -258,6 +260,8 @@ public:
                  const EigenMap<int,g2o::SE3Quat>* gt_Tcws
                  ); // visualize.cpp
 private:
+  void FilterOutlierMatches(Qth qth, Frame* frame);
+
   void SupplyMappoints(const Qth& qth, Frame* frame);
   void AddNewKeyframesMappoints(Frame* frame,
                                 RigidGroup* rig_new);
