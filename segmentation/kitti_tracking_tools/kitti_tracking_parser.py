@@ -5,6 +5,9 @@ import cv2
 from .dataset.kitti_dataset import *
 from .viewer.color_map import generate_objects_color_map,generate_objects_colors,generate_scatter_colors
 from scipy.spatial.transform import Rotation as rotation_util
+import shutil
+import struct
+
 
 """
 import sys; sys.path.append("/home/geo/ws/slam-toolkit/segmentation")
@@ -279,6 +282,15 @@ class Parser:
         self.T0_for_id = {}
         self.set_dynamic_obj = set()
 
+        segment_path = osp.join(dataset.root_path,'mask_02')
+        if not osp.exists(segment_path):
+            os.mkdir(segment_path)
+        segment_path = osp.join(segment_path, dataset.seq_name)
+        if osp.exists(segment_path):
+            shutil.rmtree(segment_path)
+        os.mkdir(segment_path)
+        self.dataset.segment_path = segment_path
+
         if gui:
             self.all_trj_actor = vedo.Line(self.trj, lw=1,c=(.5,.5,.5))
             # Set the camera position to achieve the bird's-eye view
@@ -294,7 +306,7 @@ class Parser:
         return
 
     def do(self):
-        if self.i == self.trj.shape[0]-1:
+        if self.i == self.trj.shape[0]:
             return False
 
         if self.plt is not None:
@@ -309,8 +321,8 @@ class Parser:
 
         dst_color = image.copy()
         vis_instance = np.zeros_like(dst_color)
+        instance_mask = np.zeros(image.shape[:2],np.int32)
         dynamic_mask = np.zeros(image.shape[:2],np.uint8)
-
 
         box_actors = {}
         if label_names is not None:
@@ -398,20 +410,31 @@ class Parser:
                 xy = np.stack((x,y),1)
                 hull = cv2.convexHull(np.array(xy))[:,0,:]
 
-                cv2.drawContours(dst_color, [hull], 0, this_c[::-1], 3)
+                # TODO visualization을 위한 색상이 아니라, 0, 1로 맵핑된 contour 저장.
+                cv2.drawContours(dst_color,    [hull], 0, this_c[::-1], 3)
                 cv2.drawContours(vis_instance, [hull], 0, this_c[::-1], -1)
-                cv2.drawContours(dynamic_mask, [hull], 0, 1 if is_dynamic else 0, -1)
-
-            #dst_color = cv2.addWeighted(dst_color,1., , 1.,0.)
-            dst_color[dynamic_mask>0,2] = 255
-            dst = cv2.vconcat( [dst_color,
-                                vis_instance,
-                                255*np.stack((dynamic_mask,dynamic_mask,dynamic_mask),axis=2)
-                                ] )
-            cv2.line(dst, (0,2*dst_color.shape[0]), (dst_color.shape[1],2*dst_color.shape[0]), (255,255,255), 2)
-            cv2.imshow("dst", cv2.pyrDown(dst))
-            #cv2.imshow("dynamic_mask", 255*dynamic_mask)
-
+                cv2.drawContours(dynamic_mask,  [hull], 0, 1 if is_dynamic else 0, -1)
+                cv2.drawContours(instance_mask, [hull], 0, int(id+1), -1) # given instance id start from '0'
+            
+        #dst_color = cv2.addWeighted(dst_color,1., , 1.,0.)
+        dst_color[dynamic_mask>0,2] = 255
+        dst = cv2.vconcat( [dst_color,
+                            vis_instance,
+                            255*np.stack((dynamic_mask,dynamic_mask,dynamic_mask),axis=2)
+                            ] )
+        cv2.line(dst, (0,2*dst_color.shape[0]), (dst_color.shape[1],2*dst_color.shape[0]), (255,255,255), 2)
+        cv2.imshow("dst", cv2.pyrDown(dst))
+        cv2.imwrite(osp.join(self.dataset.segment_path,'dynamic%06d.png'%self.i), dynamic_mask)
+        #cv2.imwrite(osp.join(self.dataset.segment_path,'ins%06d.png'%self.i), instance_mask)
+        with open(osp.join(self.dataset.segment_path,'ins%06d.raw'%self.i), 'wb') as file:
+            rows, cols = instance_mask.shape
+            byte_buffer = instance_mask.astype(np.int32).tobytes()
+            file.write(struct.pack("<i",rows))
+            file.write(struct.pack("<i",cols))
+            file.write(struct.pack("<i",1))
+            file.write(struct.pack("<i",rows*cols*4)) # 32SC1
+            file.write(byte_buffer)
+            file.flush()
 
         if self.plt is not None:
             if hasattr(self, 'txt_curr'):

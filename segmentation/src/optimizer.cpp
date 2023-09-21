@@ -73,7 +73,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
   std::map<Jth, Frame*> frames = neighbor_keyframes;
   frames[curr_frame->GetId()] = curr_frame;
   /*
-  argmin sig(s(p,q)^) [ Xc(j) - Tcq(j)^ Xq(i∈p)^ ]
+  argmin sig(s(p,q)^) [ Xc(j) - Tcq(j)^ Xq(i∈ p )^ ]
   Xq(i∈p)^ : q th group coordinate에서 본 'i'th mappoint의 좌표.
   -> 일시적으로, 하나의 'i'th mappoint가 여러개의 3D position을 가질 수 있다.
   -> Instance 의 모양이 group마다 바뀐다는 모순이 생길순 있지만, 이런 경우가 적으므로,

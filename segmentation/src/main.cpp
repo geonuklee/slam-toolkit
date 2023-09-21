@@ -40,54 +40,6 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include <pybind11/embed.h>
 #include "hitnet.h"
 
-/*
-// https://stackoverflow.com/questions/17735863/opencv-save-cv-32fc1-images
-bool writeRawImage(const cv::Mat& image, const std::string& filename) {
-  std::ofstream file;
-    file.open (filename, std::ios::out|std::ios::binary);
-    if (!file.is_open())
-        return false;
-    file.write(reinterpret_cast<const char *>(&image.rows), sizeof(int));
-    file.write(reinterpret_cast<const char *>(&image.cols), sizeof(int));
-    const int depth = image.depth();
-    const int type  = image.type();
-    const int channels = image.channels();
-    file.write(reinterpret_cast<const char *>(&depth), sizeof(depth));
-    file.write(reinterpret_cast<const char *>(&type), sizeof(type));
-    file.write(reinterpret_cast<const char *>(&channels), sizeof(channels));
-    int sizeInBytes = image.step[0] * image.rows;
-    file.write(reinterpret_cast<const char *>(&sizeInBytes), sizeof(int));
-    file.write(reinterpret_cast<const char *>(image.data), sizeInBytes);
-    file.close();
-    return true;
-}
-
-cv::Mat readRawImage(const std::string& filename) {
-  cv::Mat image;
-  int rows, cols, data, depth, type, channels;
-  std::ifstream file (filename, std::ios::in|std::ios::binary);
-  if (!file.is_open())
-    return image;
-  try {
-    file.read(reinterpret_cast<char *>(&rows), sizeof(rows));
-    file.read(reinterpret_cast<char *>(&cols), sizeof(cols));
-    file.read(reinterpret_cast<char *>(&depth), sizeof(depth));
-    file.read(reinterpret_cast<char *>(&type), sizeof(type));
-    file.read(reinterpret_cast<char *>(&channels), sizeof(channels));
-    file.read(reinterpret_cast<char *>(&data), sizeof(data));
-    image = cv::Mat(rows, cols, type);
-    file.read(reinterpret_cast<char *>(image.data), data);
-  } catch (...) {
-    file.close();
-    return image;
-  }
-
-  file.close();
-  return image;
-}
-*/
-
-
 void WriteKittiTrajectory(const g2o::SE3Quat& Tcw,
                           std::ofstream& output_file) {
   output_file << std::scientific;
@@ -304,22 +256,57 @@ int main(int argc, char** argv){
 }
 #endif
 
-void TestKittiTrackingDataset(){
+#include <pybind11/embed.h>
+void ComputeCacheOfKittiTrackingDataset(){
+  pybind11::scoped_interpreter python; // 이 인스턴스가 파괴되면 인터프리터 종료.
   const std::string dataset_path = GetPackageDir()+ "/kitti_tracking_dataset/";
   const std::string dataset_type = "training";
-  const std::string seq = "0000";
-  KittiTrackingDataset dataset(dataset_type, seq, dataset_path);
   /* TODO
   * [ ] trajectory 를 mat plot lib으로 그리기.
   * [ ] segmented instance를 python 호출해서 불러오기.
   */
-  if(! dataset.EixstCachedDepthImages() )
-    dataset.ComputeCacheImages();
-
+  char buffer[24];
+  for(size_t i =0; i < 21; i++){
+    std::sprintf(buffer, "%04ld", i);
+    const std::string seq(buffer);
+    std::cout << "Do seq " << seq << std::endl;
+    KittiTrackingDataset dataset(dataset_type, seq, dataset_path);
+    //if(! dataset.EixstCachedDepthImages() )
+      dataset.ComputeCacheImages();
+  }
   return;
 }
 
+void TestKittiTrackingDataset(){
+  const std::string dataset_path = GetPackageDir()+ "/kitti_tracking_dataset/";
+  const std::string dataset_type = "training";
+  /* TODO
+  * [ ] trajectory 를 mat plot lib으로 그리기.
+  * [ ] segmented instance를 python 호출해서 불러오기.
+  */
+  const std::string seq = "0003";
+  KittiTrackingDataset dataset(dataset_type, seq, dataset_path);
+  for(int i =0; i < dataset.Size(); i++){
+    cv::Mat rgb = dataset.GetImage(i);
+    cv::Mat depth = dataset.GetDepthImage(i);
+    cv::Mat instance_mask = dataset.GetInstanceMask(i);
+    cv::Mat d_mask = dataset.GetDynamicMask(i);
+
+    cv::imshow("dmask", 255*d_mask);
+    cv::imshow("Ins mask", GetColoredLabel(instance_mask) );
+    cv::imshow("rgb", rgb);
+    cv::imshow("depth", .01*depth);
+    char c = cv::waitKey(1);
+    if(c=='q')
+      break;
+  }
+  cv::waitKey();
+  return;
+}
+
+
 int main(int argc, char** argv){
+  //ComputeCacheOfKittiTrackingDataset();
   TestKittiTrackingDataset();
   return 1;
 }
