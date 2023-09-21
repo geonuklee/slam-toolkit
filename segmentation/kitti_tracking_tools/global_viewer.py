@@ -1,5 +1,4 @@
 import numpy as np
-#from vedo import *
 import vedo
 from os import path as osp
 import cv2
@@ -8,9 +7,6 @@ from dataset.kitti_dataset import *
 from viewer.color_map import generate_objects_color_map,generate_objects_colors,generate_scatter_colors
 from viewer.box_op import convert_box_type,get_line_boxes,get_mesh_boxes,velo_to_cam,get_box_points
 from scipy.spatial.transform import Rotation as rotation_util
-
-viewer_path = os.path.dirname(__file__)
-#vedo.settings.allowInteraction = False # avoid automatic timer creation
 
 class GlobalViewer:
     """
@@ -21,7 +17,6 @@ class GlobalViewer:
         self.objects_color_map = generate_objects_color_map('rainbow')
         self.box_type = box_type
         self.plt = vedo.Plotter(bg=bg)
-
         self.dataset = dataset
         poses = dataset.poses
         trj = []
@@ -94,10 +89,9 @@ class GlobalViewer:
         else:
             curr_trj_actor = None
 
-        # TODO
         # * [x] text_actor 를 박스위에 추가.
         # * [x] car 이외의 obj도 표시.
-        # * [ ] dynamic 판정된 instance를 cv image에 표시.
+        # * [x] dynamic 판정된 instance를 cv image에 표시.
         # * [ ] evaluation
         box_actors = {}
         if label_names is not None:
@@ -111,12 +105,10 @@ class GlobalViewer:
             ids = labels[:,-1].astype(np.int32)
             boxes = convert_box_type(labels)
 
-            # TODO Sorting boxes for z_cam 
             T_w_c2 = np.eye(4)
             T_w_c2[:3,:3] = rotation_util.from_quat( pose[3:] ).as_matrix()
             T_w_c2[:3,-1] = pose[:3]
             T_w_v = np.matmul(T_w_c2, self.dataset.T_c2_v)
-
 
             #sorted_indices = np.argsort(boxes[:, 0])[::-1] # x-axis forward on velodyne coordinate
             l = np.linalg.norm(boxes[:,:3],axis=1)
@@ -212,7 +204,7 @@ class GlobalViewer:
                       camera={'pos': (x, y-100, z-80), 'focalPoint': (x,y,z), 'viewup': (0, 0, 1)}
                       )
         #import pdb; pdb.set_trace()
-        c = cv2.waitKey(100)
+        c = cv2.waitKey(1)
         if c == ord('q'):
             self.plt.close()
         elif c == ord('s'):
@@ -220,13 +212,10 @@ class GlobalViewer:
         self.i += 1
         return
 
-
-
-
 def example():
     root="kitti_tracking_dataset/training"
-    #seq = "0000" # static
-    seq = "0001" # static
+    seq = "0000" # static
+    #seq = "0001" # static
     #seq = "0003" # dynamic
     #seq = "0004"
     label_path =osp.join(root, "label_02", seq+".txt")

@@ -24,7 +24,8 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include "../include/seg.h"
 #include "../include/util.h"
 
-#include "dataset.h"
+//#include "dataset.h"
+#include "seg_dataset.h"
 #include "orb_extractor.h"
 #include "frame.h"
 #include "camera.h"
@@ -39,6 +40,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include <pybind11/embed.h>
 #include "hitnet.h"
 
+/*
 // https://stackoverflow.com/questions/17735863/opencv-save-cv-32fc1-images
 bool writeRawImage(const cv::Mat& image, const std::string& filename) {
   std::ofstream file;
@@ -83,6 +85,8 @@ cv::Mat readRawImage(const std::string& filename) {
   file.close();
   return image;
 }
+*/
+
 
 void WriteKittiTrajectory(const g2o::SE3Quat& Tcw,
                           std::ofstream& output_file) {
@@ -102,8 +106,8 @@ void WriteKittiTrajectory(const g2o::SE3Quat& Tcw,
   return;
 }
 
+#if 0
 #define USE_DEPTHFILE
-
 int TestKitti(int argc, char** argv) {
   //Seq :"02",("13" "20");
   std::string seq(argv[2]);
@@ -124,10 +128,10 @@ int TestKitti(int argc, char** argv) {
   const float min_disp = 1.;
   const float snyc_min_iou = .3;
 
+  pybind11::scoped_interpreter python; // 이 인스턴스가 파괴되면 인터프리터 종료.
 #ifdef USE_DEPTHFILE
   std::string images_dir = "../output_images/";
 #else
-  pybind11::scoped_interpreter python; // 이 인스턴스가 파괴되면 인터프리터 종료.
   HITNetStereoMatching hitnet;
 #endif
 
@@ -139,7 +143,7 @@ int TestKitti(int argc, char** argv) {
   //seg::Pipeline pipeline(camera, &extractor);                                               // Before  150 [milli sec]
 
   std::shared_ptr<OutlineEdgeDetector> edge_detector( new OutlineEdgeDetectorWithSIMD );  // After   2.5 [milli sec]
-  std::shared_ptr<Segmentor> segmentor( new SegmentorNew );                               // After  5~10 [milli sec]     
+  std::shared_ptr<Segmentor> segmentor( new SegmentorNew );                               // After  5~10 [milli sec] , with octave 2
   std::shared_ptr<ImageTrackerNew> img_tracker( new ImageTrackerNew);                     // Afte  10~11 [milli sec]
   seg::Pipeline pipeline(camera, &extractor);                                             // After   ~50 [milli sec]
 
@@ -298,3 +302,25 @@ int main(int argc, char** argv){
 
   return 1;
 }
+#endif
+
+void TestKittiTrackingDataset(){
+  const std::string dataset_path = GetPackageDir()+ "/kitti_tracking_dataset/";
+  const std::string dataset_type = "training";
+  const std::string seq = "0000";
+  KittiTrackingDataset dataset(dataset_type, seq, dataset_path);
+  /* TODO
+  * [ ] trajectory 를 mat plot lib으로 그리기.
+  * [ ] segmented instance를 python 호출해서 불러오기.
+  */
+  if(! dataset.EixstCachedDepthImages() )
+    dataset.ComputeCacheImages();
+
+  return;
+}
+
+int main(int argc, char** argv){
+  TestKittiTrackingDataset();
+  return 1;
+}
+
