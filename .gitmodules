@@ -16,3 +16,6 @@
 [submodule "thirdparty/evo"]
 	path = thirdparty/evo
 	url = https://github.com/MichaelGrupp/evo
+[submodule "segmentation/Pangolin-0.8"]
+	path = segmentation/Pangolin-0.8
+	url = https://github.com/stevenlovegrove/Pangolin

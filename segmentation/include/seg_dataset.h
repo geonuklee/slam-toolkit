@@ -3,6 +3,8 @@
 #include "stdafx.h"
 #include "camera.h"
 
+void WriteKittiTrajectory(const g2o::SE3Quat& Tcw, std::ofstream& output_file);
+
 class KittiTrackingDataset {
 public:
   KittiTrackingDataset(std::string type, //  "training"|"testing"

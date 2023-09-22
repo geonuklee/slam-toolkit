@@ -46,6 +46,13 @@ include_directories(${Boost_INCLUDE_DIRS})
 find_package(FLANN REQUIRED)
 include_directories(${FLANN_INCLUDE_DIR})
 
+find_package(Pangolin REQUIRED EXACT 0.8
+  PATHS ${CMAKE_SOURCE_DIR}/Pangolin-0.8/build
+  NO_DEFAULT_PATH
+)
+include_directories(${Pangolin_LIBRARIES})
+
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -95,6 +102,7 @@ target_link_libraries(example_segmentation
 ${OpenCV_LIBS}
 ${Boost_LIBRARIES}
 ${FLANN_LIBRARY}
+${Pangolin_LIBRARIES}
 ${PROJECT_SOURCE_DIR}/../thirdparty/DBoW2/lib/libDBoW2.so
 optimized g2o_core
 optimized g2o_stuff

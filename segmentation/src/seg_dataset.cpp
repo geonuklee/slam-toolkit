@@ -3,6 +3,26 @@
 #include "hitnet.h"
 #include <filesystem>
 
+void WriteKittiTrajectory(const g2o::SE3Quat& Tcw,
+                          std::ofstream& output_file) {
+  output_file << std::scientific;
+  g2o::SE3Quat Twc = Tcw.inverse();
+  Eigen::Matrix<double,3,4> Rt = Twc.to_homogeneous_matrix().block<3,4>(0,0).cast<double>();
+  for(size_t i = 0; i < 3; i++){
+    for(size_t j = 0; j < 4; j++){
+      output_file << Rt(i,j);
+      if(i==2 && j==3)
+        continue;
+      output_file << " ";
+    }
+  }
+  output_file << std::endl;
+  output_file.flush();
+  return;
+}
+
+
+
 // https://stackoverflow.com/questions/17735863/opencv-save-cv-32fc1-images
 bool writeRawImage(const cv::Mat& image, const std::string& filename) {
     std::ofstream file(filename, std::ios::out | std::ios::binary);
@@ -69,6 +89,7 @@ input: oxts txt path
   std::string str;
   int n = 0;
   EigenVector<g2o::SE3Quat> vec_TWi;
+  double scale = -1.;
   while( std::getline(fs, str) ){
    double lat, lon, alt, \
            roll, pitch, yaw, \
@@ -86,9 +107,10 @@ input: oxts txt path
            &pos_accuracy, &vel_accuracy,
            &navstat, &numsats, &posmode, &velmode, &orimode
            );
-    double scale = std::cos(lat * M_PI / 180.);
+    if(scale < 0.)
+      scale = std::cos(lat * M_PI / 180.);
     double tx = scale * lon * M_PI * er / 180.;
-    double ty = scale * er * std::log(std::tan((90.+lat) * M_PI / 360.));
+    double ty = scale * er * std::log( std::tan( (90.+lat)*M_PI/ 360. ) );
     double tz = alt;
     Eigen::Vector3d t(tx,ty,tz);
     Eigen::Matrix3d R_roll, R_pitch, R_yaw;
@@ -101,7 +123,7 @@ input: oxts txt path
     R_yaw << cos(yaw), -sin(yaw), 0,
           sin(yaw), cos(yaw), 0,
           0, 0, 1;
-    Eigen::Matrix3d R = R_yaw * R_pitch * R_roll;
+    Eigen::Matrix3d R = R_roll * R_yaw * R_pitch;
     g2o::SE3Quat TWi(R,t);
     vec_TWi.push_back(TWi);
   }

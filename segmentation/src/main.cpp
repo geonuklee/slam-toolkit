@@ -36,30 +36,11 @@ OTHER DEALINGS IN THE SOFTWARE.
 
 #include <iomanip>
 #include <memory>
+#include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <pybind11/embed.h>
-#include "hitnet.h"
-
-void WriteKittiTrajectory(const g2o::SE3Quat& Tcw,
-                          std::ofstream& output_file) {
-  output_file << std::scientific;
-  g2o::SE3Quat Twc = Tcw.inverse();
-  Eigen::Matrix<double,3,4> Rt = Twc.to_homogeneous_matrix().block<3,4>(0,0).cast<double>();
-  for(size_t i = 0; i < 3; i++){
-    for(size_t j = 0; j < 4; j++){
-      output_file << Rt(i,j);
-      if(i==2 && j==3)
-        continue;
-      output_file << " ";
-    }
-  }
-  output_file << std::endl;
-  output_file.flush();
-  return;
-}
 
 #if 0
-#define USE_DEPTHFILE
 int TestKitti(int argc, char** argv) {
   //Seq :"02",("13" "20");
   std::string seq(argv[2]);
@@ -81,12 +62,6 @@ int TestKitti(int argc, char** argv) {
   const float snyc_min_iou = .3;
 
   pybind11::scoped_interpreter python; // 이 인스턴스가 파괴되면 인터프리터 종료.
-#ifdef USE_DEPTHFILE
-  std::string images_dir = "../output_images/";
-#else
-  HITNetStereoMatching hitnet;
-#endif
-
   seg::CvFeatureDescriptor extractor;
   /* Comparison after computation time optimization */
   //std::shared_ptr<OutlineEdgeDetector> edge_detector( new OutlineEdgeDetectorWithoutSIMD ); // Before   76 [milli sec]
@@ -256,15 +231,10 @@ int main(int argc, char** argv){
 }
 #endif
 
-#include <pybind11/embed.h>
 void ComputeCacheOfKittiTrackingDataset(){
   pybind11::scoped_interpreter python; // 이 인스턴스가 파괴되면 인터프리터 종료.
   const std::string dataset_path = GetPackageDir()+ "/kitti_tracking_dataset/";
   const std::string dataset_type = "training";
-  /* TODO
-  * [ ] trajectory 를 mat plot lib으로 그리기.
-  * [ ] segmented instance를 python 호출해서 불러오기.
-  */
   char buffer[24];
   for(size_t i =0; i < 21; i++){
     std::sprintf(buffer, "%04ld", i);
@@ -280,10 +250,6 @@ void ComputeCacheOfKittiTrackingDataset(){
 void TestKittiTrackingDataset(){
   const std::string dataset_path = GetPackageDir()+ "/kitti_tracking_dataset/";
   const std::string dataset_type = "training";
-  /* TODO
-  * [ ] trajectory 를 mat plot lib으로 그리기.
-  * [ ] segmented instance를 python 호출해서 불러오기.
-  */
   const std::string seq = "0003";
   KittiTrackingDataset dataset(dataset_type, seq, dataset_path);
   for(int i =0; i < dataset.Size(); i++){
@@ -291,7 +257,6 @@ void TestKittiTrackingDataset(){
     cv::Mat depth = dataset.GetDepthImage(i);
     cv::Mat instance_mask = dataset.GetInstanceMask(i);
     cv::Mat d_mask = dataset.GetDynamicMask(i);
-
     cv::imshow("dmask", 255*d_mask);
     cv::imshow("Ins mask", GetColoredLabel(instance_mask) );
     cv::imshow("rgb", rgb);
@@ -304,10 +269,47 @@ void TestKittiTrackingDataset(){
   return;
 }
 
+#include "seg_viewer.h"
+void TestPangolin(int argc, char** argv) {
+  const std::string dataset_path = GetPackageDir()+ "/kitti_tracking_dataset/";
+  const std::string dataset_type = "training";
+  const std::string seq(argv[1]);
+  KittiTrackingDataset dataset(dataset_type, seq, dataset_path);
+  const EigenMap<int, g2o::SE3Quat>& gt_Tcws = dataset.GetTcws();
+  const std::string config_fn = GetPackageDir()+"/config/kitti_tracking.yaml";
+
+  SegViewer viewer(gt_Tcws, config_fn);
+  bool stop = false;
+  for(int i =0; i < dataset.Size(); i++){
+    viewer.SetFrame(i);
+    auto Twc = gt_Tcws.at(i).inverse();
+    cv::Mat rgb = dataset.GetImage(i);
+    cv::Mat depth = dataset.GetDepthImage(i);
+    cv::Mat instance_mask = dataset.GetInstanceMask(i);
+    cv::Mat d_mask = dataset.GetDynamicMask(i);
+    if(instance_mask.empty())
+      instance_mask = cv::Mat::zeros(rgb.size(), CV_32SC1);
+    if(d_mask.empty())
+      d_mask = cv::Mat::zeros(rgb.size(), CV_8UC1);
+    cv::imshow("dmask", 255*d_mask);
+    cv::imshow("Ins mask", GetColoredLabel(instance_mask) );
+    cv::imshow("rgb", rgb);
+    cv::imshow("depth", .01*depth);
+    char c = cv::waitKey(stop?0:1);
+    if(c=='q')
+      break;
+    else if(c=='s')
+      stop = !stop;
+  }
+  viewer.Join(); // close request 도 추가는 해야겠다.
+
+  return;
+}
 
 int main(int argc, char** argv){
   //ComputeCacheOfKittiTrackingDataset();
-  TestKittiTrackingDataset();
+  //TestKittiTrackingDataset();
+  TestPangolin(argc, argv);
   return 1;
 }
 
