@@ -10,17 +10,21 @@ class SegViewer{
 public:
   SegViewer(const EigenMap<int, g2o::SE3Quat>& gt_Tcws, std::string config_fn);
   void Run();
-  void Join();
-  void SetFrame(int k); // 이거 외에도 그려야할 모든 정보를 여기서 넘겨야겠다.
+  void Join(bool req_exit);
+  void SetCurrCamera(int k, const g2o::SE3Quat& Tcw);
 private:
   void DrawPose(const g2o::SE3Quat& Twc);
+
   const EigenMap<int, g2o::SE3Quat> gt_Tcws_;
+  EigenMap<int, g2o::SE3Quat> est_Tcws_;
+
 
   cv::Size size_;
   float vp_f_, z_near_, z_far_, ex_, ey_, ez_, lx_, ly_, lz_, fps_;
   const std::string name_;
   std::mutex mutex_viewer_;
   int curr_k_;
+  bool req_exit_;
   std::thread  thread_;
 };
 

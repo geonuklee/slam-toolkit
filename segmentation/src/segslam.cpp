@@ -737,6 +737,10 @@ void Pipeline::FilterOutlierMatches(Qth qth,
       all_errors.push_back(0.);
       continue;
     }
+    if(!mp->GetRefFrames().count(qth)){
+      all_errors.push_back(0.);
+      continue;
+    }
     Instance* ins = instances.at(n);
     const Eigen::Vector3d Xr = mp->GetXr(qth);
     Frame* ref = mp->GetRefFrame(qth);
@@ -759,12 +763,16 @@ void Pipeline::FilterOutlierMatches(Qth qth,
     err_thresholds[it.first] = 4. * (*it_median);
   }
 
-  if(curr_frame->IsKeyframe()) //
-    throw "FilterOutlierMatches expect frame before being keyframe.";
+  if(curr_frame->IsKeyframe()) {
+    //throw "FilterOutlierMatches expect frame before being keyframe.";
+    // keyframe이 된 curr_frame의 mpt 삭제..
+  }
 
   for(int n = 0; n < mappoints.size(); n++){
     Mappoint* mp = mappoints.at(n);
     if(!mp)
+      continue;
+    if(!mp->GetRefFrames().count(qth))
       continue;
     Instance* ins = instances.at(n);
     const double& err = all_errors.at(n);
@@ -975,7 +983,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
                             curr_frame, prev_frame_, fixed_instances, gradx, grady, valid_grad, vis_verbose);
 
     // LocalBA로 structure, motion 모두 추정한 다음에, rpjr error가 동일 instance내 다른 feature에 비해 유난히 큰 matching을 제거.
-    FilterOutlierMatches(qth, curr_frame);
+    FilterOutlierMatches(qth, curr_frame); // TODO 버그수정.
 
     std::set<Pth> instances4next_rig;
     std::set<Pth> switchoff_instances;

@@ -721,7 +721,7 @@ void Pipeline::Visualize(const cv::Mat vis_rgb,
 
   cv::imshow("dst_frame", dst_frame);
   cv::imshow("dst_text", dst_texts);
-  cv::imshow("sync_marker", GetColoredLabel(vinfo_synced_marker_));
+  //cv::imshow("sync_marker", GetColoredLabel(vinfo_synced_marker_));
   return;
 }
 

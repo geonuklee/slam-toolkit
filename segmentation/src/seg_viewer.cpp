@@ -6,7 +6,8 @@
 
 SegViewer::SegViewer(const EigenMap<int, g2o::SE3Quat>& gt_Tcws, std::string config_fn)
   : name_ ("SegViewer"),
-  gt_Tcws_(gt_Tcws)
+  gt_Tcws_(gt_Tcws),
+  req_exit_(false)
 {
   curr_k_ = 0;
   cv::FileStorage fsettings(config_fn, cv::FileStorage::READ);
@@ -25,14 +26,19 @@ SegViewer::SegViewer(const EigenMap<int, g2o::SE3Quat>& gt_Tcws, std::string con
   thread_ = std::thread([&]() { Run(); });
 }
 
-void SegViewer::SetFrame(int k) {
+void SegViewer::SetCurrCamera(int k, const g2o::SE3Quat& Tcw) {
   std::unique_lock<std::mutex> lock(mutex_viewer_);
   curr_k_ = k;
+  est_Tcws_[k] = Tcw;
 }
 
 pangolin::OpenGlMatrix Convert(const g2o::SE3Quat& _T);
 
-void SegViewer::Join() {
+void SegViewer::Join(bool req_exit) {
+  if(req_exit){
+      std::unique_lock<std::mutex> lock(mutex_viewer_);
+      req_exit_ = req_exit;
+  }
   thread_.join();
   return;
 }
@@ -46,10 +52,7 @@ void SegViewer::Run(){
   pangolin::CreatePanel("menu").SetBounds(0.0,1.0,0.0,pangolin::Attach::Pix(175));
   pangolin::Var<bool> menuFollowCamera("menu.Follow Camera",true,true);
   pangolin::Var<bool> menuShowPoints("menu.Show Points",true,true);
-  pangolin::Var<bool> menuShowKeyFrames("menu.Show KeyFrames",true,true);
-  pangolin::Var<bool> menuShowGraph("menu.Show Graph",true,true);
-  pangolin::Var<bool> menuLocalizationMode("menu.Localization Mode",false,true);
-  pangolin::Var<bool> menuReset("menu.Reset",false,false);
+
   bool bFollow = true;
   bool bLocalizationMode = false;
   auto projection_matrix = pangolin::ProjectionMatrix(size_.width, size_.height,
@@ -74,16 +77,22 @@ void SegViewer::Run(){
 
   while( !pangolin::ShouldQuit() ) {
     // Sync member variables
-    int curr_k; {
+    int curr_k;
+    bool req_exit;
+    EigenMap<int,g2o::SE3Quat> est_Tcws; {
       std::unique_lock<std::mutex> lock(mutex_viewer_);
       curr_k = curr_k_;
+      req_exit = req_exit_;
+      est_Tcws = est_Tcws_;
     }
+    if(req_exit)
+      break;
 
     // After snyc 
     g2o::SE3Quat Twc;
-    // TODO gt 대신, given camera pose를 따라가도록 변경.
-    if(!gt_Tcws_.empty())
-      Twc = gt_Tcws_.at(curr_k).inverse();
+    if(!est_Tcws.empty()){
+      Twc = est_Tcws.at(curr_k).inverse();
+    }
     auto t = Twc.translation();
     gl_Twc = Convert(Twc);
 
@@ -101,7 +110,6 @@ void SegViewer::Run(){
     }
     d_cam.Activate(s_cam);
     glClearColor(0.0f,0.0f,0.0f,1.0f);
-    DrawPose(Twc);
 
     if(!gt_Tcws_.empty()){ // Draw ground truth trajectories
       glLineWidth(4);
@@ -121,7 +129,24 @@ void SegViewer::Run(){
       }
       glEnd();
     }
+    if(!est_Tcws.empty()){ // Draw ground truth trajectories
+      glLineWidth(4);
+      glColor3f(0.,1.,0.);
+      glBegin(GL_LINES);
+      for(size_t i=0; i+1 < est_Tcws.size(); i++){
+        const g2o::SE3Quat Twc0 = est_Tcws.at(i).inverse();
+        const g2o::SE3Quat Twc1 = est_Tcws.at(i+1).inverse();
+        const auto& t0 = Twc0.translation();
+        const auto& t1 = Twc1.translation();
+        glVertex3f(t0.x(), t0.y(), t0.z());
+        glVertex3f(t1.x(), t1.y(), t1.z());
+      }
+      glEnd();
+    }
+    DrawPose(Twc);
+
     pangolin::FinishFrame();
+    usleep(1e+6/fps_); // micro sec 
   }
   pangolin::DestroyWindow(name_);
   return;
