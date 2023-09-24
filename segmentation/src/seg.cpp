@@ -19,6 +19,7 @@ void SegmentorNew::Put(cv::Mat outline_edges, cv::Mat valid_mask) {
 ImageTrackerNew::ImageTrackerNew() {
   n_instance_ = 0;
   dof_ = cv::optflow::createOptFlow_DIS(cv::optflow::DISOpticalFlow::PRESET_ULTRAFAST);
+  //dof_ = cv::optflow::createOptFlow_DIS(cv::optflow::DISOpticalFlow::PRESET_FAST);
 }
 
 struct MarkerOverlapStats{

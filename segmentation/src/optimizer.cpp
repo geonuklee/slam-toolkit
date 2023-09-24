@@ -1,5 +1,6 @@
 #include "optimizer.h"
 #include "Eigen/src/Core/Matrix.h"
+#include "common.h"
 #include "g2o_types.h"
 #include "segslam.h"
 #include <g2o/core/block_solver.h>
@@ -10,10 +11,11 @@
 
 #include <g2o/core/robust_kernel_impl.h>
 #include <g2o/solvers/dense/linear_solver_dense.h>
+#include <opencv2/core/types.hpp>
 #include <opencv2/imgproc.hpp>
 
 
-namespace seg {
+namespace OLD_SEG {
 
 Mapper::Mapper() {
 }
@@ -403,5 +405,89 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
     switch_state[it.first] = it.second->estimate();
   return switch_state;
 }
+} // namespace OLD_SEG
 
-} // namespace seg
+namespace NEW_SEG {
+PoseTracker::PoseTracker() {
+}
+PoseTracker::~PoseTracker() {
+}
+g2o::SE3Quat PoseTracker::GetTcq(const Camera* camera,
+                                 Qth qth,
+                                 Frame* curr_frame,
+                                 bool vis_verbose
+                                ) {
+  Param param(camera);
+  g2o::SparseOptimizer optimizer;
+  // Dynamic block size due to 6dim SE3, 1dim prior vertex.
+  typedef g2o::BlockSolverPL<-1,-1> BlockSolver;
+  std::unique_ptr<BlockSolver::LinearSolverType> linear_solver = g2o::make_unique<g2o::LinearSolverEigen<BlockSolver::PoseMatrixType>>();
+#if 1
+  g2o::OptimizationAlgorithm* solver \
+    =  new g2o::OptimizationAlgorithmLevenberg(g2o::make_unique<BlockSolver>(std::move(linear_solver)));
+#else
+  g2o::OptimizationAlgorithm* solver \
+    = new g2o::OptimizationAlgorithmGaussNewton(g2o::make_unique<BlockSolver>(std::move(linear_solver)));
+#endif
+  optimizer.setAlgorithm(solver);
+  auto v_pose = new g2o::VertexSE3Expmap();
+  v_pose->setId(optimizer.vertices().size() );
+  optimizer.addVertex(v_pose);
+  const auto& Tcq = curr_frame->GetTcq(qth);
+  v_pose->setEstimate(Tcq);
+
+  const std::vector<Mappoint*>& mappoints = curr_frame->GetMappoints();
+  const std::vector<cv::KeyPoint>& keypoints = curr_frame->GetKeypoints();
+  const std::vector<float>& depths = curr_frame->GetMeasuredDepths();
+  const EigenVector<Eigen::Vector3d>& normalized_points = curr_frame->GetNormalizedPoints();
+
+  const double focal = camera->GetK()(0,0);
+  const double uv_info = 1.;
+  const double invd_info = .01;
+  const double delta = 10./focal;
+  const int n_iter = 10;
+
+  std::map<Mappoint*, g2o::OptimizableGraph::Vertex*> v_mappoints;
+  for(size_t n=0; n<mappoints.size(); n++){
+    Mappoint* mp = mappoints[n];
+    if(!mp) continue;
+    const cv::Point2f& pt = keypoints[n].pt;
+    auto v_mp = new g2o::VertexSBAPointXYZ();
+    v_mp->setId(optimizer.vertices().size() );
+    v_mp->setEstimate(mp->GetXq(qth));
+    v_mp->setMarginalized(true);
+    v_mp->setFixed(true);
+    optimizer.addVertex(v_mp);
+    v_mappoints[mp]  = v_mp;
+    const float& z = depths[n];
+    Eigen::Vector3d uvi = normalized_points[n];
+    g2o::OptimizableGraph::Edge* edge = nullptr;
+    if(z >  MIN_NUM){
+      auto ptr = new EdgeSE3PointXYZDepth(&param, uv_info, invd_info);
+      uvi[2] = 1. / z;
+      ptr->setVertex(0, v_mp);
+      ptr->setVertex(1, v_pose);
+      ptr->setMeasurement( uvi );
+      edge = ptr;
+    }
+    else{
+      auto ptr = new EdgeProjection(&param, uv_info);
+      ptr->setVertex(0, v_mp);
+      ptr->setVertex(1, v_pose);
+      ptr->setMeasurement( uvi.head<2>() );
+      edge = ptr;
+    }
+    g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
+    rk->setDelta(delta);
+    edge->setRobustKernel(rk);
+    optimizer.addEdge(edge);
+  }
+
+  optimizer.setVerbose(false);
+  optimizer.initializeOptimization();
+  optimizer.optimize(n_iter);
+  return v_pose->estimate();
+}
+
+} // namespace NEW_SEG
+

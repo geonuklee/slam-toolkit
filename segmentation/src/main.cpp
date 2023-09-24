@@ -120,7 +120,7 @@ void TestPangolin(int argc, char** argv) {
   return;
 }
 
-int TestKittiTrackingSLAM(int argc, char** argv) {
+int TestKittiTrackingOldSLAM(int argc, char** argv) {
   const std::string dataset_path = GetPackageDir()+ "/kitti_tracking_dataset/";
   const std::string dataset_type = "training";
   const std::string seq(argv[1]);
@@ -140,13 +140,11 @@ int TestKittiTrackingSLAM(int argc, char** argv) {
   const float fy = camera->GetK()(1,1);
   const float min_disp = 1.;
   const float snyc_min_iou = .3;
-
-  pybind11::scoped_interpreter python; // 이 인스턴스가 파괴되면 인터프리터 종료.
-  seg::CvFeatureDescriptor extractor;
+  SEG::CvFeatureDescriptor extractor;
   std::shared_ptr<OutlineEdgeDetector> edge_detector( new OutlineEdgeDetectorWithSIMD );  // After   2.5 [milli sec]
   std::shared_ptr<Segmentor> segmentor( new SegmentorNew );                               // After  5~10 [milli sec] , with octave 2
   std::shared_ptr<ImageTrackerNew> img_tracker( new ImageTrackerNew);                     // Afte  10~11 [milli sec]
-  seg::Pipeline pipeline(camera, &extractor);                                             // After   ~50 [milli sec]
+  OLD_SEG::Pipeline pipeline(camera, &extractor);                                             // After   ~50 [milli sec]
   std::string output_fn = std::string(PACKAGE_DIR)+"/output.txt";
   std::ofstream output_file(output_fn);
   if(! output_file.is_open() ){
@@ -154,7 +152,6 @@ int TestKittiTrackingSLAM(int argc, char** argv) {
     throw -1;
   }
 
-  bool visualize_segment = true;
   for(int i=0; i<dataset.Size(); i+=1){
     std::cout << "F# " << i << std::endl;
     const cv::Mat rgb   = dataset.GetImage(i, cv::IMREAD_COLOR);
@@ -190,7 +187,7 @@ int TestKittiTrackingSLAM(int argc, char** argv) {
     std::cout << "track image : " << std::setprecision(3) <<
       std::chrono::duration<float, std::milli>(t5-t4).count() << "[milli sec]" << std::endl;
     auto t6 = std::chrono::steady_clock::now();
-    seg::Frame* frame = nullptr;
+    OLD_SEG::Frame* frame = nullptr;
     {
       cv::Mat modified_depth = depth.clone();
       modified_depth.setTo(0, depth > 40.);
@@ -217,12 +214,78 @@ int TestKittiTrackingSLAM(int argc, char** argv) {
   return 1;
 }
 
+int TestKittiTrackingNewSLAM(int argc, char** argv) {
+  const std::string dataset_path = GetPackageDir()+ "/kitti_tracking_dataset/";
+  const std::string dataset_type = "training";
+  const std::string seq(argv[1]);
+  KittiTrackingDataset dataset(dataset_type, seq, dataset_path);
+  const EigenMap<int, g2o::SE3Quat>& gt_Tcws = dataset.GetTcws();
+  const std::string config_fn = GetPackageDir()+"/config/kitti_tracking.yaml";
+  SegViewer viewer(gt_Tcws, config_fn);
+  bool stop = true;
+
+  const auto& D = dataset.GetCamera()->GetD();
+  const StereoCamera* camera = dynamic_cast<const StereoCamera*>(dataset.GetCamera());
+  assert(camera);
+
+  const auto Trl_ = camera->GetTrl();
+  const float base_line = -Trl_.translation().x();
+  const float fx = camera->GetK()(0,0);
+  const float fy = camera->GetK()(1,1);
+  const float min_disp = 1.;
+  const float snyc_min_iou = .3;
+  SEG::CvFeatureDescriptor extractor;
+  std::shared_ptr<OutlineEdgeDetector> edge_detector( new OutlineEdgeDetectorWithSIMD );  // After   2.5 [milli sec]
+  std::shared_ptr<Segmentor> segmentor( new SegmentorNew );                               // After  5~10 [milli sec] , with octave 2
+  std::shared_ptr<ImageTrackerNew> img_tracker( new ImageTrackerNew);                     // Afte  10~11 [milli sec]
+  NEW_SEG::Pipeline pipeline(camera, &extractor);                                             // After   ~50 [milli sec]
+  std::string output_fn = std::string(PACKAGE_DIR)+"/output.txt";
+
+  for(int i=0; i<dataset.Size(); i+=1){
+    std::cout << "F# " << i << std::endl;
+    const cv::Mat rgb   = dataset.GetImage(i, cv::IMREAD_COLOR);
+    const cv::Mat rgb_r = dataset.GetRightImage(i, cv::IMREAD_COLOR);
+    cv::Mat gray, gray_r;
+    cv::cvtColor(rgb, gray, cv::COLOR_BGR2GRAY);
+    cv::cvtColor(rgb_r, gray_r, cv::COLOR_BGR2GRAY);
+    cv::Mat depth = dataset.GetDepthImage(i);
+    edge_detector->PutDepth(depth, fx, fy);
+    cv::Mat gradx = edge_detector->GetGradx();
+    cv::Mat grady = edge_detector->GetGrady();
+    cv::Mat outline_edges = edge_detector->GetOutline();
+    cv::Mat valid_mask = edge_detector->GetValidMask();
+    cv::Mat valid_grad = valid_mask;
+    segmentor->Put(outline_edges, valid_mask);
+    cv::Mat unsync_marker = segmentor->GetMarker();
+    img_tracker->Put(gray, unsync_marker, snyc_min_iou);
+    const std::vector<cv::Mat>& flow = img_tracker->GetFlow();
+    //if(!flow.empty()) cv::imshow("flow",VisualizeFlow(flow));
+    cv::Mat synced_marker = img_tracker->GetSyncedMarker();
+    const std::map<int,size_t>& marker_areas = img_tracker->GetMarkerAreas();
+    cv::Mat modified_depth = depth.clone();
+    modified_depth.setTo(0, depth > 40.);
+    NEW_SEG::Frame* frame = pipeline.Put(gray, modified_depth, flow, synced_marker, marker_areas,
+                                         gradx, grady, valid_grad, rgb);
+    pipeline.Visualize(rgb);
+    viewer.SetCurrCamera(i, frame->GetTcq(0));
+    //cv::imshow("marker", GetColoredLabel(synced_marker) );
+    char c = cv::waitKey(stop?0:1);
+    if(c == 'q')
+      break;
+    else if (c == 's')
+      stop = !stop;
+  }
+  bool req_exit = true;
+  viewer.Join(req_exit); // close request 도 추가는 해야겠다.
+  return 1;
+}
 
 int main(int argc, char** argv){
   //ComputeCacheOfKittiTrackingDataset();
   //TestKittiTrackingDataset();
   //TestPangolin(argc, argv);
-  TestKittiTrackingSLAM(argc, argv);
+  //TestKittiTrackingOldSLAM(argc, argv);
+  TestKittiTrackingNewSLAM(argc, argv);
   return 1;
 }
 

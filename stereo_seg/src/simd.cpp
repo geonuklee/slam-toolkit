@@ -683,7 +683,7 @@ ImageTrackerNew::ImageTrackerNew() {
   dof_ = cv::optflow::createOptFlow_DIS(cv::optflow::DISOpticalFlow::PRESET_ULTRAFAST);
 }
 
-struct MarkerStats{
+struct MarkerOverlapStats{
   size_t samples_;
   std::map<int,size_t> snyc_n_;
 
@@ -701,7 +701,7 @@ void ImageTrackerNew::Put(const cv::Mat _gray,
     dof_->calc(prev_gray_, _gray, flowxy);
     cv::split(flowxy, flow_);
     
-    std::map<int, MarkerStats > unsync2stats;
+    std::map<int, MarkerOverlapStats > unsync2stats;
     std::map<int, size_t> sync_smaples;
     float* flow_u = flow_[0].ptr<float>();
     float* flow_v = flow_[1].ptr<float>();
@@ -721,7 +721,7 @@ void ImageTrackerNew::Put(const cv::Mat _gray,
           continue;
         if(u > 0 && v > 0 && u < size.width && v < size.height){
           int index = v * size.width + u;
-          MarkerStats& stats = unsync2stats[unsync_l[index]];
+          MarkerOverlapStats& stats = unsync2stats[unsync_l[index]];
           stats.samples_++;
           stats.snyc_n_[l0]++;
           sync_smaples[l0]++;

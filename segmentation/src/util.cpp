@@ -18,13 +18,15 @@ std::vector<cv::Scalar> colors = {
   CV_RGB(0,100,100)
 };
 
-cv::Mat VisualizeFlow(cv::Mat flow, cv::Mat bgr) {
-  cv::Mat dst = bgr.empty()? cv::Mat::zeros(flow.rows,flow.cols,CV_8UC3) : bgr.clone();
+cv::Mat VisualizeFlow(const std::vector<cv::Mat>& flows, cv::Mat bgr) {
+  const cv::Mat flowx = flows[0];
+  const cv::Mat flowy = flows[1];
+  cv::Mat dst = bgr.empty()? cv::Mat::zeros(flowx.rows,flowx.cols,CV_8UC3) : bgr.clone();
   const int step = 20;
-  for(int r=step; r+step < flow.rows; r+=step){
-    for(int c=step; c+step < flow.cols; c+=step){
+  for(int r=step; r+step < flowx.rows; r+=step){
+    for(int c=step; c+step < flowx.cols; c+=step){
       cv::Point2f pt0(c,r);
-      const cv::Point2f F = flow.at<cv::Point2f>(r,c);
+      cv::Point2f F(flowx.at<float>(r,c), flowy.at<float>(r,c) );
       float d = cv::norm(F);
       if( d > step)
         d = step;

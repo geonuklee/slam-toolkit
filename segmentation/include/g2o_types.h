@@ -11,8 +11,6 @@ Error정의를 기존 [normalized uv, depth] 대신
 nuv, invd depth
 Structure param은 그대로 XYZ
 */
-namespace seg {
-
 class Param;
 extern const double MIN_NUM ;
 
@@ -125,8 +123,5 @@ public:
   virtual bool read(std::istream& is) { return false; }
   virtual bool write(std::ostream& os) const { return false; }
 };
-
-} // namespace seg
-
 
 #endif

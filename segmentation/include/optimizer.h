@@ -3,8 +3,7 @@
 #include "camera.h"
 #include "segslam.h"
 #include <g2o/core/sparse_optimizer.h>
-
-namespace seg {
+#include <g2o/types/slam3d/se3quat.h>
 
 struct Param {
 public:
@@ -16,6 +15,8 @@ public:
   float fx;
   float fy;
 };
+
+namespace OLD_SEG {
 
 class Mapper {
 public:
@@ -37,11 +38,23 @@ private:
   g2o::OptimizableGraph::Vertex* CreatePoseVertex(const Qth& qth,
                                                   g2o::SparseOptimizer& optimizer,
                                                   Frame* frame);
-
   g2o::OptimizableGraph::Vertex* CreateStructureVertex(Qth qth,
                                                        g2o::SparseOptimizer& optimizer,
                                                        Mappoint* mpt);
 };
+} // namespace OLD_SEG
 
-} // namespace seg
+namespace NEW_SEG {
+class PoseTracker {
+public:
+  PoseTracker();
+  ~PoseTracker();
+  g2o::SE3Quat GetTcq(const Camera* camera,
+                      Qth qth,
+                      Frame* curr_frame,
+                      bool vis_verbose
+                     );
+
+};
+} // namespace NEW_SEG
 #endif

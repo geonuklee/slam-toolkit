@@ -2,8 +2,6 @@
 #include <g2o/config.h>
 #define CHECK_NAN
 
-namespace seg {
-
 const double MIN_NUM = 1e-10;
 
 EdgeSE3PointXYZDepth::EdgeSE3PointXYZDepth(const Param* param,
@@ -261,5 +259,3 @@ void EdgeSwSE3PointXYZDepth::linearizeOplus() {
   _jacobianOplus[2] = h-obs;
   return;
 }
-
-} // namespace seg

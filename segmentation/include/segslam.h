@@ -13,30 +13,7 @@ namespace ORB_SLAM2{ class ORBextractor; }
 class Camera;
 class DepthCamera; // TODO 'depth' camera only?
 
-namespace seg {
-
-typedef int32_t Jth; // jth frame
-typedef int32_t Qth; // qth rig group
-typedef int32_t Pth; // pth instance
-typedef int32_t Ith; // ith mappoint
-
-/* Camera coordinate 을 나타내는 클래스
-기존 ORB Frame이 mappoints를 instance, group 정보 없이 한꺼번에 가지고 있는 반면,
-SegFrame에서는 이를 instance별로 묶고, instance들을 묶은 RigidGroup을 attribute로 가진다.
-'
-*/
-class Frame;
-struct RigidGroup;
-class Mappoint;
-class Instance {
-public:
-  Instance(Pth pth);
-  std::map<Qth,RigidGroup*> rig_groups_;
-  const Pth& GetId() const { return pth_; }
-private:
-  const Pth pth_;
-};
-
+namespace SEG {
 class FeatureDescriptor {
 public:
   virtual void Extract(const cv::Mat gray, cv::InputArray mask, std::vector<cv::KeyPoint>& keypoints, cv::Mat& descriptors) = 0;
@@ -76,19 +53,31 @@ private:
   std::vector<float> mvInvLevelSigma2;
 };
 
-// TODO vToDistributeKeys에 class_id로 keypoint id를 저장해놓고선, 이 함수의 결과물로
-// Mappoint를 화면 골고루에 뿌릴 준비를 한다.
-// min_distance : 특징점 사이의 최소거리.
-std::vector<cv::KeyPoint> DistributeQuadTree(const std::vector<cv::KeyPoint>& vToDistributeKeys,
-                                            const int &minX,
-                                            const int &maxX,
-                                            const int &minY,
-                                            const int &maxY,
-                                            const int &nFeaturesPerLevel,
-                                            const int &min_distance = 10,
-                                            const cv::Mat& mask = cv::Mat()
-                                           );
+} // namespace SEG
 
+typedef int32_t Jth; // jth frame
+typedef int32_t Qth; // qth rig group
+typedef int32_t Pth; // pth instance
+typedef int32_t Ith; // ith mappoint
+
+namespace OLD_SEG {
+
+/* Camera coordinate 을 나타내는 클래스
+기존 ORB Frame이 mappoints를 instance, group 정보 없이 한꺼번에 가지고 있는 반면,
+SegFrame에서는 이를 instance별로 묶고, instance들을 묶은 RigidGroup을 attribute로 가진다.
+'
+*/
+class Frame;
+struct RigidGroup;
+class Mappoint;
+class Instance {
+public:
+  Instance(Pth pth);
+  std::map<Qth,RigidGroup*> rig_groups_;
+  const Pth& GetId() const { return pth_; }
+private:
+  const Pth pth_;
+};
 
 class Frame {
 public:
@@ -99,7 +88,7 @@ public:
   int GetIndex(const Mappoint* mp) const;
   void ExtractAndNormalizeKeypoints(const cv::Mat gray,
                                     const Camera* camera,
-                                    FeatureDescriptor* extractor,
+                                    SEG::FeatureDescriptor* extractor,
                                     const cv::Mat& mask);
   void SetInstances(const cv::Mat synced_marker, const std::map<Pth, Instance*>& instances);
   void SetMeasuredDepths(const cv::Mat depth);
@@ -152,12 +141,6 @@ private:
   bool is_kf_;
 };
 
-
-/*
-class Instance
-ShapePtr과 연결된 seg SLAM class.
-Instance 사이의 ... 사이의...  필요없다.
-*/
 
 class Mappoint {
 public:
@@ -242,7 +225,7 @@ class Pipeline {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   Pipeline(const Camera* camera,
-           FeatureDescriptor*const extractor
+           SEG::FeatureDescriptor*const extractor
           );
   ~Pipeline();
   Frame* Put(const cv::Mat gray,
@@ -269,27 +252,6 @@ private:
   void UpdateRigGroups(const Qth& dominant_qth,
                        Frame* frame) const;
 
-  /*
-  cv::Mat VisualizeStates(Frame* frame,
-                          const std::map<Pth,float>& density_scores,
-                          const std::map<Pth, float>& switch_states,
-                          const float& switch_threshold,
-                          const std::map<Jth, Frame* >& neighbor_frames,
-                          const cv::Mat& synced_marker,
-                          const EigenMap<int,g2o::SE3Quat>* gt_Tcws = nullptr
-                         ) const;
-  cv::Mat VisualizeRigInfos(Frame* frame,
-                            const Qth& qth,
-                            const std::map<Jth, Frame* >& neighbor_frames,
-                            const std::set<Mappoint*>& neighbor_mappoints,
-                            std::set<Pth> instances,
-                            const float& switch_threshold,
-                            const std::map<Pth,float>& switch_states,
-                            const std::map<Pth,ShapePtr>& curr_shapes
-                           ) const ;
-
-   */
-
   // j -> q -> (p) -> i
   std::map<Qth, std::map<Jth, Frame*> >       keyframes_;  // jth {c}amera와 keypointt<->'i'th mappoint correspondence
   std::set<Jth>                         every_keyframes_;
@@ -302,7 +264,7 @@ private:
   std::map<Ith, Mappoint* >                   ith2mappoints_;
 
   const Camera*const camera_;
-  FeatureDescriptor*const extractor_;
+  SEG::FeatureDescriptor*const extractor_;
   std::shared_ptr<Mapper> mapper_;
 
   // Collect infos for visualization
@@ -313,9 +275,181 @@ private:
   std::map<Qth, std::set<Mappoint*> >   vinfo_neighbor_mappoints_;
   cv::Mat                               vinfo_synced_marker_;
   std::map<Pth,float>                   vinfo_density_socres_;
+}
+
+;std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
+                                                       const SEG::FeatureDescriptor* extractor,
+                                                       const std::vector<cv::Mat>& flow,
+                                                       const Frame* prev_frame,
+                                                       bool verbose,
+                                                       Frame* curr_frame) ;
+
+} // namespace OLD_SEG
+
+namespace NEW_SEG {
+class Mappoint;
+class RigidGroup;
+
+class Instance {
+public:
+  Instance(Pth pth, Qth qth) : pth_(pth), qth_(qth) { }
+  const Pth& GetId() const { return pth_; }
+  const Qth& GetQth() const { return qth_; }
+  void SetQth(const Qth& qth) { qth_ = qth; }
+private:
+  //std::map<Qth,RigidGroup*> rig_groups_;
+  Qth qth_;
+  const Pth pth_;
 };
 
+class Frame {
+public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  Frame(const Jth id, const cv::Mat vis_rgb=cv::Mat());
+  ~Frame();
+  bool IsInFrame(const Camera* camera, const Eigen::Vector2d& uv) const;
+  int GetIndex(const Mappoint* mp) const { return mappoints_index_.count(mp) ? mappoints_index_.at(mp) : -1; }
+  void ExtractAndNormalizeKeypoints(const cv::Mat gray,
+                                    const Camera* camera,
+                                    SEG::FeatureDescriptor* extractor,
+                                    const cv::Mat& mask);
 
-} // namespace seg
+  void SetInstances(const cv::Mat synced_marker, const std::map<Pth, Instance*>& instances);
+  void SetMeasuredDepths(const cv::Mat depth);
+
+  std::list<int> SearchRadius(const Eigen::Vector2d& uv, double radius) const;
+  std::vector<std::vector<int> > SearchRadius(const flann::Matrix<double>& points, double radius) const;
+  std::vector<std::vector<int> > SearchRadius(const flann::Matrix<double>& points, double radius, 
+                                              std::vector<std::vector<double> >& dists) const;
+
+  const cv::Mat GetRgb() const { return rgb_; }
+  const std::vector<cv::KeyPoint>& GetKeypoints()      const { return keypoints_; }
+  Mappoint* GetMappoint(int index)                     const { return mappoints_[index]; }
+  const std::vector<Mappoint*>&    GetMappoints()      const { return mappoints_; }
+  const std::vector<Instance*>&    GetInstances()      const { return instances_; }
+  const std::vector<float>&        GetMeasuredDepths() const { return measured_depths_; }
+  std::vector<Instance*>&          GetInstances() { return instances_; }
+  void SetMappoint(Mappoint* mp, int kpt_index);
+  void EraseMappoint(int index);
+  const Eigen::Vector3d& GetNormalizedPoint(int index) const { return normalized_[index]; }
+  const EigenVector<Eigen::Vector3d>& GetNormalizedPoints() const { return normalized_; }
+
+  void ReduceMem() { rgb_ = cv::Mat(); }
+  const cv::Mat GetDescription(int i) const { return descriptions_.row(i); }
+  const cv::KeyPoint& GetKeypoint(int i) const {  return keypoints_.at(i); }
+  const float& GetDepth(int i) const { return measured_depths_.at(i); }
+  const Jth GetId() const { return id_; }
+  void SetKfId(const Qth qth, int kf_id);
+  const int GetKfId(const Qth qth) const { return kf_id_.count(qth) ? kf_id_.at(qth) : -1; }
+
+  bool IsKeyframe() const { return is_kf_; }
+
+  void SetTcq(const Qth& qth, const g2o::SE3Quat& Tcq) { Tcq_[qth] = std::shared_ptr<g2o::SE3Quat>(new g2o::SE3Quat(Tcq)); }
+  const g2o::SE3Quat& GetTcq(const Qth& qth) const { return *Tcq_.at(qth); }
+  const std::map<Qth, std::shared_ptr<g2o::SE3Quat> >& GetTcqs() const { return Tcq_; }
+
+private:
+  std::vector<cv::KeyPoint>    keypoints_;
+  EigenVector<Eigen::Vector3d> normalized_;
+  std::vector<Mappoint*>       mappoints_;
+  std::vector<Instance*>       instances_; // 사실 Pth가 Qth를 가리켜야속편한데, 이거때문에 어려워짐.
+  std::vector<float>           measured_depths_;
+  cv::Mat descriptions_;
+  flann::Matrix<double> flann_keypoints_;
+  flann::Index<flann::L2<double> >* flann_kdtree_;
+  std::map<const Mappoint*, int> mappoints_index_;
+
+  std::map<Qth, std::shared_ptr<g2o::SE3Quat> > Tcq_;
+  std::map<Qth, int32_t> kf_id_;
+  cv::Mat rgb_;
+  const Jth id_;
+  bool is_kf_;
+};
+
+class Mappoint {
+public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  Mappoint(Ith id, Instance* ins) : id_(id), ins_(ins) {}
+  Instance* GetInstance() const { return ins_; }
+  const Ith& GetId() const { return id_; }
+  void GetFeature(bool latest, cv::Mat& description, cv::KeyPoint& kpt) const; // ref에서의 desc
+
+  Frame* GetRefFrame(const Qth& qth) const { return ref_.at(qth); }
+  const std::map<Qth,Frame*>& GetRefFrames() const { return ref_; }
+  bool HasEstimate4Rig(const Qth& qth) const { return ref_.count(qth); }
+  void AddKeyframe(Qth qth, Frame* frame) { keyframes_[qth].insert(frame); }
+  void RemoveKeyframe(Qth qth, Frame* frame) { keyframes_[qth].erase(frame); }
+  const std::map<Qth, std::set<Frame*> >& GetKeyframes() const { return keyframes_; }
+  const std::set<Frame*>& GetKeyframes(Qth qth) const { return keyframes_.at(qth); }
+
+  // Ref coordinate에서 본 Xr. Depth Camera의 Measurement
+  void AddReferenceKeyframe(const Qth& qth, Frame* ref, const Eigen::Vector3d& Xq) { ref_[qth] = ref; SetXq(qth, Xq); }
+  void SetXr(const Qth& qth, const Eigen::Vector3d& Xr) { Xr_[qth] = std::shared_ptr<Eigen::Vector3d>(new Eigen::Vector3d(Xr)); }
+  const Eigen::Vector3d& GetXr(const Qth& qth) const { return *Xr_.at(qth); }
+
+  // Qth rigid coordinate 에 맵핑된 결과값.
+  void SetXq(Qth qth, const Eigen::Vector3d& Xq) { Xq_[qth] = std::shared_ptr<Eigen::Vector3d>(new Eigen::Vector3d(Xq)); }
+  const Eigen::Vector3d& GetXq(Qth qth) { return *Xq_.at(qth); }
+
+public:
+  static std::map<Qth, size_t> n_;
+
+private:
+  const Ith id_;
+  Instance*const ins_;
+
+  // TODO 더이상 ins가 Qth를 포함하지 않을경우 제외해야하는데, 모순이다.
+  std::map<Qth, Frame*> ref_;
+  std::map<Qth, std::set<Frame*> > keyframes_; // GetNeighbors에 필요
+  std::map<Qth, std::shared_ptr<Eigen::Vector3d> >Xr_; // Measurement
+  std::map<Qth, std::shared_ptr<Eigen::Vector3d> >Xq_; // rig마다 독립된 Mapping값을 가진다.
+};
+
+class PoseTracker;
+class Pipeline {
+public:
+  Pipeline(const Camera* camera, SEG::FeatureDescriptor*const extractor);
+  ~Pipeline();
+  Frame* Put(const cv::Mat gray,
+             const cv::Mat depth,
+             const std::vector<cv::Mat>& flow,
+             const cv::Mat synced_marker,
+             const std::map<int,size_t>& marker_areas,
+             const cv::Mat gradx,
+             const cv::Mat grady,
+             const cv::Mat valid_grad,
+             const cv::Mat vis_rgb
+            );
+
+  void Visualize(const cv::Mat rgb); // visualize.cpp
+
+private:
+  std::set<Qth> FrameNeedsToBeKeyframe(Frame* frame) const;
+  void SupplyMappoints(Frame* frame);
+  void FilterOutlierMatches(Frame* curr_frame);
+
+  SEG::FeatureDescriptor*const extractor_;
+  const Camera*const camera_;
+  std::shared_ptr<PoseTracker> pose_tracker_;
+
+  std::map<Qth, std::map<Jth, Frame*> > keyframes_;
+  Frame* prev_frame_;
+  std::map<Qth, RigidGroup*> qth2rig_groups_;
+  std::map<Pth, Instance*>   pth2instances_;
+  std::map<Ith, Mappoint* >  ith2mappoints_;
+
+
+  std::vector<bool> vinfo_supplied_mappoints_;
+}; // class Pipeline
+
+std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
+                                                       const SEG::FeatureDescriptor* extractor,
+                                                       const std::vector<cv::Mat>& flow,
+                                                       const Frame* prev_frame,
+                                                       bool verbose,
+                                                       Frame* curr_frame) ;
+
+ 
+} // namespace NEW_SEG
 
 #endif

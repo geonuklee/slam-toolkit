@@ -112,12 +112,12 @@ void SegViewer::Run(){
     glClearColor(0.0f,0.0f,0.0f,1.0f);
 
     if(!gt_Tcws_.empty()){ // Draw ground truth trajectories
-      glLineWidth(4);
+      glLineWidth(1);
       glColor3f(.6,.6,.6);
       glBegin(GL_LINES);
       for(size_t i=0; i+1 < gt_Tcws_.size(); i++){
         if(i >= curr_k){
-          glLineWidth(2);
+          glLineWidth(1);
           glColor3f(.3,.3,.3);
         }
         const g2o::SE3Quat Twc0 = gt_Tcws_.at(i).inverse();
