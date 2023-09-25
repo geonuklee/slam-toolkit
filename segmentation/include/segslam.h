@@ -275,9 +275,9 @@ private:
   std::map<Qth, std::set<Mappoint*> >   vinfo_neighbor_mappoints_;
   cv::Mat                               vinfo_synced_marker_;
   std::map<Pth,float>                   vinfo_density_socres_;
-}
+};
 
-;std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
+std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
                                                        const SEG::FeatureDescriptor* extractor,
                                                        const std::vector<cv::Mat>& flow,
                                                        const Frame* prev_frame,
@@ -341,12 +341,17 @@ public:
   const Jth GetId() const { return id_; }
   void SetKfId(const Qth qth, int kf_id);
   const int GetKfId(const Qth qth) const { return kf_id_.count(qth) ? kf_id_.at(qth) : -1; }
-
   bool IsKeyframe() const { return is_kf_; }
-
   void SetTcq(const Qth& qth, const g2o::SE3Quat& Tcq) { Tcq_[qth] = std::shared_ptr<g2o::SE3Quat>(new g2o::SE3Quat(Tcq)); }
   const g2o::SE3Quat& GetTcq(const Qth& qth) const { return *Tcq_.at(qth); }
   const std::map<Qth, std::shared_ptr<g2o::SE3Quat> >& GetTcqs() const { return Tcq_; }
+
+  EigenMap<Ith, Eigen::Vector3d> Get3dMappoints(Qth qth=0) const;
+
+  /* TODO
+  void UpdateCovisibilities();
+  const std::map<Qth, std::list< std::pair<Frame*, size_t> > >& GetCovisibilities () const { return covisiblities_; }
+  */
 
 private:
   std::vector<cv::KeyPoint>    keypoints_;
@@ -359,6 +364,7 @@ private:
   flann::Index<flann::L2<double> >* flann_kdtree_;
   std::map<const Mappoint*, int> mappoints_index_;
 
+  //std::map<Qth, std::list< std::pair<Frame*, size_t> > > covisiblities_; // covisibile keyframes for 'qth'
   std::map<Qth, std::shared_ptr<g2o::SE3Quat> > Tcq_;
   std::map<Qth, int32_t> kf_id_;
   cv::Mat rgb_;
@@ -372,7 +378,7 @@ public:
   Mappoint(Ith id, Instance* ins) : id_(id), ins_(ins) {}
   Instance* GetInstance() const { return ins_; }
   const Ith& GetId() const { return id_; }
-  void GetFeature(bool latest, cv::Mat& description, cv::KeyPoint& kpt) const; // ref에서의 desc
+  void GetFeature(const Qth& qth, bool latest, cv::Mat& description, cv::KeyPoint& kpt) const;
 
   Frame* GetRefFrame(const Qth& qth) const { return ref_.at(qth); }
   const std::map<Qth,Frame*>& GetRefFrames() const { return ref_; }
@@ -406,6 +412,7 @@ private:
 };
 
 class PoseTracker;
+class Mapper;
 class Pipeline {
 public:
   Pipeline(const Camera* camera, SEG::FeatureDescriptor*const extractor);
@@ -431,6 +438,7 @@ private:
   SEG::FeatureDescriptor*const extractor_;
   const Camera*const camera_;
   std::shared_ptr<PoseTracker> pose_tracker_;
+  std::shared_ptr<Mapper> mapper_;
 
   std::map<Qth, std::map<Jth, Frame*> > keyframes_;
   Frame* prev_frame_;
@@ -449,6 +457,12 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
                                                        bool verbose,
                                                        Frame* curr_frame) ;
 
+std::map<int, std::pair<Mappoint*,double> > ProjectionMatch(const Camera* camera,
+                                                            const SEG::FeatureDescriptor* extractor,
+                                                            const std::set<Mappoint*>& mappoints,
+                                                            const Frame* curr_frame, // With predicted Tcq
+                                                            const Qth qth,
+                                                            double search_radius);
  
 } // namespace NEW_SEG
 

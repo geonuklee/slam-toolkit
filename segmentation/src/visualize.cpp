@@ -265,6 +265,7 @@ namespace NEW_SEG {
 
 void Pipeline::Visualize(const cv::Mat rgb) {
   Qth qth = 0;
+  /*
   Frame* kf_prev = nullptr;{
     auto qth_keyframes = keyframes_.at(qth);
     for(auto it_kf = qth_keyframes.rbegin(); it_kf != qth_keyframes.rend(); it_kf++){
@@ -289,32 +290,69 @@ void Pipeline::Visualize(const cv::Mat rgb) {
     }
     cv::imshow("kf0", dst_kf0);
   }
+  */
 
   cv::Mat dst_curr = rgb.clone();
   const auto& keypoints = prev_frame_->GetKeypoints();
   const auto& mappoints = prev_frame_->GetMappoints();
   const auto& instances = prev_frame_->GetInstances();
+  std::map<Ith, Mappoint*> sorted_mappoints;
   for(size_t n=0; n<keypoints.size(); n++){
     cv::Point2f pt = keypoints[n].pt;
     Instance* ins = instances[n];
     Mappoint* mp = mappoints[n];
     if(!mp){
-      cv::circle(dst_curr, pt, 3, CV_RGB(150,150,150), 1);
+      //cv::circle(dst_curr, pt, 3, CV_RGB(150,150,150), 1);
       continue;
     }
-    //const bool& supplied_pt = vinfo_supplied_mappoints_[n];
-    //if(supplied_pt){
-    //  cv::circle(dst_curr, pt, 3, CV_RGB(0,255,0), 1);
-    //  continue;
-    //}
+    sorted_mappoints[mp->GetId()] = mp;
+    const bool& supplied_pt = vinfo_supplied_mappoints_[n];
+    if(supplied_pt){
+      //cv::circle(dst_curr, pt, 3, CV_RGB(0,255,0), 1);
+      continue;
+    }
     cv::circle(dst_curr, pt, 3, CV_RGB(0,255,0), -1);
     const std::set<Frame*>& keyframes = mp->GetKeyframes(qth);
     for(auto it = keyframes.rbegin(); it!=keyframes.rend(); it++){
       const cv::Point2f& pt_next = (*it)->GetKeypoint( (*it)->GetIndex(mp) ).pt;
-      cv::line(dst_curr, pt, pt_next, CV_RGB(0,0,255),  2);
+      cv::line(dst_curr, pt, pt_next, CV_RGB(0,0,255), 4);
+      if(*it != prev_frame_)
+        break;
     }
   }
+  cv::Size patch_size(30,30);
+  int n_rows = 15;
+  int n_cols = 60;
+  int i_col = 0;
+  cv::Mat dst_patches = cv::Mat::zeros(patch_size.height*n_rows, patch_size.width*n_cols, CV_8UC3);
+  for(auto it_mp : sorted_mappoints){
+    Mappoint* mp = it_mp.second;
+    std::map<int, Frame*> sorted_keyframes;
+    for(Frame* kf : mp->GetKeyframes(qth))
+      sorted_keyframes[kf->GetId()] = kf;
+    sorted_keyframes[prev_frame_->GetId()] = prev_frame_;
+    int i_row = 0;
+    for(auto it_kf : sorted_keyframes){
+      Frame* kf = it_kf.second;
+      const cv::Point2f& pt = kf->GetKeypoint( kf->GetIndex(mp) ).pt;
+      const cv::Mat& rgb = kf->GetRgb();
+      if(rgb.empty())
+        continue;
+      int x = static_cast<int>(pt.x - int(patch_size.width/2));
+      int y = static_cast<int>(pt.y - int(patch_size.height/2));
+      if (x < 0 || y < 0 || x + patch_size.width >= rgb.cols || y + patch_size.height >= rgb.rows) 
+        continue;
+      cv::Rect rgb_roi(x, y, patch_size.width, patch_size.height);
+      cv::Rect dst_roi(patch_size.width*i_col, patch_size.height*i_row,patch_size.width, patch_size.height);
+      rgb(rgb_roi).copyTo(dst_patches(dst_roi));
+      if(++i_row >= n_rows)
+        break;
+    }
+    if(++i_col >= n_cols)
+      break;
+  }
   cv::imshow("dst_curr", dst_curr);
+  cv::imshow("dst_patches", dst_patches);
   return;
 }
 

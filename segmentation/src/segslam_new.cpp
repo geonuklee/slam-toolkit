@@ -155,6 +155,37 @@ void Frame::EraseMappoint(int index) {
   return;
 }
 
+
+EigenMap<Ith, Eigen::Vector3d> Frame::Get3dMappoints(Qth qth) const {
+  EigenMap<Ith, Eigen::Vector3d> vec3d;
+  for(Mappoint* mp : mappoints_){
+    if(!mp)
+      continue;
+    Instance* ins = mp->GetInstance();
+    if(ins->GetQth() != qth)
+      continue;
+    if(mp->GetKeyframes(qth).size() < 2)
+      continue;
+    vec3d[mp->GetId()] = mp->GetXq(qth);
+  }
+  return vec3d;
+}
+
+void Mappoint::GetFeature(const Qth& qth, bool latest, cv::Mat& description, cv::KeyPoint& kpt) const {
+  Frame* frame = nullptr;
+  if(qth < 0)
+    frame = ref_.begin()->second;
+  else
+    if(latest)
+      frame = *keyframes_.at(qth).rbegin();
+    else
+      frame = ref_.at(qth);
+  int kpt_idx = frame->GetIndex(this);
+  description = frame->GetDescription(kpt_idx);
+  kpt         = frame->GetKeypoint(kpt_idx);
+  return;
+}
+
 Pipeline::Pipeline(const Camera* camera,
                    SEG::FeatureDescriptor*const extractor
                   )
@@ -182,8 +213,10 @@ void Pipeline::SupplyMappoints(Frame* frame) {
   for(int n=0; n < keypoints.size(); n++){
     Instance* ins = instances[n];
 #if 1
-    if(Mappoint* mp = mappoints[n])
+    if(Mappoint* mp = mappoints[n]){
+      mp->AddKeyframe(qth, frame); // TODO 모든 qth에 keyframe추가하는건 좋은생각이 아니다.
       continue;
+    }
     static Ith nMappoints = 0;
     const Eigen::Vector3d Xr
       = depths[n] <1e-5 ? 1e+2*frame->GetNormalizedPoint(n) : depths[n]*frame->GetNormalizedPoint(n);
@@ -278,6 +311,7 @@ void GetNeighbors(Frame* keyframe,
                   const Qth& qth,
                   std::set<Mappoint*>   &neighbor_mappoints,
                   std::map<Jth, Frame*> &neighbor_keyframes) {
+  // TODO Covlisiblity 계산도 함께. 
   int min_kf_id = keyframe->GetKfId(qth) - 10; // TODO covisiblity로 대체.
   // 1. frame에서 보이는 mappoints
   GetMappoints4Qth(keyframe, qth, neighbor_mappoints);
@@ -345,8 +379,9 @@ void Pipeline::FilterOutlierMatches(Frame* curr_frame) {
   // instance 별로..
   std::vector<double> all_errors;
   all_errors.reserve(mappoints.size());
-  std::map<Instance*, std::list<double> > valid_errors;
 
+  //std::map<Instance*, std::list<double> > valid_errors;
+  std::list<double> valid_errors;
   for(int n = 0; n < mappoints.size(); n++){
     Mappoint* mp = mappoints.at(n);
     if(!mp){
@@ -366,9 +401,11 @@ void Pipeline::FilterOutlierMatches(Frame* curr_frame) {
     const Eigen::Vector2d uv(pt.x, pt.y);
     double err = (uv-rprj_uv).norm();
     all_errors.push_back(err);
-    valid_errors[ins].push_back(err);
+    //valid_errors[ins].push_back(err);
+    valid_errors.push_back(err);
   }
 
+  /*
   std::map<Instance*, double > err_thresholds;
   for(auto it : valid_errors){
     std::list<double>& errors = it.second;
@@ -377,6 +414,14 @@ void Pipeline::FilterOutlierMatches(Frame* curr_frame) {
     std::advance(it_median, errors.size()/2);
     err_thresholds[it.first] = 4. * (*it_median);
   }
+  */
+  double err_thresholds = 5.;
+  /*{
+    valid_errors.sort();
+    auto it_median = valid_errors.begin();
+    std::advance(it_median, valid_errors.size()/2);
+    err_thresholds = std::max(err_thresholds, 4. * (*it_median) );
+  }*/
 
   for(int n = 0; n < mappoints.size(); n++){
     Mappoint* mp = mappoints.at(n);
@@ -384,15 +429,40 @@ void Pipeline::FilterOutlierMatches(Frame* curr_frame) {
       continue;
     Instance* ins = instances.at(n);
     const double& err = all_errors.at(n);
-    const double& err_th = err_thresholds.at(ins);
+    //const double& err_th = err_thresholds.at(ins);
     //if(err < err_th) // TODO
-    if(err < 4.)
+    //  continue;
+    if(err < err_thresholds)
       continue;
     curr_frame->EraseMappoint(n); // keyframe이 아니라서 mp->RemoveKeyframe 등을 호출하지 않는다.
   }
   return;
 }
 
+void SetMatches(std::map<int, std::pair<Mappoint*, double> >& flow_matches,
+                std::map<int, std::pair<Mappoint*, double> >& proj_matches,
+                Frame* curr_frame){
+  std::map<Mappoint*,int> matched_mappoints;
+  for(auto it : flow_matches){
+    //curr_frame->SetMappoint(it.second.first, it.first); // 이미 Posetracking을 위해 연결했다.
+    matched_mappoints[it.second.first] = it.first;
+  }
+  const std::vector<Mappoint*>& mappoints = curr_frame->GetMappoints();
+  for(auto it : proj_matches){
+    const int& prj_n = it.first;
+    Mappoint*const prj_mp = it.second.first;
+    bool c1 = flow_matches.count(prj_n);
+    bool c2 = matched_mappoints.count(prj_mp);
+    if(c1 && c2) // flow match 와 결과가 똑같은 경우.
+      continue;
+    else if (c2) // flow_match가 연결시킨 mappoint를 다른 keypoint에 연결하려하는경우.
+      continue;
+    if(mappoints[prj_n]) // 이미 다른 mappoint가 연결된 keypoint
+      continue;
+    curr_frame->SetMappoint(prj_mp, prj_n);
+  }
+  return;
+}
 
 Frame* Pipeline::Put(const cv::Mat gray,
                      const cv::Mat depth,
@@ -404,6 +474,8 @@ Frame* Pipeline::Put(const cv::Mat gray,
                      const cv::Mat valid_grad,
                      const cv::Mat vis_rgb
                     ) {
+
+  const float proj_search_radius = 30.;
   const Qth qth_default = 0;
   cv::Mat outline_mask = synced_marker < 1;
   for(const auto& it : marker_areas)
@@ -442,21 +514,31 @@ Frame* Pipeline::Put(const cv::Mat gray,
     matched_mappoints[it.second.first] = it.first;
   }
 
-  bool verbose_track = true;
-  g2o::SE3Quat Tcq = pose_tracker_->GetTcq(camera_, qth_default, curr_frame, verbose_track);
-  curr_frame->SetTcq(qth_default, Tcq);
+  { // While Qth 
+    const Qth qth = 0;
+    bool verbose_track = true;
+    g2o::SE3Quat Tcq = pose_tracker_->GetTcq(camera_, qth_default, curr_frame, verbose_track);
+    curr_frame->SetTcq(qth_default, Tcq);
 
-  // Inprogres << TODO 최우선 여기에 FilterOutlinerMatches가 들어오되, qth 는 필요없다.
-  FilterOutlierMatches(curr_frame);
+    Frame* latest_kf = keyframes_.at(qth).rbegin()->second;
+    std::set<Mappoint*>     neighbor_mappoints;
+    std::map<Jth, Frame* >  neighbor_frames;
+    GetNeighbors(latest_kf, qth_default, neighbor_mappoints, neighbor_frames);
 
-  // TODO Filter먼저 한다음에 LBA 수행.
+#if 1
+    // ProjectionMatch는 flow로부터 motion update와 pth(k_0)!= pth(k) 인 경우에 예외처리가 팔요해보인다.
+    std::map<int, std::pair<Mappoint*, double> > proj_matches = ProjectionMatch(camera_, extractor_, neighbor_mappoints, curr_frame, qth, proj_search_radius);
+    SetMatches(flow_matches, proj_matches, curr_frame);
+#endif
+    if( (prev_frame_->GetTcq(0) * curr_frame->GetTcq(0).inverse() ).translation().z() > 0.) // 계산실패.
+      FilterOutlierMatches(curr_frame); // mpt <-> keyframe correspondence 수정이 없어서 LBA 수행 이전에 처리를.. 해야하나?
 
-  /*
-  Frame* latest_kf = keyframes_.at(qth_default).rbegin()->second;
-  std::set<Mappoint*>     neighbor_mappoints;
-  std::map<Jth, Frame* >  neighbor_frames;
-  GetNeighbors(latest_kf, qth_default, neighbor_mappoints, neighbor_frames);
-  */
+    std::set<Pth> fixed_instances;
+    bool vis_verbose = false;
+    mapper_->ComputeLBA(camera_,qth, neighbor_mappoints, neighbor_frames, curr_frame, prev_frame_, fixed_instances, gradx, grady, valid_grad, vis_verbose);
+  }
+
+
   std::set<Qth> need_keyframe = FrameNeedsToBeKeyframe(curr_frame);
   for(const Qth& qth : need_keyframe){
     keyframes_[qth][curr_frame->GetId()] = curr_frame;

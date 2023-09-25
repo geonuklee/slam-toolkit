@@ -241,6 +241,9 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
   NEW_SEG::Pipeline pipeline(camera, &extractor);                                             // After   ~50 [milli sec]
   std::string output_fn = std::string(PACKAGE_DIR)+"/output.txt";
 
+  char c = 0;
+  g2o::SE3Quat Tc0w;
+  Tc0w.setTranslation(Eigen::Vector3d(0.,0.,1.));
   for(int i=0; i<dataset.Size(); i+=1){
     std::cout << "F# " << i << std::endl;
     const cv::Mat rgb   = dataset.GetImage(i, cv::IMREAD_COLOR);
@@ -263,20 +266,27 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     cv::Mat synced_marker = img_tracker->GetSyncedMarker();
     const std::map<int,size_t>& marker_areas = img_tracker->GetMarkerAreas();
     cv::Mat modified_depth = depth.clone();
-    modified_depth.setTo(0, depth > 40.);
+    //modified_depth.setTo(0, depth > 40.);
     NEW_SEG::Frame* frame = pipeline.Put(gray, modified_depth, flow, synced_marker, marker_areas,
                                          gradx, grady, valid_grad, rgb);
+    g2o::SE3Quat Tcw = frame->GetTcq(0);
+    /* if( (Tc0w * Tcw.inverse() ).translation().z() < 0.) { // 계산실패.
+      stop=true;
+      cv::waitKey(0);
+    } */
+    Tc0w = Tcw;
     pipeline.Visualize(rgb);
-    viewer.SetCurrCamera(i, frame->GetTcq(0));
+    viewer.SetCurrCamera(i, Tcw);
+    viewer.SetMappoints(frame->Get3dMappoints());
     //cv::imshow("marker", GetColoredLabel(synced_marker) );
-    char c = cv::waitKey(stop?0:1);
+    c = cv::waitKey(stop?0:1);
     if(c == 'q')
       break;
     else if (c == 's')
       stop = !stop;
   }
-  bool req_exit = true;
-  viewer.Join(req_exit); // close request 도 추가는 해야겠다.
+  bool req_exit = c=='q';
+  viewer.Join(req_exit);
   return 1;
 }
 

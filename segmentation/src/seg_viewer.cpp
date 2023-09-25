@@ -22,6 +22,9 @@ SegViewer::SegViewer(const EigenMap<int, g2o::SE3Quat>& gt_Tcws, std::string con
   lx_         = fsettings["Viewer.lx"];
   ly_         = fsettings["Viewer.ly"];
   lz_         = fsettings["Viewer.lz"];
+  ux_         = fsettings["Viewer.ux"];
+  uy_         = fsettings["Viewer.uy"];
+  uz_         = fsettings["Viewer.uz"];
   fps_          = 30.;
   thread_ = std::thread([&]() { Run(); });
 }
@@ -30,6 +33,13 @@ void SegViewer::SetCurrCamera(int k, const g2o::SE3Quat& Tcw) {
   std::unique_lock<std::mutex> lock(mutex_viewer_);
   curr_k_ = k;
   est_Tcws_[k] = Tcw;
+}
+
+void SegViewer::SetMappoints(const EigenMap<int, Eigen::Vector3d>& mappoints) {
+  for(auto it: curr_mappoints_)
+    all_mappoints_[it.first] = it.second;
+  curr_mappoints_ = mappoints;
+  return;
 }
 
 pangolin::OpenGlMatrix Convert(const g2o::SE3Quat& _T);
@@ -50,15 +60,15 @@ void SegViewer::Run(){
   glEnable (GL_BLEND);
   glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   pangolin::CreatePanel("menu").SetBounds(0.0,1.0,0.0,pangolin::Attach::Pix(175));
-  pangolin::Var<bool> menuFollowCamera("menu.Follow Camera",true,true);
-  pangolin::Var<bool> menuShowPoints("menu.Show Points",true,true);
+  pangolin::Var<bool> menu_follow_camera("menu.Follow Camera",true,true);
+  pangolin::Var<bool> menu_show_points("menu.Show Points",true,true);
 
   bool bFollow = true;
   bool bLocalizationMode = false;
   auto projection_matrix = pangolin::ProjectionMatrix(size_.width, size_.height,
                                                       vp_f_, vp_f_,
                                                       size_.width/2.,size_.height/2., z_near_,z_far_);
-  auto lookat = pangolin::ModelViewLookAt(ex_, ey_, ez_, lx_, ly_, lz_, 0.,-1.,0.);
+  auto lookat = pangolin::ModelViewLookAt(ex_, ey_, ez_, lx_, ly_, lz_, ux_, uy_, uz_);
 
   pangolin::OpenGlRenderState s_cam(projection_matrix,
                                     lookat);
@@ -97,52 +107,24 @@ void SegViewer::Run(){
     gl_Twc = Convert(Twc);
 
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    if(menuFollowCamera && bFollow) {
+    if(menu_follow_camera && bFollow) {
       s_cam.Follow(gl_Twc);
     }
-    else if(menuFollowCamera && !bFollow) {
+    else if(menu_follow_camera && !bFollow) {
       s_cam.SetModelViewMatrix(lookat);
       s_cam.Follow(gl_Twc);
       bFollow = true;
     }
-    else if(!menuFollowCamera && bFollow) {
+    else if(!menu_follow_camera && bFollow) {
       bFollow = false;
     }
     d_cam.Activate(s_cam);
     glClearColor(0.0f,0.0f,0.0f,1.0f);
 
-    if(!gt_Tcws_.empty()){ // Draw ground truth trajectories
-      glLineWidth(1);
-      glColor3f(.6,.6,.6);
-      glBegin(GL_LINES);
-      for(size_t i=0; i+1 < gt_Tcws_.size(); i++){
-        if(i >= curr_k){
-          glLineWidth(1);
-          glColor3f(.3,.3,.3);
-        }
-        const g2o::SE3Quat Twc0 = gt_Tcws_.at(i).inverse();
-        const g2o::SE3Quat Twc1 = gt_Tcws_.at(i+1).inverse();
-        const auto& t0 = Twc0.translation();
-        const auto& t1 = Twc1.translation();
-        glVertex3f(t0.x(), t0.y(), t0.z());
-        glVertex3f(t1.x(), t1.y(), t1.z());
-      }
-      glEnd();
+    if(menu_show_points){
+      DrawPoints();
     }
-    if(!est_Tcws.empty()){ // Draw ground truth trajectories
-      glLineWidth(4);
-      glColor3f(0.,1.,0.);
-      glBegin(GL_LINES);
-      for(size_t i=0; i+1 < est_Tcws.size(); i++){
-        const g2o::SE3Quat Twc0 = est_Tcws.at(i).inverse();
-        const g2o::SE3Quat Twc1 = est_Tcws.at(i+1).inverse();
-        const auto& t0 = Twc0.translation();
-        const auto& t1 = Twc1.translation();
-        glVertex3f(t0.x(), t0.y(), t0.z());
-        glVertex3f(t1.x(), t1.y(), t1.z());
-      }
-      glEnd();
-    }
+    DrawTrajectories(est_Tcws);
     DrawPose(Twc);
 
     pangolin::FinishFrame();
@@ -180,7 +162,6 @@ void SegViewer::DrawPose(const g2o::SE3Quat& _Twc) {
   const float z = w*0.6;
 
   glPushMatrix();
-
 #ifdef HAVE_GLES
   glMultMatrixf(Twc.m);
 #else
@@ -188,7 +169,7 @@ void SegViewer::DrawPose(const g2o::SE3Quat& _Twc) {
 #endif
   glLineWidth(5);
 
-#if 1
+#if 0
   glColor3f(1., 0., 0.);
   glBegin(GL_LINES);
   glVertex3f(0,0,0);
@@ -204,7 +185,9 @@ void SegViewer::DrawPose(const g2o::SE3Quat& _Twc) {
   glEnd();
 
 #else
-  glColor3f(0.0f,1.0f,0.0f);
+  glLineWidth(2);
+  glColor3f(0., 0., 1.);
+
   glBegin(GL_LINES);
   glVertex3f(0,0,0);
   glVertex3f(w,h,z);
@@ -231,4 +214,60 @@ void SegViewer::DrawPose(const g2o::SE3Quat& _Twc) {
 
   glPopMatrix();
 }
+
+void SegViewer::DrawTrajectories(const EigenMap<int,g2o::SE3Quat>& est_Tcws) {
+  int curr_k = est_Tcws.empty()? 0 : est_Tcws.rbegin()->first;
+  if(!gt_Tcws_.empty()){ // Draw ground truth trajectories
+    glLineWidth(1);
+    glColor3f(.6,.6,.6);
+    glBegin(GL_LINES);
+    for(size_t i=0; i+1 < gt_Tcws_.size(); i++){
+      if(i >= curr_k){
+        glLineWidth(1);
+        glColor3f(.3,.3,.3);
+      }
+      const g2o::SE3Quat Twc0 = gt_Tcws_.at(i).inverse();
+      const g2o::SE3Quat Twc1 = gt_Tcws_.at(i+1).inverse();
+      const auto& t0 = Twc0.translation();
+      const auto& t1 = Twc1.translation();
+      glVertex3f(t0.x(), t0.y(), t0.z());
+      glVertex3f(t1.x(), t1.y(), t1.z());
+    }
+    glEnd();
+  }
+
+  if(!est_Tcws.empty()){ // Draw ground truth trajectories
+    glColor3f(0.,1.,0.);
+    glPointSize(3.);
+    glBegin(GL_LINES);
+    for(size_t i=0; i+1 < est_Tcws.size(); i++){
+      const g2o::SE3Quat Twc0 = est_Tcws.at(i).inverse();
+      const g2o::SE3Quat Twc1 = est_Tcws.at(i+1).inverse();
+      const auto& t0 = Twc0.translation();
+      const auto& t1 = Twc1.translation();
+      glVertex3f(t0.x(), t0.y(), t0.z());
+      glVertex3f(t1.x(), t1.y(), t1.z());
+    }
+    glEnd();
+  }
+
+  return;
+}
+
+void SegViewer::DrawPoints() {
+  glBegin(GL_POINTS);
+  glPointSize(.3);
+  glColor3f(.5,.5,.5);
+  for(auto it : all_mappoints_){
+    if(curr_mappoints_.count(it.first) )
+      continue;
+    glVertex3f(it.second.x(), it.second.y(), it.second.z() );
+  }
+  glPointSize(1.);
+  glColor3f(1.,1.,0.);
+  for(auto it : curr_mappoints_)
+    glVertex3f(it.second.x(), it.second.y(), it.second.z() );
+  glEnd();
+}
+
 

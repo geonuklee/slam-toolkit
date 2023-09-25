@@ -94,7 +94,8 @@ set_source_files_properties(src/edge.cpp PROPERTIES COMPILE_FLAGS "-mavx2") # No
 #set_target_properties(example_segmentation PROPERTIES UNITY_BUILD_MODE BATCH UNITY_BUILD_BATCH_SIZE 10)
 #set_source_files_properties(src/debug.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
 #set_source_files_properties(src/optimizer.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
-set_source_files_properties(src/segslam.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
+set_source_files_properties(src/segslam_new.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
+set_source_files_properties(src/visualize.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
 
 set_source_files_properties(src/seg_viewer.cpp PROPERTIES COMPILE_FLAGS "-O3") # Too slow for non optimization.
 set_source_files_properties(../pipeline/src/common.cpp PROPERTIES COMPILE_FLAGS "-O3") # Too slow for non optimization.

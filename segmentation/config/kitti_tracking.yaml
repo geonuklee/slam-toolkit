@@ -1,0 +1,22 @@
+%YAML:1.0
+
+#--------------------------------------------------------------------------------------------
+# Viewer Parameters
+#--------------------------------------------------------------------------------------------
+Viewer.CameraSize: 0.7
+Viewer.CameraLineWidth: 3
+
+Viewer.width: 640
+Viewer.height: 480
+Viewer.z_near: 0.1
+Viewer.z_far: 2000.
+Viewer.ex: 0.
+Viewer.ey: -5.
+Viewer.ez: -10.
+Viewer.lx: 0
+Viewer.ly: 0
+Viewer.lz: 1.
+Viewer.ux: 0
+Viewer.uy: -1.
+Viewer.uz: -.2
+Viewer.vp_f: 200

@@ -56,5 +56,24 @@ public:
                      );
 
 };
+
+class Mapper {
+public:
+  Mapper() { }
+  ~Mapper() { };
+  std::map<Pth,float> ComputeLBA(const Camera* camera,
+                        Qth qth,
+                        const std::set<Mappoint*>& neighbor_mappoints,
+                        const std::map<Jth, Frame*>& neighbor_keyframes,
+                        Frame* curr_frame,
+                        Frame* prev_frame,
+                        const std::set<Pth>& fixed_instances,
+                        const cv::Mat& gradx,
+                        const cv::Mat& grady,
+                        const cv::Mat& valid_grad,
+                        bool vis_verbose
+                        );
+} ;// class Mapper (NEW)
+
 } // namespace NEW_SEG
 #endif

@@ -57,19 +57,22 @@ void EdgeSE3PointXYZDepth::linearizeOplus() {
   Eigen::Matrix<double,3,3> dhdXc;
   dhdXc << invd, 0., -Xc[0]*inv_Zc2,
         0., invd, -Xc[1]*inv_Zc2,
-        0., 0.,   -inv_Zc2;
-
-  Eigen::Matrix<double,3,9> jacobian;
-  jacobian.block<3,3>(0,0) = Tcw.rotation().toRotationMatrix(); // jac Xi
-  jacobian.block<3,3>(0,3) = -g2o::skew(Xc); // jac Xj for omega in g2o::SE3Quat::exp [omega; upsilon]
-  jacobian.block<3,3>(0,6).setIdentity();    // jac Xj for upsilon
-  jacobian = dhdXc * jacobian;
+        0., 0.,   - inv_Zc2;
+  Eigen::Matrix<double,3,6> dXc_dxi;
+  // Domain of g2o::SE3Quat : [omega, upsilon]
+  dXc_dxi.block<3,3>(0,0)  = -g2o::skew(Xc);
+  dXc_dxi.block<3,3>(0,3).setIdentity();
+  const Eigen::Matrix<double,3,3> Rcw = Tcw.rotation().toRotationMatrix();
+  const Eigen::Matrix<double,3,6> dhdxi = dhdXc * dXc_dxi;
+  const Eigen::Matrix<double,3,3> dhdXw = dhdXc * Rcw;
+  _jacobianOplusXi = dhdXw;
+  _jacobianOplusXj = dhdxi;
 #ifdef CHECK_NAN
-  if(jacobian.hasNaN())
+  if(_jacobianOplusXi.hasNaN())
+    throw -1;
+  if(_jacobianOplusXj.hasNaN())
     throw -1;
 #endif
-  _jacobianOplusXi = jacobian.block<3,3>(0,0);
-  _jacobianOplusXj = jacobian.block<3,6>(0,3);
   return;
 }
 
@@ -106,16 +109,31 @@ void EdgeProjection::linearizeOplus() {
   Eigen::Matrix<double,2,3> dhdXc;
   dhdXc << invd, 0., -Xc[0]*inv_Zc2,
         0., invd, -Xc[1]*inv_Zc2;
+#if 1
+  Eigen::Matrix<double,3,6> dXc_dxi;
+  // Domain of g2o::SE3Quat : [omega, upsilon]
+  dXc_dxi.block<3,3>(0,0)  = -g2o::skew(Xc);
+  dXc_dxi.block<3,3>(0,3).setIdentity();
+  const Eigen::Matrix<double,3,3> Rcw = Tcw.rotation().toRotationMatrix();
+  const Eigen::Matrix<double,2,6> dhdxi = dhdXc * dXc_dxi;
+  const Eigen::Matrix<double,2,3> dhdXw = dhdXc * Rcw;
+  _jacobianOplusXi = dhdXw;
+  _jacobianOplusXj = dhdxi;
+#else
   Eigen::Matrix<double,3,9> dXcdP;
   dXcdP.block<3,3>(0,0) = Tcw.rotation().toRotationMatrix(); // jac Xi
   dXcdP.block<3,3>(0,3) = -g2o::skew(Xc); // jac Xj for omega in g2o::SE3Quat::exp [omega; upsilon]
   dXcdP.block<3,3>(0,6).setIdentity();    // jac Xj for upsilon
-#ifdef CHECK_NAN
-  if(dXcdP.hasNaN())
-    throw -1;
-#endif
   _jacobianOplusXi = dhdXc* dXcdP.block<3,3>(0,0);
   _jacobianOplusXj = dhdXc* dXcdP.block<3,6>(0,3);
+#endif
+
+#ifdef CHECK_NAN
+  if(_jacobianOplusXi.hasNaN())
+    throw -1;
+  if(_jacobianOplusXj.hasNaN())
+    throw -1;
+#endif
   return;
 }
 

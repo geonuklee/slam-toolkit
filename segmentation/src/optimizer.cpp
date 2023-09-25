@@ -443,7 +443,7 @@ g2o::SE3Quat PoseTracker::GetTcq(const Camera* camera,
 
   const double focal = camera->GetK()(0,0);
   const double uv_info = 1.;
-  const double invd_info = .01;
+  const double invd_info = 1.;
   const double delta = 10./focal;
   const int n_iter = 10;
 
@@ -460,10 +460,11 @@ g2o::SE3Quat PoseTracker::GetTcq(const Camera* camera,
     optimizer.addVertex(v_mp);
     v_mappoints[mp]  = v_mp;
     const float& z = depths[n];
+    float invd = 1./std::max<float>(z, MIN_NUM);
     Eigen::Vector3d uvi = normalized_points[n];
     g2o::OptimizableGraph::Edge* edge = nullptr;
     if(z >  MIN_NUM){
-      auto ptr = new EdgeSE3PointXYZDepth(&param, uv_info, invd_info);
+      auto ptr = new EdgeSE3PointXYZDepth(&param, uv_info, invd*invd_info);
       uvi[2] = 1. / z;
       ptr->setVertex(0, v_mp);
       ptr->setVertex(1, v_pose);
@@ -489,5 +490,157 @@ g2o::SE3Quat PoseTracker::GetTcq(const Camera* camera,
   return v_pose->estimate();
 }
 
+
+std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
+                        Qth qth,
+                        const std::set<Mappoint*>& neighbor_mappoints,
+                        const std::map<Jth, Frame*>& neighbor_keyframes,
+                        Frame* curr_frame,
+                        Frame* prev_frame,
+                        const std::set<Pth>& fixed_instances,
+                        const cv::Mat& gradx,
+                        const cv::Mat& grady,
+                        const cv::Mat& valid_grad,
+                        bool vis_verbose
+                        ) {
+  const double focal = camera->GetK()(0,0);
+  const double uv_info = 1.;
+  const double invd_info = 1e-8;
+  const double delta = 10./focal;
+  const int n_iter = 10;
+  std::map<Jth, Frame*> frames = neighbor_keyframes;
+  frames[curr_frame->GetId()] = curr_frame;
+  Param param(camera);
+  g2o::SparseOptimizer optimizer;
+  // Dynamic block size due to 6dim SE3, 1dim prior vertex.
+  typedef g2o::BlockSolverPL<-1,-1> BlockSolver;
+  std::unique_ptr<BlockSolver::LinearSolverType> linear_solver = g2o::make_unique<g2o::LinearSolverEigen<BlockSolver::PoseMatrixType>>();
+#if 1
+  g2o::OptimizationAlgorithm* solver \
+    =  new g2o::OptimizationAlgorithmLevenberg(g2o::make_unique<BlockSolver>(std::move(linear_solver)));
+#else
+  g2o::OptimizationAlgorithm* solver \
+    = new g2o::OptimizationAlgorithmGaussNewton(g2o::make_unique<BlockSolver>(std::move(linear_solver)));
+#endif
+  optimizer.setAlgorithm(solver);
+
+  std::map<Jth, g2o::OptimizableGraph::Vertex*> v_poses;
+  std::map<Mappoint*, g2o::OptimizableGraph::Vertex*> v_mappoints;
+  std::map<Pth, VertexSwitchLinear*>  v_instances;
+  std::map<Pth, size_t>               mp_counts;
+
+  for(Mappoint* mp : neighbor_mappoints){
+    // TODO n_kf는 mappoint의 keyframes가 아니라, LBA의 keyframes.
+    size_t n_kf = mp->GetKeyframes(qth).size();
+    if(n_kf < 2){ // Projection Edge만 1개 생기는 경우 NAN이 발생하는것을 막기위해.
+      if(curr_frame->GetIndex(mp) < 0 )
+        continue;
+    }
+    Instance* ins = mp->GetInstance();
+    if(ins && ins->GetId() > 0 ){
+      mp_counts[ins->GetId()]++;
+    }
+    g2o::VertexSBAPointXYZ* v_mp = new g2o::VertexSBAPointXYZ();
+    v_mp->setId(optimizer.vertices().size() );
+    v_mp->setEstimate(mp->GetXq(qth));
+    v_mp->setMarginalized(true);
+    v_mp->setFixed(false);
+    optimizer.addVertex(v_mp);
+    v_mappoints[mp]  = v_mp;
+  }
+  for(auto it_frame : frames){
+    Frame* frame = it_frame.second;
+    Jth jth = it_frame.first;
+    g2o::VertexSE3Expmap* v_pose = new g2o::VertexSE3Expmap();
+    v_pose->setId(optimizer.vertices().size() );
+    v_pose->setEstimate(frame->GetTcq(qth));
+    v_pose->setMarginalized(false);
+    optimizer.addVertex(v_pose);
+    v_poses[jth] = v_pose;
+    size_t n_edges = 0;
+    const auto& jth_mappoints = frame->GetMappoints();
+    for(size_t n=0; n<jth_mappoints.size(); n++){
+      Mappoint* mp = jth_mappoints[n];
+      if(!mp)
+        continue;
+      if(!v_mappoints.count(mp)) // ins가 exclude 된 케이스라 neighbors에서 제외됬을 수 있다.
+        continue;
+      auto v_mp = v_mappoints.at(mp);
+      const cv::KeyPoint& kpt = frame->GetKeypoint(n);
+      Eigen::Vector3d uvi = frame->GetNormalizedPoint(n);
+      const float& z = frame->GetDepth(n);
+      float invd = 1. / std::max<float>(z, MIN_NUM);
+      uvi[2] = invd;
+      bool valid_depth = z > MIN_NUM;
+      g2o::OptimizableGraph::Edge* edge = nullptr;
+      if(valid_depth) {
+        auto ptr = new EdgeSE3PointXYZDepth(&param, uv_info, invd_info);
+        ptr->setVertex(0, v_mp);
+        ptr->setVertex(1, v_pose);
+        ptr->setMeasurement( uvi );
+        edge = ptr;
+      }
+      else {
+        auto ptr = new EdgeProjection(&param, uv_info);
+        ptr->setVertex(0, v_mp);
+        ptr->setVertex(1, v_pose);
+        ptr->setMeasurement( uvi.head<2>() );
+        edge = ptr;
+      }
+      optimizer.addEdge(edge);
+      g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
+      rk->setDelta(delta);
+      edge->setRobustKernel(rk);
+      n_edges++;
+    } // for mappoints
+    v_pose->setFixed(n_edges<20); 
+    //v_pose->setFixed(frame!=curr_frame);
+    //v_pose->setFixed(true);
+  } // for frames
+
+  /*
+  if(!v_poses.empty()){
+    g2o::OptimizableGraph::Vertex* v_oldest = v_poses.begin()->second;
+    v_oldest->setFixed(true);
+  }
+  */
+
+  optimizer.setVerbose(false);
+  optimizer.initializeOptimization();
+  optimizer.optimize(n_iter);
+
+  // Retrieve
+  //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+  const Jth curr_jth = curr_frame->GetId();
+  int n_pose = 0;
+  int N_pose = v_poses.size();
+  bool txt_verbose = false;
+  if(txt_verbose)
+    std::cout << "At Q#" << qth << " curr F#"<< curr_frame->GetId() <<"--------------------" << std::endl;
+  for(auto it_poses : v_poses){
+    g2o::VertexSE3Expmap* vertex = static_cast<g2o::VertexSE3Expmap*>(it_poses.second);
+    if(txt_verbose)
+      std::cout << "F#" << it_poses.first << ", " << vertex->estimate().inverse().translation().transpose() << std::endl;
+    if(vertex->fixed())
+      continue;
+    frames[it_poses.first]->SetTcq(qth, vertex->estimate());
+    n_pose++;
+  }
+  if(txt_verbose)
+    std::cout << "---------------------" << std::endl;
+  int n_structure = 0;
+  int N_structure = v_mappoints.size();
+  for(auto it_v_mpt : v_mappoints){
+    g2o::VertexSBAPointXYZ* vertex = static_cast<g2o::VertexSBAPointXYZ*>(it_v_mpt.second);
+    if(vertex->fixed())
+      continue;
+    n_structure++;
+    Mappoint* mpt = it_v_mpt.first;
+    mpt->SetXq(qth,vertex->estimate());
+  }
+  //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+  std::map<Pth, float> switch_state; // posterior for inlier.
+  return switch_state;
+}
 } // namespace NEW_SEG
 
