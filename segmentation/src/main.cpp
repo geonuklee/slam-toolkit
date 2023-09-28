@@ -87,7 +87,7 @@ void TestPangolin(int argc, char** argv) {
   const EigenMap<int, g2o::SE3Quat>& gt_Tcws = dataset.GetTcws();
   const std::string config_fn = GetPackageDir()+"/config/kitti_tracking.yaml";
   SegViewer viewer(gt_Tcws, config_fn);
-  bool stop = false;
+  bool stop = true;
 
   for(int i =0; i < dataset.Size(); i++){
     auto gt_Twc = gt_Tcws.at(i).inverse();
@@ -245,7 +245,6 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
   g2o::SE3Quat Tc0w;
   Tc0w.setTranslation(Eigen::Vector3d(0.,0.,1.));
   for(int i=0; i<dataset.Size(); i+=1){
-    std::cout << "F# " << i << std::endl;
     const cv::Mat rgb   = dataset.GetImage(i, cv::IMREAD_COLOR);
     const cv::Mat rgb_r = dataset.GetRightImage(i, cv::IMREAD_COLOR);
     cv::Mat gray, gray_r;
@@ -277,8 +276,7 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     Tc0w = Tcw;
     pipeline.Visualize(rgb);
     viewer.SetCurrCamera(i, Tcw);
-    viewer.SetMappoints(frame->Get3dMappoints());
-    //cv::imshow("marker", GetColoredLabel(synced_marker) );
+    //viewer.SetMappoints(frame->Get3dMappoints());
     c = cv::waitKey(stop?0:1);
     if(c == 'q')
       break;

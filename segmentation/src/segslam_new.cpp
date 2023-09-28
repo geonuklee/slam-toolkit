@@ -186,6 +186,31 @@ void Mappoint::GetFeature(const Qth& qth, bool latest, cv::Mat& description, cv:
   return;
 }
 
+RigidGroup::RigidGroup(Qth qth, Frame* first_frame)
+: id_(qth),
+  bg_instance_(new Instance(-1, qth))
+{
+}
+
+RigidGroup::~RigidGroup() {
+  delete bg_instance_;
+}
+
+bool RigidGroup::ExcludeInstance(Instance *ins) {
+  const Pth pth = ins->GetId();
+  excluded_instances_[pth] = ins;
+  /* bool count = included_instances_.count(pth);
+  if(count) 
+    included_instances_.erase(pth);
+  if(ins->rig_groups_.count(id_))
+    ins->rig_groups_.erase(id_);
+  else
+    count = false;;
+    return count;
+  */
+  return true;
+}
+
 Pipeline::Pipeline(const Camera* camera,
                    SEG::FeatureDescriptor*const extractor
                   )
@@ -285,13 +310,12 @@ void GetMappoints4Qth(Frame* frame,
                       ){
   const auto& keypoints = frame->GetKeypoints();
   const auto& mappoints = frame->GetMappoints();
-  const auto& instances = frame->GetInstances();
   for(size_t n=0; n<keypoints.size(); n++){
-    Instance* ins = instances[n];
-    if(!ins)
-      continue;
     Mappoint* mpt = mappoints[n];
     if(!mpt)
+      continue;
+    Instance* ins = mpt->GetInstance();
+    if(!ins)
       continue;
     //if(!ins->rig_groups_.count(qth))
     //  continue;
@@ -333,15 +357,17 @@ void GetNeighbors(Frame* keyframe,
 std::map<Qth, size_t> CountMappoints(Frame* frame){
   const auto& keypoints = frame->GetKeypoints();
   const auto& mappoints = frame->GetMappoints();
-  const auto& instances = frame->GetInstances();
   std::map<Qth, size_t> n_mappoints;
   for(size_t n=0; n<keypoints.size(); n++){
-    Instance* ins = instances[n];
+    Mappoint* mpt = mappoints[n];
+    if(!mpt)
+      continue;
+    Instance* ins = mpt->GetInstance();
     if(!ins)
       continue;
-    Mappoint* mpt = mappoints[n];
-    if(mpt)
-      n_mappoints[ins->GetQth()]++;
+    if(ins->GetQth() < 0)
+      continue;
+    n_mappoints[ins->GetQth()]++;
   }
   return n_mappoints;
 }
@@ -374,22 +400,24 @@ std::set<Qth> Pipeline::FrameNeedsToBeKeyframe(Frame* curr_frame) const {
 void Pipeline::FilterOutlierMatches(Frame* curr_frame) {
   const std::vector<Mappoint*>&    mappoints = curr_frame->GetMappoints();
   const std::vector<cv::KeyPoint>& keypoints = curr_frame->GetKeypoints();
-  const std::vector<Instance*>&    instances = curr_frame->GetInstances();
 
   // instance 별로..
   std::vector<double> all_errors;
   all_errors.reserve(mappoints.size());
 
-  //std::map<Instance*, std::list<double> > valid_errors;
-  std::list<double> valid_errors;
+  std::map<Instance*, std::list<double> > valid_errors;
   for(int n = 0; n < mappoints.size(); n++){
     Mappoint* mp = mappoints.at(n);
     if(!mp){
       all_errors.push_back(0.);
       continue;
     }
-    Instance* ins = instances.at(n);
+    Instance* ins = mp->GetInstance();
     const Qth& qth = ins->GetQth();
+    if(qth < 0){
+      all_errors.push_back(0.);
+      continue;
+    }
     const g2o::SE3Quat& Tcq = curr_frame->GetTcq(qth);
 
     const Eigen::Vector3d Xr = mp->GetXr(qth);
@@ -401,11 +429,9 @@ void Pipeline::FilterOutlierMatches(Frame* curr_frame) {
     const Eigen::Vector2d uv(pt.x, pt.y);
     double err = (uv-rprj_uv).norm();
     all_errors.push_back(err);
-    //valid_errors[ins].push_back(err);
-    valid_errors.push_back(err);
+    valid_errors[ins].push_back(err);
   }
 
-  /*
   std::map<Instance*, double > err_thresholds;
   for(auto it : valid_errors){
     std::list<double>& errors = it.second;
@@ -414,26 +440,21 @@ void Pipeline::FilterOutlierMatches(Frame* curr_frame) {
     std::advance(it_median, errors.size()/2);
     err_thresholds[it.first] = 4. * (*it_median);
   }
-  */
-  double err_thresholds = 5.;
-  /*{
-    valid_errors.sort();
-    auto it_median = valid_errors.begin();
-    std::advance(it_median, valid_errors.size()/2);
-    err_thresholds = std::max(err_thresholds, 4. * (*it_median) );
-  }*/
+  //double err_threshold = 5.;
 
   for(int n = 0; n < mappoints.size(); n++){
     Mappoint* mp = mappoints.at(n);
     if(!mp)
       continue;
-    Instance* ins = instances.at(n);
-    const double& err = all_errors.at(n);
-    //const double& err_th = err_thresholds.at(ins);
-    //if(err < err_th) // TODO
-    //  continue;
-    if(err < err_thresholds)
+    Instance* ins = mp->GetInstance();
+    if(ins->GetQth()<0)
       continue;
+    const double& err = all_errors.at(n);
+    const double& err_th = err_thresholds.at(ins);
+    if(err < 10.) // TODO
+      continue;
+    //if(err < err_th)
+    //  continue;
     curr_frame->EraseMappoint(n); // keyframe이 아니라서 mp->RemoveKeyframe 등을 호출하지 않는다.
   }
   return;
@@ -464,6 +485,24 @@ void SetMatches(std::map<int, std::pair<Mappoint*, double> >& flow_matches,
   return;
 }
 
+void CountMappoints(Frame* frame,
+                    std::map<Pth, size_t>& ins2mappoints){
+  const auto& keypoints = frame->GetKeypoints();
+  const auto& mappoints = frame->GetMappoints();
+  for(size_t n=0; n<keypoints.size(); n++){
+    Mappoint* mpt = mappoints[n];
+    if(!mpt)
+      continue;
+    Instance* ins = mpt->GetInstance();
+    if(!ins)
+      continue;
+    Pth pth = ins->GetId();
+    if(pth > -1)
+      ins2mappoints[pth]++;
+  }
+  return;
+}
+
 Frame* Pipeline::Put(const cv::Mat gray,
                      const cv::Mat depth,
                      const std::vector<cv::Mat>& flow,
@@ -474,13 +513,30 @@ Frame* Pipeline::Put(const cv::Mat gray,
                      const cv::Mat valid_grad,
                      const cv::Mat vis_rgb
                     ) {
+  switch_threshold_ = .3;
+  float density_threshold = 1. / 70. / 70.; // NxN pixel에 한개 이상의 mappoint가 존재해야 dense instance
+
+  vinfo_switch_states_.clear();
+  vinfo_neighbor_frames_.clear();
+  vinfo_neighbor_mappoints_.clear();
+  vinfo_synced_marker_ = synced_marker;
 
   const float proj_search_radius = 30.;
   const Qth qth_default = 0;
   cv::Mat outline_mask = synced_marker < 1;
-  for(const auto& it : marker_areas)
-    if(!pth2instances_.count(it.first) )
-      pth2instances_[it.first] = new Instance(it.first, qth_default);
+  std::map<Qth, std::set<Pth> > segmented_instances;
+  for(const auto& it : marker_areas){
+    Instance* ins = nullptr;
+    if(!pth2instances_.count(it.first) ){
+      ins = new Instance(it.first, qth_default);
+      pth2instances_[it.first] = ins;
+    }
+    else
+      ins = pth2instances_.at(it.first);
+    segmented_instances[ins->GetQth()].insert(ins->GetId());
+  }
+  if(segmented_instances.empty())
+    throw -1;
 
   static Jth nFrames = 0;
   Frame* curr_frame = new Frame(nFrames++, vis_rgb);
@@ -490,6 +546,8 @@ Frame* Pipeline::Put(const cv::Mat gray,
   curr_frame->SetInstances(synced_marker, pth2instances_);
 
   if(!prev_frame_){
+    RigidGroup* rig_new = new RigidGroup(0, curr_frame);
+    qth2rig_groups_[rig_new->GetId()] = rig_new;
     curr_frame->SetTcq(qth_default, g2o::SE3Quat() );
     SupplyMappoints(curr_frame);
     keyframes_[qth_default][curr_frame->GetId()] = curr_frame;
@@ -499,45 +557,75 @@ Frame* Pipeline::Put(const cv::Mat gray,
   } 
 
   // intiial pose prediction
-  const auto& Tcqs = prev_frame_->GetTcqs();
-  for(auto it : Tcqs)
+  const auto& prev_Tcqs = prev_frame_->GetTcqs();
+  for(auto it : prev_Tcqs)
     curr_frame->SetTcq(it.first, *it.second);
 
   bool verbose_flowmatch = false;
-  // Optical flow를 기반으로한 feature matching은 Tcq가 필요없다.
   std::map<int, std::pair<Mappoint*, double> > flow_matches
     = FlowMatch(camera_, extractor_, flow, prev_frame_, verbose_flowmatch, curr_frame);
-
   std::map<Mappoint*,int> matched_mappoints;
   for(auto it : flow_matches){
     curr_frame->SetMappoint(it.second.first, it.first);
     matched_mappoints[it.second.first] = it.first;
   }
 
-  { // While Qth 
+  static std::map<Qth, std::map<Pth,size_t> > n_consecutiv_switchoff;
+  int nq = 1;
+  { // while !segmented_instances.empty()
     const Qth qth = 0;
+    RigidGroup* rig = qth2rig_groups_.at(qth);
     bool verbose_track = true;
     g2o::SE3Quat Tcq = pose_tracker_->GetTcq(camera_, qth_default, curr_frame, verbose_track);
     curr_frame->SetTcq(qth_default, Tcq);
 
     Frame* latest_kf = keyframes_.at(qth).rbegin()->second;
-    std::set<Mappoint*>     neighbor_mappoints;
-    std::map<Jth, Frame* >  neighbor_frames;
+    std::set<Mappoint*>     & neighbor_mappoints = vinfo_neighbor_mappoints_[qth];
+    std::map<Jth, Frame* >  & neighbor_frames    = vinfo_neighbor_frames_[qth];
     GetNeighbors(latest_kf, qth_default, neighbor_mappoints, neighbor_frames);
+    if(neighbor_mappoints.empty()) {
+      std::cerr << "qth = " << qth << ", failure to get mappoints" << std::endl;
+      throw -1;
+    }
 
-#if 1
     // ProjectionMatch는 flow로부터 motion update와 pth(k_0)!= pth(k) 인 경우에 예외처리가 팔요해보인다.
     std::map<int, std::pair<Mappoint*, double> > proj_matches = ProjectionMatch(camera_, extractor_, neighbor_mappoints, curr_frame, qth, proj_search_radius);
     SetMatches(flow_matches, proj_matches, curr_frame);
-#endif
-    if( (prev_frame_->GetTcq(0) * curr_frame->GetTcq(0).inverse() ).translation().z() > 0.) // 계산실패.
-      FilterOutlierMatches(curr_frame); // mpt <-> keyframe correspondence 수정이 없어서 LBA 수행 이전에 처리를.. 해야하나?
+    FilterOutlierMatches(curr_frame); // LBA 전에 호출되야 accuracy가 높았다.
 
     std::set<Pth> fixed_instances;
     bool vis_verbose = false;
-    mapper_->ComputeLBA(camera_,qth, neighbor_mappoints, neighbor_frames, curr_frame, prev_frame_, fixed_instances, gradx, grady, valid_grad, vis_verbose);
-  }
+    std::map<Pth,float>& switch_states = vinfo_switch_states_[qth];
+    switch_states\
+      = mapper_->ComputeLBA(camera_,qth, neighbor_mappoints, neighbor_frames, curr_frame, prev_frame_, fixed_instances, gradx, grady, valid_grad, vis_verbose);
 
+    std::map<Pth, size_t> ins2mappoints;
+    CountMappoints(curr_frame, ins2mappoints);
+    std::set<Pth> instances4next_rig;
+    std::set<Pth> switchoff_instances;
+    if(!n_consecutiv_switchoff.count(qth))
+      n_consecutiv_switchoff[qth]; // empty map 생성.
+    for(auto it_switch : switch_states){
+      const Pth& pth = it_switch.first;
+      if(it_switch.second > switch_threshold_)
+        continue;
+      size_t& n_consec = n_consecutiv_switchoff[qth][pth];
+      n_consec++;
+      if(n_consec > 2){ // N 번 연속 switch off 판정을 받은경우,
+        Instance* ins = pth2instances_.at( pth );
+        rig->ExcludeInstance(ins);
+        instances4next_rig.insert(pth);
+        ins->SetQth(-1);
+      }
+      else
+        switchoff_instances.insert(pth); // 현재 프레임에서 switchoff가 발생하지 않은 pthqth를 삭제하기위해.
+    }
+
+    size_t n_mappoints4next_rig = 0;
+    for(Pth pth : instances4next_rig)
+      if(ins2mappoints.count(pth))// mp 없는 instance도 있으니까.
+         n_mappoints4next_rig += ins2mappoints.at(pth);
+  }
 
   std::set<Qth> need_keyframe = FrameNeedsToBeKeyframe(curr_frame);
   for(const Qth& qth : need_keyframe){

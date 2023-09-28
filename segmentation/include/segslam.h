@@ -288,7 +288,7 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
 
 namespace NEW_SEG {
 class Mappoint;
-class RigidGroup;
+struct RigidGroup;
 
 class Instance {
 public:
@@ -297,7 +297,6 @@ public:
   const Qth& GetQth() const { return qth_; }
   void SetQth(const Qth& qth) { qth_ = qth; }
 private:
-  //std::map<Qth,RigidGroup*> rig_groups_;
   Qth qth_;
   const Pth pth_;
 };
@@ -411,6 +410,20 @@ private:
   std::map<Qth, std::shared_ptr<Eigen::Vector3d> >Xq_; // rig마다 독립된 Mapping값을 가진다.
 };
 
+
+struct RigidGroup {
+  RigidGroup(Qth qth, Frame* first_frame);
+  ~RigidGroup();
+  bool ExcludeInstance(Instance* ins);
+  Instance* GetBgInstance() const { return bg_instance_; }
+  const Qth& GetId() const { return id_; }
+  const std::map<Pth, Instance*>& GetExcludedInstances() const { return excluded_instances_; }
+private:
+  const Qth id_;
+  Instance*const bg_instance_;
+  std::map<Pth, Instance*> excluded_instances_;
+};
+
 class PoseTracker;
 class Mapper;
 class Pipeline {
@@ -448,6 +461,12 @@ private:
 
 
   std::vector<bool> vinfo_supplied_mappoints_;
+  float switch_threshold_;
+  std::map<Qth, std::map<Pth, float> >  vinfo_switch_states_;
+  std::map<Qth, std::map<Jth, Frame*> > vinfo_neighbor_frames_;
+  std::map<Qth, std::set<Mappoint*> >   vinfo_neighbor_mappoints_;
+  cv::Mat                               vinfo_synced_marker_;
+  std::map<Pth,float>                   vinfo_density_socres_;
 }; // class Pipeline
 
 std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,

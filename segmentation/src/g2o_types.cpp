@@ -17,23 +17,13 @@ EdgeSE3PointXYZDepth::EdgeSE3PointXYZDepth(const Param* param,
   info(2,2)             = invd_info;
 }
 
-inline double GetInverse(const double& z) {
-  const double min_z = 1.;
-  // min_z 을 너무 작게 설정하면,
-  // LM optimization이 수렴 안하는 문제가 발생한다.
-  if(z < min_z)
-    return 1./min_z;
-  return 1./z;
-}
-
 void EdgeSE3PointXYZDepth::computeError() {
   const g2o::VertexSBAPointXYZ* vi = static_cast<const g2o::VertexSBAPointXYZ*>(_vertices[0]);
   const g2o::VertexSE3Expmap*   vj = static_cast<const g2o::VertexSE3Expmap*>(_vertices[1]);
   g2o::Vector3 obs(_measurement); // [nu, nv, 1./Zc]
   g2o::Vector3 h(vj->estimate().map(vi->estimate()));
   auto invd = GetInverse(h[2]);
-  h[0] *= invd; // Xc/Zc
-  h[1] *= invd; // Yc/Zc
+  h.head<2>() *= invd; // [Xc, Yc] /Zc
   h[2] = invd;
   _error = h-obs;
 #ifdef CHECK_NAN
@@ -58,8 +48,7 @@ void EdgeSE3PointXYZDepth::linearizeOplus() {
   dhdXc << invd, 0., -Xc[0]*inv_Zc2,
         0., invd, -Xc[1]*inv_Zc2,
         0., 0.,   - inv_Zc2;
-  Eigen::Matrix<double,3,6> dXc_dxi;
-  // Domain of g2o::SE3Quat : [omega, upsilon]
+  Eigen::Matrix<double,3,6> dXc_dxi; // Domain of g2o::SE3Quat : [omega, upsilon]
   dXc_dxi.block<3,3>(0,0)  = -g2o::skew(Xc);
   dXc_dxi.block<3,3>(0,3).setIdentity();
   const Eigen::Matrix<double,3,3> Rcw = Tcw.rotation().toRotationMatrix();
@@ -137,57 +126,6 @@ void EdgeProjection::linearizeOplus() {
   return;
 }
 
-EdgeSwProjection::EdgeSwProjection(const Param* param,
-                                   const double& uv_info)
-  : param_(param),
-  g2o::BaseMultiEdge<2, g2o::Vector2>()
-{
-  resize(3);
-  auto& info = information();
-  info.setZero();
-  info(0,0) = info(1,1) = uv_info;
-}
-
-void EdgeSwProjection::computeError() {
-  const g2o::VertexSBAPointXYZ* vi = static_cast<const g2o::VertexSBAPointXYZ*>(_vertices[0]);
-  const g2o::VertexSE3Expmap*   vj = static_cast<const g2o::VertexSE3Expmap*>(_vertices[1]);
-  const VertexSwitchLinear*     vp = static_cast<const VertexSwitchLinear*>(_vertices[2]);
-  g2o::Vector2 obs(_measurement); // [nu, nv, 1./Zc]
-  g2o::Vector3 Xc(vj->estimate().map(vi->estimate()));
-  auto invd = GetInverse(Xc[2]);
-  g2o::Vector2 h = Xc.head<2>();
-  h[0] *= invd; // Xc/Zc
-  h[1] *= invd; // Yc/Zc
-  _error = vp->estimate() * (h-obs);
-}
-
-void EdgeSwProjection::linearizeOplus() {
-  const g2o::VertexSBAPointXYZ* vi = static_cast<const g2o::VertexSBAPointXYZ*>(_vertices[0]);
-  const g2o::VertexSE3Expmap*   vj = static_cast<const g2o::VertexSE3Expmap*>(_vertices[1]);
-  const VertexSwitchLinear*     vp = static_cast<const VertexSwitchLinear*>(_vertices[2]);
-  const g2o::SE3Quat& Tcw = vj->estimate();
-  const g2o::Vector3& Xw  = vi->estimate();
-  g2o::Vector3 Xc = Tcw.map(Xw);
-  auto invd = GetInverse(Xc[2]);
-  const double inv_Zc2 = invd* invd;
-  Eigen::Matrix<double,2,3> dhdXc;
-  dhdXc << invd, 0., -Xc[0]*inv_Zc2,
-        0., invd, -Xc[1]*inv_Zc2;
-  Eigen::Matrix<double,3,9> dXcdP;
-  dXcdP.block<3,3>(0,0) = Tcw.rotation().toRotationMatrix(); // jac Xi
-  dXcdP.block<3,3>(0,3) = -g2o::skew(Xc); // jac Xj for omega in g2o::SE3Quat::exp [omega; upsilon]
-  dXcdP.block<3,3>(0,6).setIdentity();    // jac Xj for upsilon
-
-  _jacobianOplus[0] = dhdXc * dXcdP.block<3,3>(0,0);
-  _jacobianOplus[1] = dhdXc * dXcdP.block<3,6>(0,3);
-
-  g2o::Vector2 h = Xc.head<2>();
-  h[0] *= invd; // Xc/Zc
-  h[1] *= invd; // Yc/Zc
-  g2o::Vector2 obs(_measurement); // [nu, nv, 1./Zc]
-  _jacobianOplus[2] = h-obs;
-}
-
 void VertexSwitchLinear::setEstimate(const number_t &et) {
   _x=et;
   _estimate=_x;
@@ -234,8 +172,7 @@ void EdgeSwSE3PointXYZDepth::computeError() {
   g2o::Vector3 obs(_measurement); // [nu, nv, 1./Zc]
   g2o::Vector3 h(vj->estimate().map(vi->estimate()));
   auto invd = GetInverse(h[2]);
-  h[0] *= invd; // Xc/Zc
-  h[1] *= invd; // Yc/Zc
+  h.head<2>() *= invd; // [Xc, Yc] /Zc
   h[2] = invd;
   _error = vp->estimate() * (h-obs);
 }
@@ -253,27 +190,113 @@ void EdgeSwSE3PointXYZDepth::linearizeOplus() {
   dhdXc << invd, 0., -Xc[0]*inv_Zc2,
            0., invd, -Xc[1]*inv_Zc2,
            0., 0.,     -inv_Zc2;
-  // swtich error
   dhdXc *= vp->estimate();
-
-  // Param 10 = 3 + 6 + 1
-  Eigen::Matrix<double,3,9> jacobian;
-  jacobian.block<3,3>(0,0) = Tcw.rotation().toRotationMatrix(); // jac Xi
-  jacobian.block<3,3>(0,3) = -g2o::skew(Xc); // jac Xj for omega in g2o::SE3Quat::exp [omega; upsilon]
-  jacobian.block<3,3>(0,6).setIdentity();    // jac Xj for upsilon
-  jacobian = dhdXc * jacobian;
-#ifdef CHECK_NAN
-  if(jacobian.hasNaN())
-    throw -1;
-#endif
-
-  _jacobianOplus[0] = jacobian.block<3,3>(0,0);
-  _jacobianOplus[1] = jacobian.block<3,6>(0,3);
+#if 1
+  Eigen::Matrix<double,3,6> dXc_dxi; // Domain of g2o::SE3Quat : [omega, upsilon]
+  dXc_dxi.block<3,3>(0,0)  = -g2o::skew(Xc);
+  dXc_dxi.block<3,3>(0,3).setIdentity();
+  const Eigen::Matrix<double,3,3> Rcw = Tcw.rotation().toRotationMatrix();
+  const Eigen::Matrix<double,3,6> dhdxi = dhdXc * dXc_dxi;
+  const Eigen::Matrix<double,3,3> dhdXw = dhdXc * Rcw;
+  _jacobianOplus[0] = dhdXw;
+  _jacobianOplus[1] = dhdxi;
 
   g2o::Vector3 obs(_measurement); // [nu, nv, 1./Zc]
   g2o::Vector3 h;
   h.head<2>() = invd*Xc.head<2>();
   h[2] = invd;
   _jacobianOplus[2] = h-obs;
+#else
+  // Param 10 = 3 + 6 + 1
+  Eigen::Matrix<double,3,9> jacobian;
+  jacobian.block<3,3>(0,0) = Tcw.rotation().toRotationMatrix(); // jac Xi
+  jacobian.block<3,3>(0,3) = -g2o::skew(Xc); // jac Xj for omega in g2o::SE3Quat::exp [omega; upsilon]
+  jacobian.block<3,3>(0,6).setIdentity();    // jac Xj for upsilon
+  jacobian = dhdXc * jacobian;
+  _jacobianOplus[0] = jacobian.block<3,3>(0,0);
+  _jacobianOplus[1] = jacobian.block<3,6>(0,3);
+  g2o::Vector3 obs(_measurement); // [nu, nv, 1./Zc]
+  g2o::Vector3 h;
+  h.head<2>() = invd*Xc.head<2>();
+  h[2] = invd;
+  _jacobianOplus[2] = h-obs;
+#endif
+
+#ifdef CHECK_NAN
+  if(_jacobianOplus[0].hasNaN())
+    throw -1;
+  if(_jacobianOplus[1].hasNaN())
+    throw -1;
+  if(_jacobianOplus[2].hasNaN())
+    throw -1;
+#endif
+
   return;
 }
+
+EdgeSwProjection::EdgeSwProjection(const Param* param,
+                                   const double& uv_info)
+  : param_(param),
+  g2o::BaseMultiEdge<2, g2o::Vector2>()
+{
+  resize(3);
+  auto& info = information();
+  info.setZero();
+  info(0,0) = info(1,1) = uv_info;
+}
+
+void EdgeSwProjection::computeError() {
+  const g2o::VertexSBAPointXYZ* vi = static_cast<const g2o::VertexSBAPointXYZ*>(_vertices[0]);
+  const g2o::VertexSE3Expmap*   vj = static_cast<const g2o::VertexSE3Expmap*>(_vertices[1]);
+  const VertexSwitchLinear*     vp = static_cast<const VertexSwitchLinear*>(_vertices[2]);
+  g2o::Vector2 obs(_measurement); // [nu, nv, 1./Zc]
+  g2o::Vector3 Xc(vj->estimate().map(vi->estimate()));
+  auto invd = GetInverse(Xc[2]);
+  g2o::Vector2 h = Xc.head<2>();
+  h *= invd; // [Xc, Yc] / Zc
+  _error = vp->estimate() * (h-obs);
+}
+
+void EdgeSwProjection::linearizeOplus() {
+  const g2o::VertexSBAPointXYZ* vi = static_cast<const g2o::VertexSBAPointXYZ*>(_vertices[0]);
+  const g2o::VertexSE3Expmap*   vj = static_cast<const g2o::VertexSE3Expmap*>(_vertices[1]);
+  const VertexSwitchLinear*     vp = static_cast<const VertexSwitchLinear*>(_vertices[2]);
+  const g2o::SE3Quat& Tcw = vj->estimate();
+  const g2o::Vector3& Xw  = vi->estimate();
+  g2o::Vector3 Xc = Tcw.map(Xw);
+  auto invd = GetInverse(Xc[2]);
+  const double inv_Zc2 = invd* invd;
+  Eigen::Matrix<double,2,3> dhdXc;
+  dhdXc << invd, 0., -Xc[0]*inv_Zc2,
+        0., invd, -Xc[1]*inv_Zc2;
+  dhdXc *= vp->estimate();
+#if 1
+  Eigen::Matrix<double,3,6> dXc_dxi;
+  // Domain of g2o::SE3Quat : [omega, upsilon]
+  dXc_dxi.block<3,3>(0,0)  = -g2o::skew(Xc);
+  dXc_dxi.block<3,3>(0,3).setIdentity();
+  const Eigen::Matrix<double,3,3> Rcw = Tcw.rotation().toRotationMatrix();
+  const Eigen::Matrix<double,2,6> dhdxi = dhdXc * dXc_dxi;
+  const Eigen::Matrix<double,2,3> dhdXw = dhdXc * Rcw;
+  _jacobianOplus[0] = dhdXw;
+  _jacobianOplus[1] = dhdxi;
+
+  g2o::Vector2 h = Xc.head<2>();
+  h *= invd; // [Xc, Yc] / Zc
+  g2o::Vector2 obs(_measurement); // [nu, nv, 1./Zc]
+  _jacobianOplus[2] = h-obs;
+#else
+  Eigen::Matrix<double,3,9> dXcdP;
+  dXcdP.block<3,3>(0,0) = Tcw.rotation().toRotationMatrix(); // jac Xi
+  dXcdP.block<3,3>(0,3) = -g2o::skew(Xc); // jac Xj for omega in g2o::SE3Quat::exp [omega; upsilon]
+  dXcdP.block<3,3>(0,6).setIdentity();    // jac Xj for upsilon
+  _jacobianOplus[0] = dhdXc * dXcdP.block<3,3>(0,0);
+  _jacobianOplus[1] = dhdXc * dXcdP.block<3,6>(0,3);
+  g2o::Vector2 h = Xc.head<2>();
+  h[0] *= invd; // Xc/Zc
+  h[1] *= invd; // Yc/Zc
+  g2o::Vector2 obs(_measurement); // [nu, nv, 1./Zc]
+  _jacobianOplus[2] = h-obs;
+#endif
+}
+
