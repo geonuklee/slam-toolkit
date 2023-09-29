@@ -16,34 +16,6 @@ public:
   float fy;
 };
 
-namespace OLD_SEG {
-
-class Mapper {
-public:
-  Mapper();
-  ~Mapper();
-  std::map<Pth, float> ComputeLBA(const Camera* camera,
-                  Qth qth,
-                  const std::set<Mappoint*>& neighbor_mappoints,
-                  const std::map<Jth, Frame*>& neighobor_frames,
-                  Frame* curr_frame,
-                  Frame* prev_frame,
-                  const std::set<Pth>& fixed_instances,
-                  const cv::Mat& gradx,
-                  const cv::Mat& grady,
-                  const cv::Mat& valid_grad,
-                  bool vis_verbose
-                  );
-private:
-  g2o::OptimizableGraph::Vertex* CreatePoseVertex(const Qth& qth,
-                                                  g2o::SparseOptimizer& optimizer,
-                                                  Frame* frame);
-  g2o::OptimizableGraph::Vertex* CreateStructureVertex(Qth qth,
-                                                       g2o::SparseOptimizer& optimizer,
-                                                       Mappoint* mpt);
-};
-} // namespace OLD_SEG
-
 namespace NEW_SEG {
 class PoseTracker {
 public:
