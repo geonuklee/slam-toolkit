@@ -1,5 +1,6 @@
 #ifndef SEG_DATASET_H_
 #define SEG_DATASET_H_
+#include "segslam.h"
 #include "stdafx.h"
 #include "camera.h"
 
@@ -36,5 +37,26 @@ private:
   Camera* camera_; // TODO Steroe, Depth, etc..
 };
 
+namespace NEW_SEG {
+class Frame;
+class EvalWriter {
+public:
+  EvalWriter(std::string output_seq_dir);
+  void Write(Frame* frame,
+             RigidGroup* static_rig,
+             const cv::Mat synced_marker,
+             const std::set<int>& uniq_labels,
+             const cv::Mat gt_insmask,
+             const cv::Mat gt_dmask
+             );
+
+private:
+  const std::string output_seq_dir_;
+  const std::string output_mask_dir_;
+  std::ofstream trj_output_;
+  std::ofstream keypoints_output_;
+};
+
+};
 
 #endif

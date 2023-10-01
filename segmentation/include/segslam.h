@@ -214,8 +214,8 @@ public:
              const cv::Mat valid_grad,
              const cv::Mat vis_rgb
             );
-
   void Visualize(const cv::Mat rgb); // visualize.cpp
+  RigidGroup* GetRigidGroup(Qth qth) const { return qth2rig_groups_.count(qth) ? qth2rig_groups_.at(qth) : nullptr; }
 
 private:
   std::set<Qth> FrameNeedsToBeKeyframe(Frame* frame) const;

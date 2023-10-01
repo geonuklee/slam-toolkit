@@ -381,5 +381,83 @@ void KittiTrackingDataset::ComputeCacheImages() { // depth image, dynamic instan
   }
   return;
 }
-
 #endif
+
+
+#include "segslam.h"
+namespace NEW_SEG {
+
+EvalWriter::EvalWriter(std::string output_seq_dir) 
+: output_seq_dir_(output_seq_dir),
+  output_mask_dir_( output_seq_dir+"/"+"mask"),
+  trj_output_(output_seq_dir+"/"+"trj.txt"),
+  keypoints_output_(output_seq_dir+"/"+"keypoints.txt")
+{
+  if(std::filesystem::exists(output_mask_dir_) )
+    std::filesystem::remove_all(output_mask_dir_);
+  std::filesystem::create_directories(output_mask_dir_);
+}
+
+void EvalWriter::Write(Frame* frame,
+                       RigidGroup* static_rig,
+                       const cv::Mat synced_marker,
+                       const std::set<int>& uniq_labels,
+                       const cv::Mat gt_insmask,
+                       const cv::Mat gt_dmask) {
+  const Qth qth = static_rig->GetId();
+  assert(qth==0);
+
+  {
+    // 1. Trajectory 
+    g2o::SE3Quat Tcw = frame->GetTcq(qth);
+    WriteKittiTrajectory(Tcw, trj_output_); 
+  }
+
+  int frame_id = frame->GetId();
+  {
+    /* 2. keypoints 저장.
+    */
+    const auto& keypoints = frame->GetKeypoints();
+    const auto& mappoints = frame->GetMappoints();
+    for(size_t n=0; n < keypoints.size(); n++){
+      const cv::Point2f& pt = keypoints[n].pt;
+      Mappoint* mp = mappoints[n];
+      Instance* ins = mp ? mp->GetInstance() : nullptr;
+      int has_mp = mp ? 1 : 0;
+      int ins_id = ins ? ins->GetId() : 0;
+      int est_on_dynamic = 0;
+      if(ins && ins->GetId() != 0)
+        est_on_dynamic = 1;
+      int gt_on_dynamic =  gt_dmask.at<uchar>(pt) > 0 ? 1 : 0;
+      keypoints_output_ << frame_id << " "
+                        << n << " "
+                        << ins_id << " "
+                        << has_mp << " "
+                        << pt.x << " "
+                        << pt.y  << std::endl;
+    }
+    keypoints_output_.flush();
+  }
+
+  {
+    // 3. output_mask_dir_ 에 dynamic%06d.png, ins%06d.raw 저장.
+    cv::Mat est_dmask = cv::Mat::zeros(synced_marker.rows, synced_marker.cols, CV_8UC1);
+    for(int pth : uniq_labels){
+      bool est_on_dynamic = static_rig->GetExcludedInstances().count(pth);
+      if(est_on_dynamic)
+        est_dmask.setTo(255, synced_marker==pth);
+    }
+
+    char filename[50]; // A buffer to hold the formatted string
+    // Format the string "mask%06d.png"
+    std::sprintf(filename, "/dynamic%06d.png", frame_id);
+    cv::imwrite(output_mask_dir_+std::string(filename), est_dmask);
+
+    std::sprintf(filename, "/ins%06d.raw", frame_id);
+    writeRawImage(synced_marker, output_mask_dir_+std::string(filename) );
+  }
+ 
+  return;
+}
+
+} // namespace NEW_SEG 

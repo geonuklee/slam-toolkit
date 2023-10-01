@@ -237,7 +237,6 @@ void Pipeline::SupplyMappoints(Frame* frame) {
   vinfo_supplied_mappoints_.resize(keypoints.size(), false);
   for(int n=0; n < keypoints.size(); n++){
     Instance* ins = instances[n];
-#if 1
     if(Mappoint* mp = mappoints[n]){
       mp->AddKeyframe(qth, frame); // TODO 모든 qth에 keyframe추가하는건 좋은생각이 아니다.
       continue;
@@ -266,40 +265,6 @@ void Pipeline::SupplyMappoints(Frame* frame) {
     frame->SetMappoint(mp, n);
     ith2mappoints_[mp->GetId()] = mp;
     vinfo_supplied_mappoints_[n] = true;
-#else
-    Qth qth = ins->GetQth();
-    const Eigen::Vector3d Xr
-      = depths[n] <1e-5 ? 1e+2*frame->GetNormalizedPoint(n) : depths[n]*frame->GetNormalizedPoint(n);
-    const Eigen::Vector3d Xq = frame->GetTcq(qth).inverse()*Xr;
-    /* if(Mappoint* mp = mappoints[n]){
-      if(!mp->GetRefFrames().count(qth)){
-        // 기존 mp에, 새로운 qth RigidGroup을 위한  Xr, Xq를 입력
-        mp->SetXr(qth, Xr);
-        mp->AddReferenceKeyframe(qth, frame, Xq);
-      }
-      mp->AddKeyframe(qth, frame);
-      continue;
-    } */
-    const cv::KeyPoint& kpt = keypoints[n];
-    std::list<int> neighbors = frame->SearchRadius(Eigen::Vector2d(kpt.pt.x, kpt.pt.y), min_mpt_distance);
-    bool too_close_mp_exist = false;
-    for(int nn : neighbors){
-      if(mappoints[nn]){
-        too_close_mp_exist=true;
-        break;
-      }
-    } // for nn : neighbors
-    if(too_close_mp_exist)
-      continue;
-    static Ith nMappoints = 0;
-    Mappoint* mp = new Mappoint(nMappoints++, ins);
-    mp->SetXr(qth, Xr);  // new mappoint를 위한 reference frame 지정.
-    mp->AddReferenceKeyframe(qth, frame, Xq);
-    mp->AddKeyframe(qth, frame);
-    frame->SetMappoint(mp, n);
-    ith2mappoints_[mp->GetId()] = mp;
-    vinfo_supplied_mappoints_[n] = true;
-#endif
   } // for n < keypoints.size()
   return;
 }
@@ -317,15 +282,14 @@ void GetMappoints4Qth(Frame* frame,
     Instance* ins = mpt->GetInstance();
     if(!ins)
       continue;
-    //if(!ins->rig_groups_.count(qth))
-    //  continue;
+    if(ins->GetQth() != qth)
+      continue;
     const auto& keyframes = mpt->GetKeyframes();
     if(!keyframes.count(qth))
       continue;
     if(!keyframes.at(qth).count(frame))
       continue;
     mpt->GetXr(qth);
-
     _mappoints.insert(mpt);
   }
   return;
@@ -335,7 +299,6 @@ void GetNeighbors(Frame* keyframe,
                   const Qth& qth,
                   std::set<Mappoint*>   &neighbor_mappoints,
                   std::map<Jth, Frame*> &neighbor_keyframes) {
-  // TODO Covlisiblity 계산도 함께. 
   int min_kf_id = keyframe->GetKfId(qth) - 10; // TODO covisiblity로 대체.
   // 1. frame에서 보이는 mappoints
   GetMappoints4Qth(keyframe, qth, neighbor_mappoints);

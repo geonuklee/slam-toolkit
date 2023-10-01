@@ -128,12 +128,12 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
   const EigenMap<int, g2o::SE3Quat>& gt_Tcws = dataset.GetTcws();
   const std::string config_fn = GetPackageDir()+"/config/kitti_tracking.yaml";
   SegViewer viewer(gt_Tcws, config_fn);
-  bool stop = true;
+  bool stop = false;
+  bool req_exit = true;
 
   const auto& D = dataset.GetCamera()->GetD();
   const StereoCamera* camera = dynamic_cast<const StereoCamera*>(dataset.GetCamera());
   assert(camera);
-
   const auto Trl_ = camera->GetTrl();
   const float base_line = -Trl_.translation().x();
   const float fx = camera->GetK()(0,0);
@@ -145,11 +145,17 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
   std::shared_ptr<Segmentor> segmentor( new SegmentorNew );                               // After  5~10 [milli sec] , with octave 2
   std::shared_ptr<ImageTrackerNew> img_tracker( new ImageTrackerNew);                     // Afte  10~11 [milli sec]
   NEW_SEG::Pipeline pipeline(camera, &extractor);                                             // After   ~50 [milli sec]
-  std::string output_fn = std::string(PACKAGE_DIR)+"/output.txt";
+
+  std::string output_dir = std::string(PACKAGE_DIR)+"/output";
+  if(! std::filesystem::exists(output_dir) )
+    std::filesystem::create_directories(output_dir);
+  std::string output_seq_dir = output_dir+"/"+dataset_type+"_"+seq;
+  if(std::filesystem::exists(output_seq_dir) )
+    std::filesystem::remove_all(output_seq_dir);
+  std::filesystem::create_directories(output_seq_dir);
+  NEW_SEG::EvalWriter eval_writer(output_seq_dir);
 
   char c = 0;
-  g2o::SE3Quat Tc0w;
-  Tc0w.setTranslation(Eigen::Vector3d(0.,0.,1.));
   for(int i=0; i<dataset.Size(); i+=1){
     const cv::Mat rgb   = dataset.GetImage(i, cv::IMREAD_COLOR);
     const cv::Mat rgb_r = dataset.GetRightImage(i, cv::IMREAD_COLOR);
@@ -167,29 +173,30 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     cv::Mat unsync_marker = segmentor->GetMarker();
     img_tracker->Put(gray, unsync_marker, snyc_min_iou);
     const std::vector<cv::Mat>& flow = img_tracker->GetFlow();
-    //if(!flow.empty()) cv::imshow("flow",VisualizeFlow(flow));
     cv::Mat synced_marker = img_tracker->GetSyncedMarker();
     const std::map<int,size_t>& marker_areas = img_tracker->GetMarkerAreas();
-    cv::Mat modified_depth = depth.clone();
-    //modified_depth.setTo(0, depth > 40.);
-    NEW_SEG::Frame* frame = pipeline.Put(gray, modified_depth, flow, synced_marker, marker_areas,
+    NEW_SEG::Frame* frame = pipeline.Put(gray, depth, flow, synced_marker, marker_areas,
                                          gradx, grady, valid_grad, rgb);
     g2o::SE3Quat Tcw = frame->GetTcq(0);
-    /* if( (Tc0w * Tcw.inverse() ).translation().z() < 0.) { // 계산실패.
-      stop=true;
-      cv::waitKey(0);
-    } */
-    Tc0w = Tcw;
     pipeline.Visualize(rgb);
     viewer.SetCurrCamera(i, Tcw);
     //viewer.SetMappoints(frame->Get3dMappoints());
+    std::set<int> uniq_labels;
+    for(auto it : marker_areas)
+      uniq_labels.insert(it.first);
+    cv::Mat gt_insmask = dataset.GetInstanceMask(i);
+    cv::Mat gt_dmask = dataset.GetDynamicMask(i);
+    NEW_SEG::RigidGroup* rig = pipeline.GetRigidGroup(0);
+    eval_writer.Write(frame, rig, synced_marker, uniq_labels, gt_insmask, gt_dmask);
+
     c = cv::waitKey(stop?0:1);
-    if(c == 'q')
+    if(c == 'q'){
+      req_exit = true;
       break;
+    }
     else if (c == 's')
       stop = !stop;
   }
-  bool req_exit = c=='q';
   viewer.Join(req_exit);
   return 1;
 }
@@ -198,7 +205,6 @@ int main(int argc, char** argv){
   //ComputeCacheOfKittiTrackingDataset();
   //TestKittiTrackingDataset();
   //TestPangolin(argc, argv);
-  //TestKittiTrackingOldSLAM(argc, argv);
   TestKittiTrackingNewSLAM(argc, argv);
   return 1;
 }
