@@ -126,6 +126,7 @@ void Pipeline::Visualize(const cv::Mat rgb) {
   Qth qth = 0;
   RigidGroup* rig = qth2rig_groups_.at(qth);
   cv::Mat dst_frame = rgb.clone();
+  std::map<Pth, std::pair<cv::Point2f, float> > pth2center;
 
   cv::Mat outline = vinfo_synced_marker_ < 1;
   cv::Mat dist_from_outline;
@@ -139,6 +140,40 @@ void Pipeline::Visualize(const cv::Mat rgb) {
     }
     cv::distanceTransform(bb,dist_from_outline, cv::DIST_L2, cv::DIST_MASK_3);
   }
+
+  std::set<Pth> excluded;
+  if(vinfo_switch_states_.count(qth)){
+    RigidGroup* rig = qth2rig_groups_.at(qth);
+    const auto& switch_states = vinfo_switch_states_.at(qth);
+    for(auto it : rig->GetExcludedInstances())
+      excluded.insert(it.first);
+    //for(auto it : switch_states){
+    //  if(it.second > switch_threshold_)
+    //    continue;
+    //  excluded.insert(it.first);
+    //}
+  }
+  for(size_t i = 0; i < dst_frame.rows; i++){
+    for(size_t j = 0; j < dst_frame.cols; j++){
+      cv::Vec3b& pixel = dst_frame.at<cv::Vec3b>(i,j);
+      if(outline.at<uchar>(i,j)){
+        pixel[0] = pixel[1] =pixel[2] = 0;
+        continue;
+      }
+      const Pth& pth = vinfo_synced_marker_.at<int32_t>(i,j);
+      const float& r = dist_from_outline.at<float>(i,j);
+      std::pair<cv::Point2f, float>& cp = pth2center[pth];
+      if(r > cp.second){
+        cp.first = cv::Point2f(j,i);
+        cp.second = r;
+      }
+      if(excluded.count(pth)){
+        pixel[0] = pixel[1] = 0;
+        pixel[2] = 255;
+      }
+    }
+  }
+  cv::addWeighted(rgb, .5, dst_frame, .5, 1., dst_frame);
 
   const auto& keypoints = prev_frame_->GetKeypoints();
   const auto& mappoints = prev_frame_->GetMappoints();
@@ -156,14 +191,14 @@ void Pipeline::Visualize(const cv::Mat rgb) {
     sorted_mappoints[mp->GetId()] = mp;
     const bool& supplied_pt = vinfo_supplied_mappoints_[n];
     if(supplied_pt){
-      cv::circle(dst_frame, pt, 3, CV_RGB(255,0,0), 1);
+    //  cv::circle(dst_frame, pt, 3, CV_RGB(255,0,0), 1);
       continue;
     }
     cv::circle(dst_frame, pt, 3, CV_RGB(0,255,0), -1);
     const std::set<Frame*>& keyframes = mp->GetKeyframes(qth);
     for(auto it = keyframes.rbegin(); it!=keyframes.rend(); it++){
       const cv::Point2f& pt_next = (*it)->GetKeypoint( (*it)->GetIndex(mp) ).pt;
-      cv::line(dst_frame, pt, pt_next, CV_RGB(0,0,255), 2);
+      cv::line(dst_frame, pt, pt_next, CV_RGB(0,0,255), 1);
       if(*it != prev_frame_)
         break;
     }
@@ -203,43 +238,6 @@ void Pipeline::Visualize(const cv::Mat rgb) {
     }
   }
   
-  std::set<Pth> excluded;
-  if(vinfo_switch_states_.count(qth)){
-    RigidGroup* rig = qth2rig_groups_.at(qth);
-    const auto& switch_states = vinfo_switch_states_.at(qth);
-    for(auto it : rig->GetExcludedInstances())
-      excluded.insert(it.first);
-    for(auto it : switch_states){
-      if(it.second > switch_threshold_)
-        continue;
-      excluded.insert(it.first);
-    }
-  }
-
-  cv::Mat dst_rig = dst_frame.clone();
-  std::map<Pth, std::pair<cv::Point2f, float> > pth2center;
-  for(size_t i = 0; i < dst_rig.rows; i++){
-    for(size_t j = 0; j < dst_rig.cols; j++){
-      cv::Vec3b& pixel = dst_rig.at<cv::Vec3b>(i,j);
-      if(outline.at<uchar>(i,j)){
-        pixel[0] = pixel[1] =pixel[2] = 0;
-        continue;
-      }
-      const Pth& pth = vinfo_synced_marker_.at<int32_t>(i,j);
-      const float& r = dist_from_outline.at<float>(i,j);
-      std::pair<cv::Point2f, float>& cp = pth2center[pth];
-      if(r > cp.second){
-        cp.first = cv::Point2f(j,i);
-        cp.second = r;
-      }
-      if(excluded.count(pth)){
-        pixel[0] = pixel[1] = 0;
-        pixel[2] = 255;
-      }
-    }
-  }
-  cv::addWeighted(dst_frame, .5, dst_rig, .5, 1., dst_frame);
-
   const auto& switch_states = vinfo_switch_states_[qth];
   const auto& density_scores = vinfo_density_socres_;
   cv::Mat dst_marker = GetColoredLabel(vinfo_synced_marker_);
@@ -249,10 +247,21 @@ void Pipeline::Visualize(const cv::Mat rgb) {
   keyframes[prev_frame_->GetId()] = prev_frame_;
   cv::Mat dst_switchstates = VisualizeSwitchStates(rig, keyframes, switch_states, pth2center, cv::Size(100,600) );
 
-  cv::imshow("dst_curr", dst_frame);
-  cv::imshow("dst_marker", dst_marker);
+  {
+    int fid = prev_frame_->GetId();
+    int kfid = prev_frame_->GetKfId(qth);
+    std::string msg = "KF#" + std::to_string(kfid) + "/ F#" + std::to_string(fid);
+    int fontFace = cv::FONT_HERSHEY_SIMPLEX; double fontScale = .6; int fontThick = 1; int baseline = 0;
+    cv::Size size = cv::getTextSize(msg, fontFace, fontScale, fontThick, &baseline);
+    cv::rectangle(dst_marker, cv::Point(0,0), cv::Point(size.width+10,size.height+10), CV_RGB(150,150,150), -1);
+    cv::putText(dst_marker, msg, cv::Point(5,size.height+5),fontFace, fontScale, CV_RGB(255,0,0), fontThick);
+  }
+
+  cv::Mat dst;
+  cv::vconcat(dst_marker,dst_frame,dst);
+  cv::imshow("dst", dst);
   cv::imshow("patches", dst_patches);
-  cv::imshow("switchstates", dst_switchstates);
+  //cv::imshow("switchstates", dst_switchstates);
   return;
 } // Pipeline::Visualize
 

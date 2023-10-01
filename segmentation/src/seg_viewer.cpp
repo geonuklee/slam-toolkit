@@ -61,7 +61,7 @@ void SegViewer::Run(){
   glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   pangolin::CreatePanel("menu").SetBounds(0.0,1.0,0.0,pangolin::Attach::Pix(175));
   pangolin::Var<bool> menu_follow_camera("menu.Follow Camera",true,true);
-  pangolin::Var<bool> menu_show_points("menu.Show Points",true,true);
+  pangolin::Var<bool> menu_show_points("menu.Show Points",false,true);
 
   bool bFollow = true;
   bool bLocalizationMode = false;
@@ -118,6 +118,9 @@ void SegViewer::Run(){
     else if(!menu_follow_camera && bFollow) {
       bFollow = false;
     }
+
+
+
     d_cam.Activate(s_cam);
     glClearColor(0.0f,0.0f,0.0f,1.0f);
 
@@ -130,6 +133,9 @@ void SegViewer::Run(){
     pangolin::FinishFrame();
     usleep(1e+6/fps_); // micro sec 
   }
+
+  //auto view_mat = s_cam.GetModelViewMatrix();
+  //view_mat.m; // TODO Save?
   pangolin::DestroyWindow(name_);
   return;
 }

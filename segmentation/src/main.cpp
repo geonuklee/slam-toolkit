@@ -139,7 +139,7 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
   const float fx = camera->GetK()(0,0);
   const float fy = camera->GetK()(1,1);
   const float min_disp = 1.;
-  const float snyc_min_iou = .3;
+  const float snyc_min_iou = .5;
   SEG::CvFeatureDescriptor extractor;
   std::shared_ptr<OutlineEdgeDetector> edge_detector( new OutlineEdgeDetectorWithSIMD );  // After   2.5 [milli sec]
   std::shared_ptr<Segmentor> segmentor( new SegmentorNew );                               // After  5~10 [milli sec] , with octave 2
@@ -188,7 +188,6 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     cv::Mat gt_dmask = dataset.GetDynamicMask(i);
     NEW_SEG::RigidGroup* rig = pipeline.GetRigidGroup(0);
     eval_writer.Write(frame, rig, synced_marker, uniq_labels, gt_insmask, gt_dmask);
-
     c = cv::waitKey(stop?0:1);
     if(c == 'q'){
       req_exit = true;

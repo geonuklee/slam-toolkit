@@ -120,7 +120,6 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
                         ) {
   const double focal = camera->GetK()(0,0);
   const double uv_info = 1.;
-  const double invd_info = 1e-8;
   const double rprj_threshold = 5./focal; // rprj error threshold on normalized inmage plane
   const double delta = .5 * rprj_threshold;
   const int n_iter = 10;
@@ -166,8 +165,8 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
     v_mappoints[mp] = v_mp;
   }
   for(auto it_pth : mp_counts){
-    if(it_pth.second < 5) // Tracked mappoints가 너무 적은 instance는 생략.
-      continue;
+    //if(it_pth.second < 5) // Tracked mappoints가 너무 적은 instance는 생략.
+    //  continue;
     auto v_switch = new VertexSwitchLinear();
     v_switch->setId(optimizer.vertices().size() );
     v_switch->setEstimate(1.);
@@ -212,6 +211,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
         swedges_parameter[pth] += 1.;
         g2o::OptimizableGraph::Edge* edge_swtichable = nullptr;
         if(valid_depth) {
+          float invd_info = invd*invd*1e+4;
           auto ptr = new EdgeSwSE3PointXYZDepth(&param, uv_info, invd_info);
           ptr->setVertex(0, v_mp);
           ptr->setVertex(1, v_pose);
@@ -245,6 +245,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
         continue;
       g2o::OptimizableGraph::Edge* edge_filtered = nullptr;
       if(valid_depth) {
+        float invd_info = 1e-8;
         auto ptr = new EdgeSE3PointXYZDepth(&param, uv_info, invd_info);
         ptr->setVertex(0, v_mp);
         ptr->setVertex(1, v_pose);

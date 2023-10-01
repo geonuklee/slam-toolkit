@@ -272,6 +272,7 @@ namespace WithSIMD {
  */
 
 void GetDDEdges(const cv::Mat _depth, cv::Mat& _edge){
+  int sample_offset = 2;
   if(_edge.empty())
     _edge = cv::Mat::zeros(_depth.rows, _depth.cols, CV_8UC1);
 
@@ -285,7 +286,7 @@ void GetDDEdges(const cv::Mat _depth, cv::Mat& _edge){
   const int dstep = int(_depth.step/sizeof(depth[0]));
   const int estep = int(_edge.step/sizeof(edge[0]));
 
-  T m_ratio = _mm256_set1_ps(0.1);
+  T m_ratio = _mm256_set1_ps(0.01);
   T m_d_min = _mm256_set1_ps(0.001); // invalid depth
   T m_th_min = _mm256_set1_ps(2.);
   T m_ps_zero = _mm256_set1_ps(-0.0f); // 주의 :  -0.0f != 0.0f
@@ -293,18 +294,20 @@ void GetDDEdges(const cv::Mat _depth, cv::Mat& _edge){
   T m_dcp, m_ath, m_n1, m_n2, m_n3, m_n4, m_adiff, m_edges, m_results;
   long bit_mask;
   int i, j, k;
-  for( i = 1; i < size.height-1; i++ ) {
+  for( i = 0; i < sample_offset; i++ ) {
     depth += dstep;
     edge += estep;
-    for( j = 1; j < size.width-1-vstep; j+=vstep ) {
+  }
+  for( i = sample_offset; i < size.height-sample_offset; i++ ) {
+    for( j = sample_offset; j < size.width-1-vstep; j+=vstep ) {
       const Real* d_cp = depth + j;
       uchar* e = edge + j;
       m_dcp     = _mm256_loadu_ps(d_cp);
       m_ath     = _mm256_mul_ps(m_dcp, m_ratio);
       m_ath     = _mm256_blendv_ps(m_ath, m_th_min,  _mm256_cmp_ps(m_th_min, m_ath, _CMP_GE_OS) );
 
-      m_n1      = _mm256_loadu_ps(d_cp-1);
-      m_n3      = _mm256_loadu_ps(d_cp-dstep);
+      m_n1      = _mm256_loadu_ps(d_cp-sample_offset);
+      m_n3      = _mm256_loadu_ps(d_cp-sample_offset*dstep);
 
       m_adiff   = _mm256_sub_ps(m_dcp, m_n1);
       m_adiff   = _mm256_andnot_ps(m_ps_zero, m_adiff); // 절대값
@@ -323,6 +326,8 @@ void GetDDEdges(const cv::Mat _depth, cv::Mat& _edge){
       for (k = 0; k < vstep; k++) 
         e[k] = (bit_mask >> k) & 1;
     }
+    depth += dstep;
+    edge += estep;
   }
   return;
 }

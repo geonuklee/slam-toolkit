@@ -23,6 +23,9 @@ from associate import *
 from evaluate_ate import align
 from evaluate_rpe import evaluate_trajectory, transform44
 
+from tabulate import tabulate
+
+
 def plot_xz_traj(ax,stamps,traj,style,color,label):
     """
     Plot a trajectory using matplotlib. 
@@ -37,7 +40,7 @@ def plot_xz_traj(ax,stamps,traj,style,color,label):
     
     """
     stamps.sort()
-    interval = numpy.median([s-t for s,t in zip(stamps[1:],stamps[:-1])])
+    interval = np.median([s-t for s,t in zip(stamps[1:],stamps[:-1])])
     x = []
     z = []
     last = stamps[0]
@@ -74,7 +77,7 @@ class Evaluator:
         self.dataset_type = dataset_type
         self.seq = seq 
 
-    def eval_mask(self):
+    def eval_mask(self, verbose=False):
         csv_file = open(osp.join(self.trarget_dir, "keypoints.txt"), 'r')
         csv_reader = csv.reader(csv_file, delimiter=' ')
         #print(csv_reader.next())
@@ -87,8 +90,10 @@ class Evaluator:
 
         row = csv_reader.next()
         for n in range(N):
-            if n < 30:
-                continue
+            #if n < 30: # TODO
+            #    continue
+            #if n > 32:
+            #    break
             est_ins_fn   = osp.join(self.est_mask_dir,self.est_ins_files[n])
             est_dmask_fn = osp.join(self.est_mask_dir,self.est_dmask_files[n])
             est_dmask = cv2.imread(est_dmask_fn, cv2.IMREAD_GRAYSCALE)
@@ -221,14 +226,19 @@ class Evaluator:
             cv2.imshow("dst", dst)
             if ord('q') == cv2.waitKey():
                 break
-        print("seq %s/%s"% (self.dataset_type,self.seq) )
-        print( "kpt> T/F=%d/%d, nTP=%d, nTN=%d, nFP=%d, nFN=%d"  %(nkptTP+nkptTN, nkptFP+nkptFN,
-                                                                  nkptTP, nkptTN, nkptFP, nkptFN) )
-        print("ins> T/F=%d/%d, nTP=%d, nTN=%d, nFP=%d, nFN=%d"  %(len(TP)+len(TN), len(FP)+len(FN),
-                                                                  len(TP), len(TN), len(FP), len(FN)) )
-        return
+        #print("seq %s/%s"% (self.dataset_type,self.seq) )
+        #print( "kpt> T/F=%d/%d, nTP=%d, nTN=%d, nFP=%d, nFN=%d"  %(nkptTP+nkptTN, nkptFP+nkptFN,
+        #                                                          nkptTP, nkptTN, nkptFP, nkptFN) )
+        #print("ins> T/F=%d/%d, nTP=%d, nTN=%d, nFP=%d, nFN=%d"  %(len(TP)+len(TN), len(FP)+len(FN),
+        #                                                          len(TP), len(TN), len(FP), len(FN)) )
+        table_data = (int(self.seq), "%d/%d"%(nkptTP+nkptTN,nkptFP+nkptFN), nkptTP, nkptTN, nkptFP, nkptFN)
+        headers = ["Seq", "T/F", "TP", "TN", "FP", "FN"]
+        if verbose:
+            table = tabulate([table_data], headers=headers, tablefmt="pretty")
+            print(table)
+        return table_data, headers
 
-    def eval_trj(self):
+    def eval_trj(self, ax=None, verbose=False):
         scale = 1.0
         offset = 0.
         max_difference = 0.02
@@ -246,65 +256,100 @@ class Evaluator:
         est_trj_fn = osp.join(self.trarget_dir, 'trj.txt')
         second_list = read_kittiodom_poses(est_trj_fn)
         matches = associate(first_list, second_list,float(offset),float(max_difference))    
-        first_xyz = numpy.matrix([[float(value) for value in first_list[a][0:3]] for a,b in matches]).transpose()
-        second_xyz = numpy.matrix([[float(value)*float(scale) for value in second_list[b][0:3]] for a,b in matches]).transpose()
+        first_xyz = np.matrix([[float(value) for value in first_list[a][0:3]] for a,b in matches]).transpose()
+        second_xyz = np.matrix([[float(value)*float(scale) for value in second_list[b][0:3]] for a,b in matches]).transpose()
         rot,trans,trans_error = align(second_xyz,first_xyz)
         second_xyz_aligned = rot * second_xyz + trans
         first_stamps = first_list.keys()
         first_stamps.sort()
-        first_xyz_full = numpy.matrix([[float(value) for value in first_list[b][0:3]] for b in first_stamps]).transpose()
+        first_xyz_full = np.matrix([[float(value) for value in first_list[b][0:3]] for b in first_stamps]).transpose()
         second_stamps = second_list.keys()
         second_stamps.sort()
-        second_xyz_full = numpy.matrix([[float(value)*float(scale) for value in second_list[b][0:3]] for b in second_stamps]).transpose()
+        second_xyz_full = np.matrix([[float(value)*float(scale) for value in second_list[b][0:3]] for b in second_stamps]).transpose()
         second_xyz_full_aligned = rot * second_xyz_full + trans
 
-        #print "compared_pose_pairs %d pairs"%(len(trans_error))
-        print "absolute_translational_error.rmse %f m"%numpy.sqrt(numpy.dot(trans_error,trans_error) / len(trans_error))
-        print "absolute_translational_error.mean %f m"%numpy.mean(trans_error)
-        print "absolute_translational_error.median %f m"%numpy.median(trans_error)
-        print "absolute_translational_error.std %f m"%numpy.std(trans_error)
-        print "absolute_translational_error.min %f m"%numpy.min(trans_error)
-        print "absolute_translational_error.max %f m"%numpy.max(trans_error)
+        ate_rmse   = np.sqrt(np.dot(trans_error,trans_error) / len(trans_error))
+        ate_median = np.median(trans_error)
 
         # convert to 4by4 trajectory
         traj_gt = dict([(k,transform44([k]+v)) for k,v in first_list.items()])
         traj_est = dict([(k,transform44([k]+v)) for k,v in second_list.items()])
-        result = evaluate_trajectory(traj_gt, traj_est, max_pairs, fixed_delta, delta, delta_unit, offset, scale)
-        stamps = numpy.array(result)[:,0]
+        result = evaluate_trajectory(traj_gt, traj_est, max_pairs, fixed_delta, 1., 'm', offset, scale)
         trans_error = numpy.array(result)[:,4]
         rot_error = numpy.array(result)[:,5]
-        print("RPE per %.2f[%s] >" %  (delta,delta_unit) )
-        print ("translational_error.rmse %f m"%numpy.sqrt(numpy.dot(trans_error,trans_error) / len(trans_error)))
-        print ("translational_error.mean %f m"%numpy.mean(trans_error))
-        print ("translational_error.median %f m"%numpy.median(trans_error))
-        print ("translational_error.std %f m"%numpy.std(trans_error))
-        print ("translational_error.min %f m"%numpy.min(trans_error))
-        print ("translational_error.max %f m"%numpy.max(trans_error))
-        print ("rotational_error.rmse %f deg"%(numpy.sqrt(numpy.dot(rot_error,rot_error) / len(rot_error)) * 180.0 / numpy.pi))
-        print ("rotational_error.mean %f deg"%(numpy.mean(rot_error) * 180.0 / numpy.pi))
-        print ("rotational_error.median %f deg"%numpy.median(rot_error))
-        print ("rotational_error.std %f deg"%(numpy.std(rot_error) * 180.0 / numpy.pi))
-        print ("rotational_error.min %f deg"%(numpy.min(rot_error) * 180.0 / numpy.pi))
-        print ("rotational_error.max %f deg"%(numpy.max(rot_error) * 180.0 / numpy.pi))
+        rpe_meter_trans_rmse   = np.sqrt(np.dot(trans_error,trans_error) / len(trans_error))
+        rpe_meter_trans_median = np.median(trans_error)
+        rpe_meter_rot_rmse     = np.sqrt(np.dot(rot_error,rot_error) / len(rot_error)) * 180.0 / numpy.pi # [deg]
+        rpe_meter_rot_median   = np.median(rot_error)
 
-        fig = plt.figure()
-        ax = fig.add_subplot(111)
-        plot_xz_traj(ax,first_stamps,first_xyz_full.transpose().A,'-',"black","ground truth")
-        plot_xz_traj(ax,second_stamps,second_xyz_full_aligned.transpose().A,'-',"blue","estimated")
-        ax.legend()
-        ax.set_xlabel('x [m]')
-        ax.set_ylabel('z [m]')
-        ax.axis('equal') #ax.set_aspect('equal', 'box')
-        plt.show(block=True)
-        return
+        headers = ["Seq", "ATE,RMSE [m]","ATE,median [m]", "RPE,RMSE [m/m]", "RPE,median[m/m]", "RPE,RMSE [deg/m]", "RPE,median[deg/m]" ]
+        table_data = (int(self.seq), ate_rmse,ate_median,
+                      rpe_meter_trans_rmse, rpe_meter_trans_median,
+                      rpe_meter_rot_rmse, rpe_meter_rot_median )
+        if verbose:
+            table = tabulate([table_data], headers=headers, tablefmt="pretty")
+            print(table)
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
+            plot_xz_traj(ax,first_stamps,first_xyz_full.transpose().A,'-',"black","ground truth")
+            plot_xz_traj(ax,second_stamps,second_xyz_full_aligned.transpose().A,'-',"blue","estimated")
+            ax.legend()
+            ax.set_xlabel('x [m]')
+            ax.set_ylabel('z [m]')
+            ax.axis('equal') #ax.set_aspect('equal', 'box')
+            plt.show(block=True)
+        if ax is not None:
+            plot_xz_traj(ax,first_stamps,first_xyz_full.transpose().A,'-',"black","ground truth")
+            plot_xz_traj(ax,second_stamps,second_xyz_full_aligned.transpose().A,'-',"blue","estimated")
+            #ax.legend()
+            #ax.set_xlabel('x [m]')
+            #ax.set_ylabel('z [m]')
+            ax.axis('equal') #ax.set_aspect('equal', 'box')
+        return table_data, headers
 
-if __name__ == '__main__':
+def batch_evaluation():
     dataset_path ="./kitti_tracking_dataset"
     output_dir = './output'
-    target = 'training_0003'
-    
+    targets = listdir(output_dir)
+    fig = plt.figure(figsize=(10,10),dpi=100)
+    N, M = 3,3
+    mask_datas, trj_datas = [], []
+    for i,target in enumerate(targets):
+        print("parsing for %s (%d/%d)..." % (target, i, len(targets)) )
+        if not osp.isdir( osp.join(output_dir, target) ):
+            continue
+        try:
+            ax = fig.add_subplot(N,M,i+1)
+        except:
+            import pdb; pdb.set_trace()
+        seq = int( target.split('_')[1] )
+        ax.set_title('Seq %d'%seq)
+        e = Evaluator(dataset_path, output_dir, target)
+        mask_data, mask_header = e.eval_mask(False)
+        trj_data, trj_header   = e.eval_trj(ax=ax,verbose=False)
+        mask_datas.append(mask_data)
+        trj_datas.append(trj_data)
+
+    mask_table = tabulate(mask_datas, headers=mask_header, tablefmt="pretty")
+    trj_table = tabulate(trj_datas, headers=trj_header, tablefmt="pretty")
+    print(mask_table)
+    print(trj_table)
+    #plt.subplots_adjust(top=0.85)
+    plt.tight_layout()
+    plt.show(block=True)
+    with open(osp.join(output_dir,"eval.txt"), "w") as file:
+        file.write(mask_table)
+        file.write(trj_table)
+    fig.savefig(osp.join(output_dir,'trajectories.png'),dpi=100)
+    return
+
+def each_evaluation(target='training_0003'):
+    dataset_path ="./kitti_tracking_dataset"
+    output_dir = './output'
     evaluator = Evaluator(dataset_path, output_dir, target)
-    #evaluator.eval_mask()
+    evaluator.eval_mask()
     evaluator.eval_trj()
 
-
+if __name__ == '__main__':
+    #each_evaluation('training_0003')
+    batch_evaluation()

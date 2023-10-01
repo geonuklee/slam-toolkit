@@ -313,8 +313,10 @@ void Segment(const cv::Mat outline_edges,
     new_labels.setTo(0, ~zero_label);
     label_curr += new_labels;
 
-    if(merge)
+    if(merge){
       Merge(label_curr, n_downsample > 0 ? .4 : .7, keep_boundary); // downsample일 경우, 병목지점의 직접접촉에 비해, edge가 상대적으로 두꺼운거 감안.
+      //Merge(label_curr, .7, keep_boundary); // overseg 유발. 
+    }
 
     if(!final_lv)
       label_curr.setTo(0, edge_next);

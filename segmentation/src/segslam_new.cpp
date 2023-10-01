@@ -15,6 +15,7 @@
 #include <opencv2/imgproc.hpp>
 #include <queue>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace NEW_SEG {
@@ -401,7 +402,7 @@ void Pipeline::FilterOutlierMatches(Frame* curr_frame) {
     errors.sort();
     auto it_median = errors.begin();
     std::advance(it_median, errors.size()/2);
-    err_thresholds[it.first] = 4. * (*it_median);
+    err_thresholds[it.first] = 3. * (*it_median);
   }
   //double err_threshold = 5.;
 
@@ -414,7 +415,7 @@ void Pipeline::FilterOutlierMatches(Frame* curr_frame) {
       continue;
     const double& err = all_errors.at(n);
     const double& err_th = err_thresholds.at(ins);
-    if(err < 10.) // TODO
+    if(err < 5.) // TODO
       continue;
     //if(err < err_th)
     //  continue;
@@ -449,7 +450,7 @@ void SetMatches(std::map<int, std::pair<Mappoint*, double> >& flow_matches,
 }
 
 void CountMappoints(Frame* frame,
-                    std::map<Pth, size_t>& ins2mappoints){
+                    std::map<Pth, std::set<Mappoint*> >& ins2mappoints){
   const auto& keypoints = frame->GetKeypoints();
   const auto& mappoints = frame->GetMappoints();
   for(size_t n=0; n<keypoints.size(); n++){
@@ -461,7 +462,7 @@ void CountMappoints(Frame* frame,
       continue;
     Pth pth = ins->GetId();
     if(pth > -1)
-      ins2mappoints[pth]++;
+      ins2mappoints[pth].insert(mpt);
   }
   return;
 }
@@ -469,7 +470,7 @@ void CountMappoints(Frame* frame,
 Frame* Pipeline::Put(const cv::Mat gray,
                      const cv::Mat depth,
                      const std::vector<cv::Mat>& flow,
-                     const cv::Mat synced_marker,
+                     cv::Mat& synced_marker,
                      const std::map<int,size_t>& marker_areas,
                      const cv::Mat gradx,
                      const cv::Mat grady,
@@ -477,7 +478,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
                      const cv::Mat vis_rgb
                     ) {
   switch_threshold_ = .3;
-  float density_threshold = 1. / 70. / 70.; // NxN pixel에 한개 이상의 mappoint가 존재해야 dense instance
+  float density_threshold = 1. / 50. / 50.; // NxN pixel에 한개 이상의 mappoint가 존재해야 dense instance
 
   vinfo_switch_states_.clear();
   vinfo_neighbor_frames_.clear();
@@ -488,11 +489,13 @@ Frame* Pipeline::Put(const cv::Mat gray,
   const Qth qth_default = 0;
   cv::Mat outline_mask = synced_marker < 1;
   std::map<Qth, std::set<Pth> > segmented_instances;
+  std::set<Pth> new_instances;
   for(const auto& it : marker_areas){
     Instance* ins = nullptr;
     if(!pth2instances_.count(it.first) ){
       ins = new Instance(it.first, qth_default);
       pth2instances_[it.first] = ins;
+      new_instances.insert(ins->GetId());
     }
     else
       ins = pth2instances_.at(it.first);
@@ -535,10 +538,10 @@ Frame* Pipeline::Put(const cv::Mat gray,
 
   static std::map<Qth, std::map<Pth,size_t> > n_consecutiv_switchoff;
   int nq = 1;
-  { // while !segmented_instances.empty()
+  { // for qth in prev_frame
     const Qth qth = 0;
     RigidGroup* rig = qth2rig_groups_.at(qth);
-    bool verbose_track = true;
+    bool verbose_track = false;
     g2o::SE3Quat Tcq = pose_tracker_->GetTcq(camera_, qth_default, curr_frame, verbose_track);
     curr_frame->SetTcq(qth_default, Tcq);
 
@@ -554,16 +557,84 @@ Frame* Pipeline::Put(const cv::Mat gray,
     // ProjectionMatch는 flow로부터 motion update와 pth(k_0)!= pth(k) 인 경우에 예외처리가 팔요해보인다.
     std::map<int, std::pair<Mappoint*, double> > proj_matches = ProjectionMatch(camera_, extractor_, neighbor_mappoints, curr_frame, qth, proj_search_radius);
     SetMatches(flow_matches, proj_matches, curr_frame);
-    FilterOutlierMatches(curr_frame); // LBA 전에 호출되야 accuracy가 높았다.
+  } // For qth \ Do pose_track, projection matches
+  FilterOutlierMatches(curr_frame); // LBA 전에 호출되야 accuracy가 높았다.
+  std::map<Pth, std::set<Mappoint*> > ins2mappoints;
+  CountMappoints(curr_frame, ins2mappoints);
+  for(auto it : ins2mappoints){
+    Instance* ins = pth2instances_.at(it.first);
+    ins->SetMappoints(it.second);
+    //if(ins->GetId()==33)
+    //  std::cout << "pth 33's n(mappoitns) = " << it.second.size() << std::endl;
+  }
 
+  // Merging equivalent instances
+  if(true){
+    std::map<Instance*, Instance*> equivalent_instances; 
+    for(auto it : ins2mappoints){
+      Instance* ins1 = pth2instances_.at(it.first);
+      Pth pth1 = ins1->GetId();
+      std::map<Instance*,size_t> ins0counts;
+      for(Mappoint* mp : it.second)
+        ins0counts[mp->GetInstance()]++;
+      Instance* best_ins = nullptr;
+      size_t best_count = 0;
+      for(auto it : ins0counts){
+        if(it.second < best_count)
+          continue;
+        if(it.first->GetMappoints().empty())
+          continue;
+        best_count = it.second;
+        best_ins = it.first;
+      }
+      if(!best_ins)
+        continue;
+      float n1(best_count);
+      float n2(best_ins->GetMappoints().size());
+      float pseudo_recall = n1/ n2;
+      if(ins1 == best_ins)
+        continue;
+      if(pseudo_recall > .5){
+        printf("Merging for recall(%d/%d) = %.3f\n", ins1->GetId(), best_ins->GetId(), pseudo_recall);
+        equivalent_instances[ins1] = best_ins; // Convert ins1 -> best_ins
+      }
+    }
+    for(auto it : equivalent_instances){
+      Pth pth1 = it.first->GetId();
+      Pth pth0 = it.second->GetId();
+      synced_marker.setTo(pth0, synced_marker==pth1);
+      pth2instances_.erase(pth1);
+      delete it.first;
+      ins2mappoints[pth0] = ins2mappoints.at(pth1);
+      ins2mappoints.erase(pth1);
+    }
+  }
+
+  std::map<Pth,float>& density_scores = vinfo_density_socres_;
+  for(const auto& it : marker_areas){
+    const Pth& pth = it.first;
+    const size_t& area = it.second;
+    float npoints = ins2mappoints.count(pth) ? ins2mappoints.at(pth).size() : 0.;
+    float dense = npoints > 0 ? float(npoints) / float(area) : 0.;
+    density_scores[pth] = dense / density_threshold;
+  }
+
+  { // while !segmented_instances.empty()
+    const Qth qth = 0;
+    RigidGroup* rig = qth2rig_groups_.at(qth);
+    std::set<Mappoint*>     & neighbor_mappoints = vinfo_neighbor_mappoints_[qth];
+    std::map<Jth, Frame* >  & neighbor_frames    = vinfo_neighbor_frames_[qth];
     std::set<Pth> fixed_instances;
+    if(qth == 0) // TDDO dominant_qth
+      for(auto it_density : density_scores)
+        if(it_density.second < 1.)
+          fixed_instances.insert(it_density.first);
+
     bool vis_verbose = false;
     std::map<Pth,float>& switch_states = vinfo_switch_states_[qth];
     switch_states\
       = mapper_->ComputeLBA(camera_,qth, neighbor_mappoints, neighbor_frames, curr_frame, prev_frame_, fixed_instances, gradx, grady, valid_grad, vis_verbose);
 
-    std::map<Pth, size_t> ins2mappoints;
-    CountMappoints(curr_frame, ins2mappoints);
     std::set<Pth> instances4next_rig;
     std::set<Pth> switchoff_instances;
     if(!n_consecutiv_switchoff.count(qth))
@@ -587,14 +658,16 @@ Frame* Pipeline::Put(const cv::Mat gray,
     size_t n_mappoints4next_rig = 0;
     for(Pth pth : instances4next_rig)
       if(ins2mappoints.count(pth))// mp 없는 instance도 있으니까.
-         n_mappoints4next_rig += ins2mappoints.at(pth);
+         n_mappoints4next_rig += ins2mappoints.at(pth).size();
   }
 
   std::set<Qth> need_keyframe = FrameNeedsToBeKeyframe(curr_frame);
   for(const Qth& qth : need_keyframe){
+    if(curr_frame->GetKfId(qth) > -1)
+      continue;
+    const int kf_id = keyframes_[qth].size();
+    curr_frame->SetKfId(qth, kf_id );
     keyframes_[qth][curr_frame->GetId()] = curr_frame;
-    if(keyframes_.at(qth).size() > 1)// ComputLBA 를 포함한 while loop문에서 이미 추가된 keyframe.
-      curr_frame->SetKfId(qth, keyframes_[qth].size() );
   }
   if(!need_keyframe.empty())
     SupplyMappoints(curr_frame);
