@@ -196,6 +196,7 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     else if (c == 's')
       stop = !stop;
   }
+  eval_writer.WriteInstances( pipeline.GetInstances() );
   viewer.Join(req_exit);
   return 1;
 }

@@ -50,11 +50,14 @@ public:
              const cv::Mat gt_dmask
              );
 
+  void WriteInstances(const std::map<Pth, Instance*>& instances);
+
 private:
   const std::string output_seq_dir_;
   const std::string output_mask_dir_;
   std::ofstream trj_output_;
   std::ofstream keypoints_output_;
+  std::ofstream instances_output_;
 };
 
 };

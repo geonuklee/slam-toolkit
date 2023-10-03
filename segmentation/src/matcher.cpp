@@ -143,10 +143,8 @@ std::map<int, std::pair<Mappoint*,double> > ProjectionMatch(const Camera* camera
       // LoopCloser::CombineNeighborMappoints()에서 발생하는 경우.
       continue;
     }
-    const Eigen::Vector3d Xr = mp->GetXr(qth);
-    Frame* ref = mp->GetRefFrame(qth);
-    const g2o::SE3Quat& Trq = ref->GetTcq(qth);
-    const Eigen::Vector3d Xc = curr_frame->GetTcq(qth) * Trq.inverse() * Xr;
+    const Eigen::Vector3d Xq = mp->GetXq(qth);
+    const Eigen::Vector3d Xc = curr_frame->GetTcq(qth) * Xq;
     if(Xc.z() < 0.)
       continue;
     Eigen::Vector2d uv = camera->Project(Xc);

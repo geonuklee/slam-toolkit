@@ -1,4 +1,5 @@
 #include "segslam.h"
+#include "common.h"
 #include "Eigen/src/Core/Map.h"
 #include "Eigen/src/Core/Matrix.h"
 #include "camera.h"
@@ -8,11 +9,14 @@
 #include "seg.h"
 #include "util.h"
 #include <g2o/types/slam3d/se3quat.h>
+/*
+#include <opencv2/calib3d.hpp>
 #include <opencv2/core.hpp>
 #include <opencv2/core/mat.hpp>
 #include <opencv2/core/types.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
+*/
 #include <queue>
 #include <string>
 #include <utility>
@@ -142,7 +146,7 @@ void Frame::ExtractAndNormalizeKeypoints(const cv::Mat gray,
   return;
 }
 
-void Frame::SetKfId(const Qth qth, int kf_id) { 
+void Frame::SetKfId(const Qth qth, int kf_id) {
   if(kf_id_.count(qth))
     throw  -1;
   kf_id_[qth] = kf_id;
@@ -201,7 +205,7 @@ bool RigidGroup::ExcludeInstance(Instance *ins) {
   const Pth pth = ins->GetId();
   excluded_instances_[pth] = ins;
   /* bool count = included_instances_.count(pth);
-  if(count) 
+  if(count)
     included_instances_.erase(pth);
   if(ins->rig_groups_.count(id_))
     ins->rig_groups_.erase(id_);
@@ -216,7 +220,7 @@ Pipeline::Pipeline(const Camera* camera,
                    SEG::FeatureDescriptor*const extractor
                   )
   :extractor_(extractor),
-  camera_(camera), 
+  camera_(camera),
   prev_frame_(nullptr),
   pose_tracker_(new PoseTracker)
 {
@@ -290,7 +294,7 @@ void GetMappoints4Qth(Frame* frame,
       continue;
     if(!keyframes.at(qth).count(frame))
       continue;
-    mpt->GetXr(qth);
+    //mpt->GetXr(qth);
     _mappoints.insert(mpt);
   }
   return;
@@ -361,6 +365,102 @@ std::set<Qth> Pipeline::FrameNeedsToBeKeyframe(Frame* curr_frame) const {
   return need_keyframes;
 }
 
+void Pipeline::NewFilterOutlierMatches(Frame* curr_frame) {
+  bool use_extrinsic_guess = true;
+  int iterations = 40;
+  double rprj_threshold = 5.; // rpj 2->?, rpj 10->ATE 10.26[m], TP|FN 12267,10623
+  double confidence = .95;
+  int flag = cv::SOLVEPNP_ITERATIVE;
+  cv::Mat K = cvt2cvMat(camera_->GetK() );
+  cv::Mat D = cvt2cvMat(camera_->GetD() );
+  const std::vector<Mappoint*>&    _mappoints = curr_frame->GetMappoints();
+  const std::vector<cv::KeyPoint>& _keypoints = curr_frame->GetKeypoints();
+  const std::vector<Instance*>&    _instances = curr_frame->GetInstances();
+  const std::vector<float>&        _depths    = curr_frame->GetMeasuredDepths();
+  struct Points {
+    cv::Point2f pt2d;
+    cv::Point3f pt3d;
+    double z;
+    int kpt_index;
+  };
+  std::map<Instance*,std::list<Points> > segmented_points;
+  for(int n =0; n < _mappoints.size(); n++){
+    Mappoint* mp = _mappoints.at(n);
+    if(!mp)
+      continue;
+    Instance* ins = _instances.at(n);
+    if(!ins)
+      continue;
+    Qth qth = ins->GetQth();
+    if(qth < 0)
+      continue;
+    Eigen::Vector3d Xq = mp->GetXq(qth);
+    Points pt;
+    pt.pt2d = _keypoints.at(n).pt;
+    pt.pt3d.x = Xq.x();
+    pt.pt3d.y = Xq.y();
+    pt.pt3d.z = Xq.z();
+    pt.kpt_index = n;
+    pt.z = _depths[n];
+    segmented_points[ins].push_back(pt);
+  }
+  std::vector<cv::Point3f> obj_points;
+  std::vector<cv::Point2f> img_points;
+  std::vector<int> kpt_indices;
+  std::vector<double> depths;
+  obj_points.reserve(_mappoints.size());
+  img_points.reserve(_mappoints.size());
+  kpt_indices.reserve(_mappoints.size());
+  depths.reserve(_mappoints.size());
+  for(auto it : segmented_points){
+    const g2o::SE3Quat& Tcq = curr_frame->GetTcq(it.first->GetQth());
+    int N = it.second.size();
+    if(N < 4){
+      for(const auto& it_pt : it.second){
+        Eigen::Vector3d Xc = Tcq * Eigen::Vector3d(it_pt.pt3d.x,it_pt.pt3d.y,it_pt.pt3d.z);
+        Eigen::Vector2d rprj_uv = camera_->Project(Xc);
+        const Eigen::Vector2d uv(it_pt.pt2d.x, it_pt.pt2d.y);
+        double err = (uv-rprj_uv).norm();
+        bool z_err = std::abs(it_pt.z-Xc[2])/it_pt.z > .5;
+        if(err > rprj_threshold || z_err)
+          curr_frame->EraseMappoint(it_pt.kpt_index);
+      }
+      continue;
+    }
+    cv::Mat R = cvt2cvMat(Tcq.rotation().matrix());
+    const auto t = Tcq.translation();
+    cv::Mat tvec, rvec, inliers;
+    tvec = ( cv::Mat_<double>(3,1) <<t.x(), t.y(), t.z());
+    cv::Rodrigues(R, rvec);
+
+    obj_points.clear();
+    img_points.clear();
+    kpt_indices.clear();
+    depths.clear();
+    for(const auto& it_pt : it.second){
+      obj_points.push_back(it_pt.pt3d);
+      img_points.push_back(it_pt.pt2d);
+      kpt_indices.push_back(it_pt.kpt_index);
+      depths.push_back(it_pt.z);
+    }
+    cv::solvePnPRansac(obj_points, img_points, K, D, rvec, tvec,
+                       use_extrinsic_guess, iterations, rprj_threshold, confidence, inliers);
+    cv::Rodrigues(rvec,R);
+    g2o::SE3Quat _Tcq(cvt2Eigen(R), cvt2Eigen(tvec) );
+    for(int i=0; i < inliers.rows; i++){
+      if( inliers.at<uchar>(i,0)) 
+        continue;
+      //const auto& _obj = obj_points[i];
+      //Eigen::Vector3d Xc = Tcq*Eigen::Vector3d(_obj.x,_obj.y,_obj.z);
+      //bool z_err = std::abs(depths[i]-Xc[2])/depths[i] > .5;
+      //if( inliers.at<uchar>(i,0) && !z_err)
+      //  continue;
+      curr_frame->EraseMappoint(kpt_indices.at(i)); // keyframe이 아니라서 mp->RemoveKeyframe 등을 호출하지 않는다.
+    }
+  }
+  return;
+}
+
 void Pipeline::FilterOutlierMatches(Frame* curr_frame) {
   const std::vector<Mappoint*>&    mappoints = curr_frame->GetMappoints();
   const std::vector<cv::KeyPoint>& keypoints = curr_frame->GetKeypoints();
@@ -383,11 +483,7 @@ void Pipeline::FilterOutlierMatches(Frame* curr_frame) {
       continue;
     }
     const g2o::SE3Quat& Tcq = curr_frame->GetTcq(qth);
-
-    const Eigen::Vector3d Xr = mp->GetXr(qth);
-    Frame* ref = mp->GetRefFrame(qth);
-    const g2o::SE3Quat& Trq = ref->GetTcq(qth);
-    const Eigen::Vector3d Xc = Tcq * Trq.inverse() * Xr;
+    const Eigen::Vector3d Xc = Tcq * mp->GetXq(qth);
     Eigen::Vector2d rprj_uv = camera_->Project(Xc);
     const auto& pt = keypoints.at(n).pt;
     const Eigen::Vector2d uv(pt.x, pt.y);
@@ -415,7 +511,7 @@ void Pipeline::FilterOutlierMatches(Frame* curr_frame) {
       continue;
     const double& err = all_errors.at(n);
     const double& err_th = err_thresholds.at(ins);
-    if(err < 5.) // TODO
+    if(err < 10.) // TODO
       continue;
     //if(err < err_th)
     //  continue;
@@ -463,6 +559,49 @@ void CountMappoints(Frame* frame,
     Pth pth = ins->GetId();
     if(pth > -1)
       ins2mappoints[pth].insert(mpt);
+  }
+  return;
+}
+
+void Pipeline::MergeEquivalentInstances(std::map<Pth, std::set<Mappoint*> >& ins2mappoints,
+                                        cv::Mat& synced_marker) {
+  std::map<Instance*, Instance*> equivalent_instances;
+  for(auto it : ins2mappoints){
+    Instance* ins1 = pth2instances_.at(it.first);
+    Pth pth1 = ins1->GetId();
+    std::map<Instance*,size_t> ins0counts;
+    for(Mappoint* mp : it.second)
+      ins0counts[mp->GetInstance()]++;
+    Instance* best_ins = nullptr;
+    size_t best_count = 0;
+    for(auto it : ins0counts){
+      if(it.second < best_count)
+        continue;
+      if(it.first->GetMappoints().empty())
+        continue;
+      best_count = it.second;
+      best_ins = it.first;
+    }
+    if(!best_ins)
+      continue;
+    float n1(best_count);
+    float n2(best_ins->GetMappoints().size());
+    float pseudo_recall = n1/ n2;
+    if(ins1 == best_ins)
+      continue;
+    if(pseudo_recall > .5){
+      printf("Merging for recall(%d/%d) = %.3f\n", ins1->GetId(), best_ins->GetId(), pseudo_recall);
+      equivalent_instances[ins1] = best_ins; // Convert ins1 -> best_ins
+    }
+  }
+  for(auto it : equivalent_instances){
+    Pth pth1 = it.first->GetId();
+    Pth pth0 = it.second->GetId();
+    synced_marker.setTo(pth0, synced_marker==pth1);
+    pth2instances_.erase(pth1);
+    delete it.first;
+    ins2mappoints[pth0] = ins2mappoints.at(pth1);
+    ins2mappoints.erase(pth1);
   }
   return;
 }
@@ -520,7 +659,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
     curr_frame->SetKfId(qth_default,0);
     prev_frame_ = curr_frame;
     return curr_frame;
-  } 
+  }
 
   // intiial pose prediction
   const auto& prev_Tcqs = prev_frame_->GetTcqs();
@@ -558,57 +697,16 @@ Frame* Pipeline::Put(const cv::Mat gray,
     std::map<int, std::pair<Mappoint*, double> > proj_matches = ProjectionMatch(camera_, extractor_, neighbor_mappoints, curr_frame, qth, proj_search_radius);
     SetMatches(flow_matches, proj_matches, curr_frame);
   } // For qth \ Do pose_track, projection matches
-  FilterOutlierMatches(curr_frame); // LBA 전에 호출되야 accuracy가 높았다.
+  FilterOutlierMatches(curr_frame); // 이게 trj는 더 정확한게 모순.
+  //NewFilterOutlierMatches(curr_frame);
+
   std::map<Pth, std::set<Mappoint*> > ins2mappoints;
   CountMappoints(curr_frame, ins2mappoints);
   for(auto it : ins2mappoints){
     Instance* ins = pth2instances_.at(it.first);
     ins->SetMappoints(it.second);
-    //if(ins->GetId()==33)
-    //  std::cout << "pth 33's n(mappoitns) = " << it.second.size() << std::endl;
   }
-
-  // Merging equivalent instances
-  if(true){
-    std::map<Instance*, Instance*> equivalent_instances; 
-    for(auto it : ins2mappoints){
-      Instance* ins1 = pth2instances_.at(it.first);
-      Pth pth1 = ins1->GetId();
-      std::map<Instance*,size_t> ins0counts;
-      for(Mappoint* mp : it.second)
-        ins0counts[mp->GetInstance()]++;
-      Instance* best_ins = nullptr;
-      size_t best_count = 0;
-      for(auto it : ins0counts){
-        if(it.second < best_count)
-          continue;
-        if(it.first->GetMappoints().empty())
-          continue;
-        best_count = it.second;
-        best_ins = it.first;
-      }
-      if(!best_ins)
-        continue;
-      float n1(best_count);
-      float n2(best_ins->GetMappoints().size());
-      float pseudo_recall = n1/ n2;
-      if(ins1 == best_ins)
-        continue;
-      if(pseudo_recall > .5){
-        printf("Merging for recall(%d/%d) = %.3f\n", ins1->GetId(), best_ins->GetId(), pseudo_recall);
-        equivalent_instances[ins1] = best_ins; // Convert ins1 -> best_ins
-      }
-    }
-    for(auto it : equivalent_instances){
-      Pth pth1 = it.first->GetId();
-      Pth pth0 = it.second->GetId();
-      synced_marker.setTo(pth0, synced_marker==pth1);
-      pth2instances_.erase(pth1);
-      delete it.first;
-      ins2mappoints[pth0] = ins2mappoints.at(pth1);
-      ins2mappoints.erase(pth1);
-    }
-  }
+  // MergeEquivalentInstances(ins2mappoints, synced_marker);
 
   std::map<Pth,float>& density_scores = vinfo_density_socres_;
   for(const auto& it : marker_areas){

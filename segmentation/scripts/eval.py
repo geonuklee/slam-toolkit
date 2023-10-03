@@ -77,11 +77,15 @@ class Evaluator:
         self.dataset_type = dataset_type
         self.seq = seq 
 
-    def eval_mask(self, verbose=False):
+    def eval_mask(self):
+        f_instances = open(osp.join(self.trarget_dir, "instances.txt"), 'r')
+        ins_reader = csv.reader(f_instances, delimiter=' ')
+        eid2qth = {}
+        for pth, qth in ins_reader:
+            eid2qth[int(pth)] = int(qth)
+
         csv_file = open(osp.join(self.trarget_dir, "keypoints.txt"), 'r')
         csv_reader = csv.reader(csv_file, delimiter=' ')
-        #print(csv_reader.next())
-        #import pdb; pdb.set_trace()
         font_face, font_scale,font_thickness = cv2.FONT_HERSHEY_SIMPLEX, .5, 1
         N = len(self.est_ins_files)
 
@@ -133,9 +137,13 @@ class Evaluator:
             gid2ondynamic, eid2ondynamic = {}, {-1:False}
             for gid, xy in gt_cp_locations.items():
                 gid2ondynamic[gid] = gt_dmask[xy[1],xy[0]] > 0
-            est_cp_locations, est_cp_distances = GetMarkerCenters(est_ins)
-            for eid, xy in est_cp_locations.items():
-                eid2ondynamic[eid] = est_dmask[xy[1],xy[0]] > 0
+
+            for eid in eids: # mask는 dynamic 판정이 뒤늦게 일어나므로, LBA widnow가 반영함에도, FN로 판정되는 케이스가 있음. 
+                if eid > 0:
+                    eid2ondynamic[eid] = eid2qth[eid] != 0
+            #est_cp_locations, est_cp_distances = GetMarkerCenters(est_ins)
+            #for eid, xy in est_cp_locations.items():
+            #    eid2ondynamic[eid] = est_dmask[xy[1],xy[0]] > 0
             """
             * confidence가 아니라서 mAP를 구하기 힘들다. minIoU로 TP,FP,FN만 구하자.
             * keypoints의 ins_id 를 기준으로, 
@@ -201,44 +209,33 @@ class Evaluator:
             TP += tps; TN += tns; FP += fps; FN += fns;
             if n % 10 == 0:
                 print( "%d/%d"%(n, N) )
-            verbose = False
-            if not verbose:
-                continue
-            if not hasattr(self, 'dataset'):
-                self.dataset = KittiTrackingDataset(self.dataset_dir,seq)
-            rgb = self.dataset[n][1]
-            dst = np.zeros(rgb.shape, rgb.dtype)
-            cases = {"TP":tps, "FP":fps, "FN":fns}
-            for case, infos in cases.items():
-                for _, gid, _ in infos:
-                    cp = gt_cp_locations[gid]
-                    (txt_width, txt_height), _ = cv2.getTextSize(case,font_face, font_scale,font_thickness)
-                    if case == "TP":
-                        dst[gt_ins==gid,1] = 255
-                    else:
-                        dst[gt_ins==gid,2] = 255
-                    cv2.rectangle(dst, (cp[0], cp[1]-txt_height), (cp[0]+txt_width,cp[1]), (255,255,255), -1)
-                    cv2.putText(dst, case, cp, font_face,font_scale,(0,0,0),font_thickness)
-            #cv2.imshow("rgb", rgb)
-            #cv2.imshow("est_ins", GetColoredLabel(est_ins))
-            #cv2.imshow("gt_dmask", gt_dmask)
-            cv2.imshow("est_dmask", est_dmask)
-            cv2.imshow("dst", dst)
-            if ord('q') == cv2.waitKey():
-                break
-        #print("seq %s/%s"% (self.dataset_type,self.seq) )
-        #print( "kpt> T/F=%d/%d, nTP=%d, nTN=%d, nFP=%d, nFN=%d"  %(nkptTP+nkptTN, nkptFP+nkptFN,
-        #                                                          nkptTP, nkptTN, nkptFP, nkptFN) )
-        #print("ins> T/F=%d/%d, nTP=%d, nTN=%d, nFP=%d, nFN=%d"  %(len(TP)+len(TN), len(FP)+len(FN),
-        #                                                          len(TP), len(TN), len(FP), len(FN)) )
+            #if not hasattr(self, 'dataset'):
+            #    self.dataset = KittiTrackingDataset(self.dataset_dir,seq)
+            #rgb = self.dataset[n][1]
+            #dst = np.zeros(rgb.shape, rgb.dtype)
+            #cases = {"TP":tps, "FP":fps, "FN":fns}
+            #for case, infos in cases.items():
+            #    for _, gid, _ in infos:
+            #        cp = gt_cp_locations[gid]
+            #        (txt_width, txt_height), _ = cv2.getTextSize(case,font_face, font_scale,font_thickness)
+            #        if case == "TP":
+            #            dst[gt_ins==gid,1] = 255
+            #        else:
+            #            dst[gt_ins==gid,2] = 255
+            #        cv2.rectangle(dst, (cp[0], cp[1]-txt_height), (cp[0]+txt_width,cp[1]), (255,255,255), -1)
+            #        cv2.putText(dst, case, cp, font_face,font_scale,(0,0,0),font_thickness)
+            ##cv2.imshow("rgb", rgb)
+            ##cv2.imshow("est_ins", GetColoredLabel(est_ins))
+            ##cv2.imshow("gt_dmask", gt_dmask)
+            #cv2.imshow("est_dmask", est_dmask)
+            #cv2.imshow("dst", dst)
+            #if ord('q') == cv2.waitKey():
+            #    break
         table_data = (int(self.seq), "%d/%d"%(nkptTP+nkptTN,nkptFP+nkptFN), nkptTP, nkptTN, nkptFP, nkptFN)
         headers = ["Seq", "T/F", "TP", "TN", "FP", "FN"]
-        if verbose:
-            table = tabulate([table_data], headers=headers, tablefmt="pretty")
-            print(table)
         return table_data, headers
 
-    def eval_trj(self, ax=None, verbose=False):
+    def eval_trj(self, ax=None):
         scale = 1.0
         offset = 0.
         max_difference = 0.02
@@ -286,38 +283,27 @@ class Evaluator:
         table_data = (int(self.seq), ate_rmse,ate_median,
                       rpe_meter_trans_rmse, rpe_meter_trans_median,
                       rpe_meter_rot_rmse, rpe_meter_rot_median )
-        if verbose:
-            table = tabulate([table_data], headers=headers, tablefmt="pretty")
-            print(table)
-            fig = plt.figure()
-            ax = fig.add_subplot(111)
-            plot_xz_traj(ax,first_stamps,first_xyz_full.transpose().A,'-',"black","ground truth")
-            plot_xz_traj(ax,second_stamps,second_xyz_full_aligned.transpose().A,'-',"blue","estimated")
-            ax.legend()
-            ax.set_xlabel('x [m]')
-            ax.set_ylabel('z [m]')
-            ax.axis('equal') #ax.set_aspect('equal', 'box')
-            plt.show(block=True)
         if ax is not None:
             plot_xz_traj(ax,first_stamps,first_xyz_full.transpose().A,'-',"black","ground truth")
             plot_xz_traj(ax,second_stamps,second_xyz_full_aligned.transpose().A,'-',"blue","estimated")
-            #ax.legend()
-            #ax.set_xlabel('x [m]')
-            #ax.set_ylabel('z [m]')
-            ax.axis('equal') #ax.set_aspect('equal', 'box')
-        return table_data, headers
+            ax.set_xlabel('x [m]')
+            ax.set_ylabel('z [m]')
+            ax.axis('equal')
+        return table_data, headers 
 
 def batch_evaluation():
     dataset_path ="./kitti_tracking_dataset"
     output_dir = './output'
     targets = listdir(output_dir)
-    fig = plt.figure(figsize=(10,10),dpi=100)
-    N, M = 3,3
+    targets = [x for x in targets if osp.isdir( osp.join(output_dir, x) )]
+    targets = sorted(targets, key=lambda x: int(x.split('_')[1]) )
+    fig = plt.figure(figsize=(8,12),dpi=100)
+    plt.tight_layout()
+    fig.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.1, wspace=0.4, hspace=1.)
+    N, M = 4,6
     mask_datas, trj_datas = [], []
     for i,target in enumerate(targets):
         print("parsing for %s (%d/%d)..." % (target, i, len(targets)) )
-        if not osp.isdir( osp.join(output_dir, target) ):
-            continue
         try:
             ax = fig.add_subplot(N,M,i+1)
         except:
@@ -326,30 +312,47 @@ def batch_evaluation():
         ax.set_title('Seq %d'%seq)
         e = Evaluator(dataset_path, output_dir, target)
         mask_data, mask_header = e.eval_mask(False)
-        trj_data, trj_header   = e.eval_trj(ax=ax,verbose=False)
         mask_datas.append(mask_data)
+        trj_data, trj_header = e.eval_trj(ax=ax)
         trj_datas.append(trj_data)
 
+        extent = ax.get_window_extent().transformed(fig.dpi_scale_trans.inverted())
+        ax.axis('equal')
+        ax.set_aspect('equal', 'box')
+        ax.figure.savefig(osp.join(output_dir,'trj_%d.png'%seq), dpi=100, bbox_inches=extent.expanded(1.6,1.6),)
+    fig.savefig(osp.join(output_dir,'trajectories.png'),dpi=100)
     mask_table = tabulate(mask_datas, headers=mask_header, tablefmt="pretty")
-    trj_table = tabulate(trj_datas, headers=trj_header, tablefmt="pretty")
     print(mask_table)
+    trj_table = tabulate(trj_datas, headers=trj_header, tablefmt="pretty")
     print(trj_table)
-    #plt.subplots_adjust(top=0.85)
-    plt.tight_layout()
-    plt.show(block=True)
     with open(osp.join(output_dir,"eval.txt"), "w") as file:
         file.write(mask_table)
         file.write(trj_table)
-    fig.savefig(osp.join(output_dir,'trajectories.png'),dpi=100)
+    with open(osp.join(output_dir,'eval.pkl'), 'wb') as f:
+        pickle.dump({'mask_table':mask_table, 'trj_table':trj_table}, f)
+    print("Done")
+    #plt.show(block=True)
     return
 
 def each_evaluation(target='training_0003'):
     dataset_path ="./kitti_tracking_dataset"
     output_dir = './output'
-    evaluator = Evaluator(dataset_path, output_dir, target)
-    evaluator.eval_mask()
-    evaluator.eval_trj()
+    e = Evaluator(dataset_path, output_dir, target)
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    mask_data, mask_header = e.eval_mask()
+    trj_data, trj_header = e.eval_trj(ax=ax)
+    mask_table = tabulate([mask_data], headers=mask_header, tablefmt="pretty")
+    trj_table = tabulate([trj_data], headers=trj_header, tablefmt="pretty")
+    print(mask_table)
+    print(trj_table)
+    plt.show(block=True)
 
 if __name__ == '__main__':
-    #each_evaluation('training_0003')
-    batch_evaluation()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('target', help='training_00xx or test_00xx or batch')
+    args = parser.parse_args()
+    if args.target == 'batch':
+        batch_evaluation()
+    else:
+        each_evaluation(args.target)

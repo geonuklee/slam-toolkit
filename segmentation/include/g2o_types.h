@@ -125,7 +125,7 @@ public:
 };
 
 inline double GetInverse(const double& z) {
-  const double min_z = 1.;
+  const double min_z = 1e-4;
   // min_z 을 너무 작게 설정하면,
   // LM optimization이 수렴 안하는 문제가 발생한다.
   if(z < min_z)

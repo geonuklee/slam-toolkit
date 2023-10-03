@@ -14,6 +14,10 @@
 #include <opencv2/core/types.hpp>
 #include <opencv2/imgproc.hpp>
 
+inline float GetInvdInfo(const float& invd){
+  return invd*invd*1e+2;
+}
+
 namespace NEW_SEG {
 PoseTracker::PoseTracker() {
 }
@@ -71,8 +75,8 @@ g2o::SE3Quat PoseTracker::GetTcq(const Camera* camera,
     Eigen::Vector3d uvi = normalized_points[n];
     g2o::OptimizableGraph::Edge* edge = nullptr;
     if(z >  MIN_NUM){
-      auto ptr = new EdgeSE3PointXYZDepth(&param, uv_info, invd*invd_info);
-      uvi[2] = 1. / z;
+      auto ptr = new EdgeSE3PointXYZDepth(&param, uv_info, GetInvdInfo(invd));
+      uvi[2] = invd;
       ptr->setVertex(0, v_mp);
       ptr->setVertex(1, v_pose);
       ptr->setMeasurement( uvi );
@@ -181,6 +185,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
     if(fixed_instances.count(it_pth.first))
       v_switch->setFixed(true);
   }
+  std::map<Pth, std::list<g2o::OptimizableGraph::Edge*> > filtered_edges;
   for(auto it_frame : frames){
     Frame* frame = it_frame.second;
     Jth jth = it_frame.first;
@@ -206,13 +211,14 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
       Instance* ins = mp->GetInstance();
       Pth pth = ins ? ins->GetId() : -1;
       bool valid_depth = z > MIN_NUM;
-      if(v_switches.count(pth) ){
+      bool switchable = v_switches.count(pth) ;
+      if(switchable ){
         VertexSwitchLinear* v_switch = v_switches.at(pth);
         swedges_parameter[pth] += 1.;
         g2o::OptimizableGraph::Edge* edge_swtichable = nullptr;
         if(valid_depth) {
-          float invd_info = invd*invd*1e+4;
-          auto ptr = new EdgeSwSE3PointXYZDepth(&param, uv_info, invd_info);
+          //float invd_info = 1e-4;
+          auto ptr = new EdgeSwSE3PointXYZDepth(&param, uv_info, GetInvdInfo(invd));
           ptr->setVertex(0, v_mp);
           ptr->setVertex(1, v_pose);
           ptr->setVertex(2, v_switch);
@@ -245,7 +251,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
         continue;
       g2o::OptimizableGraph::Edge* edge_filtered = nullptr;
       if(valid_depth) {
-        float invd_info = 1e-8;
+        float invd_info = GetInvdInfo(invd); // 10.7
         auto ptr = new EdgeSE3PointXYZDepth(&param, uv_info, invd_info);
         ptr->setVertex(0, v_mp);
         ptr->setVertex(1, v_pose);
@@ -260,6 +266,8 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
         edge_filtered = ptr;
       }
       edge_filtered->setLevel(1);
+      if(switchable)
+        filtered_edges[pth].push_back(edge_filtered);
       optimizer.addEdge(edge_filtered);
       g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
       rk->setDelta(delta);
@@ -281,12 +289,16 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
       it_mp.second->setFixed(true);
     for(auto it_pose : v_poses)
       it_pose.second.first->setFixed(true);
-
     optimizer.initializeOptimization(0); // Optimize switchable edges only
     optimizer.optimize(n_iter);
-
     for(auto it : v_switches)
       it.second->setFixed(true);
+    for(auto it : filtered_edges){
+      VertexSwitchLinear* v_switch  = v_switches.at(it.first);
+      if(v_switch->estimate() < .3)
+        for(auto edge : it.second)
+          edge->setLevel(0);
+    }
   }
 
   for(auto it_mp : v_mappoints)

@@ -70,8 +70,12 @@ public:
   const Pth& GetId() const { return pth_; }
   const Qth& GetQth() const { return qth_; }
   void SetQth(const Qth& qth) { qth_ = qth; }
+
+  const std::set<Mappoint*>& GetMappoints() const { return mappoints_; }
+  void SetMappoints(const std::set<Mappoint*>& mappoints) { mappoints_ = mappoints;}
 private:
   Qth qth_;
+  std::set<Mappoint*> mappoints_;
   const Pth pth_;
 };
 
@@ -164,7 +168,7 @@ public:
   // Ref coordinate에서 본 Xr. Depth Camera의 Measurement
   void AddReferenceKeyframe(const Qth& qth, Frame* ref, const Eigen::Vector3d& Xq) { ref_[qth] = ref; SetXq(qth, Xq); }
   void SetXr(const Qth& qth, const Eigen::Vector3d& Xr) { Xr_[qth] = std::shared_ptr<Eigen::Vector3d>(new Eigen::Vector3d(Xr)); }
-  const Eigen::Vector3d& GetXr(const Qth& qth) const { return *Xr_.at(qth); }
+  //const Eigen::Vector3d& GetXr(const Qth& qth) const { return *Xr_.at(qth); }
 
   // Qth rigid coordinate 에 맵핑된 결과값.
   void SetXq(Qth qth, const Eigen::Vector3d& Xq) { Xq_[qth] = std::shared_ptr<Eigen::Vector3d>(new Eigen::Vector3d(Xq)); }
@@ -207,7 +211,7 @@ public:
   Frame* Put(const cv::Mat gray,
              const cv::Mat depth,
              const std::vector<cv::Mat>& flow,
-             const cv::Mat synced_marker,
+             cv::Mat& synced_marker,
              const std::map<int,size_t>& marker_areas,
              const cv::Mat gradx,
              const cv::Mat grady,
@@ -216,11 +220,15 @@ public:
             );
   void Visualize(const cv::Mat rgb); // visualize.cpp
   RigidGroup* GetRigidGroup(Qth qth) const { return qth2rig_groups_.count(qth) ? qth2rig_groups_.at(qth) : nullptr; }
+  const std::map<Pth, Instance*>& GetInstances()  const { return pth2instances_; }
 
 private:
+  void MergeEquivalentInstances(std::map<Pth, std::set<Mappoint*> >& ins2mappoints,
+                                cv::Mat& synced_marker);
   std::set<Qth> FrameNeedsToBeKeyframe(Frame* frame) const;
   void SupplyMappoints(Frame* frame);
   void FilterOutlierMatches(Frame* curr_frame);
+  void NewFilterOutlierMatches(Frame* curr_frame);
 
   SEG::FeatureDescriptor*const extractor_;
   const Camera*const camera_;

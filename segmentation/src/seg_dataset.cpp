@@ -391,11 +391,23 @@ EvalWriter::EvalWriter(std::string output_seq_dir)
 : output_seq_dir_(output_seq_dir),
   output_mask_dir_( output_seq_dir+"/"+"mask"),
   trj_output_(output_seq_dir+"/"+"trj.txt"),
-  keypoints_output_(output_seq_dir+"/"+"keypoints.txt")
+  keypoints_output_(output_seq_dir+"/"+"keypoints.txt"),
+  instances_output_(output_seq_dir+"/"+"instances.txt")
 {
   if(std::filesystem::exists(output_mask_dir_) )
     std::filesystem::remove_all(output_mask_dir_);
   std::filesystem::create_directories(output_mask_dir_);
+}
+
+
+void EvalWriter::WriteInstances(const std::map<Pth, Instance*>& instances) {
+  for(auto it : instances){
+    Pth pth = it.first;
+    Qth qth = it.second->GetQth();
+    instances_output_ << pth << " " << qth << std::endl;
+  }
+  instances_output_.flush();
+  return;
 }
 
 void EvalWriter::Write(Frame* frame,
