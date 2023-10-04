@@ -7,12 +7,6 @@ from associate import *
 from evaluate_ate import *
 
 if __name__ == "__main__":
-    # ex) python2 tum_rgbd_benchmark_tools/kittiodom_evaluate_ate.py kitti_odometry_dataset/poses/05.txt output.txt --verbose --plot3D
-    # parse command line
-    parser = argparse.ArgumentParser(description='''
-    This script takes two data files with timestamps and associates them   
-    ''')
-
     parser = argparse.ArgumentParser(description='''
     This script computes the absolute trajectory error from the ground truth trajectory and the estimated trajectory. 
     ''')

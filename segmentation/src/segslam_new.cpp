@@ -91,15 +91,23 @@ void Frame::SetMappoint(Mappoint* mp, int index) {
   return;
 }
 
-std::list<int> Frame::SearchRadius(const Eigen::Vector2d& uv, double radius) const {
+std::list<std::pair<int, double> > Frame::SearchRadius(const Eigen::Vector2d& uv, double radius) const {
   flann::Matrix<double> query((double*)uv.data(), 1, 2);
-  std::list<int> inliers;
+  std::list<std::pair<int,double> > inliers;
   std::vector<std::vector<int> > indices;
   std::vector<std::vector<double> > dists;
   const flann::SearchParams param;
   flann_kdtree_->radiusSearch(query, indices, dists, radius*radius, param);
-  for(int idx :  indices[0])
+  for(size_t n=0; n < indices[0].size(); n++){
+    const int& idx = indices[0][n];
+    double dist = std::sqrt(dists[0][n]);
+    inliers.push_back( std::make_pair(idx,dist) );
+  }
+  /*
+  for(int idx :  indices[0]){
     inliers.push_back(idx);
+  }
+  */
   return inliers;
 }
 
@@ -240,30 +248,34 @@ void Pipeline::SupplyMappoints(Frame* frame) {
   const Qth qth = 0;
   vinfo_supplied_mappoints_.clear();
   vinfo_supplied_mappoints_.resize(keypoints.size(), false);
+  std::map<Instance*, size_t> n_per_ins;
   for(int n=0; n < keypoints.size(); n++){
     Instance* ins = instances[n];
+    size_t& n_pt = n_per_ins[ins];
     if(Mappoint* mp = mappoints[n]){
       mp->AddKeyframe(qth, frame); // TODO 모든 qth에 keyframe추가하는건 좋은생각이 아니다.
+      n_pt++;
       continue;
     }
     static Ith nMappoints = 0;
+    if(n_pt > 10){
+      const cv::KeyPoint& kpt = keypoints[n];
+      std::list< std::pair<int,double> > neighbors = frame->SearchRadius(Eigen::Vector2d(kpt.pt.x, kpt.pt.y), min_mpt_distance);
+      bool too_close_mp_exist = false;
+      for(const auto& nn : neighbors){
+        if(mappoints[nn.first]){
+          too_close_mp_exist=true;
+          break;
+        }
+      }
+      if(too_close_mp_exist)
+        continue;
+    }
+
+    Mappoint* mp = new Mappoint(nMappoints++, ins);
     const Eigen::Vector3d Xr
       = depths[n] <1e-5 ? 1e+2*frame->GetNormalizedPoint(n) : depths[n]*frame->GetNormalizedPoint(n);
     const Eigen::Vector3d Xq = frame->GetTcq(qth).inverse()*Xr;
-
-    const cv::KeyPoint& kpt = keypoints[n];
-    std::list<int> neighbors = frame->SearchRadius(Eigen::Vector2d(kpt.pt.x, kpt.pt.y), min_mpt_distance);
-    bool too_close_mp_exist = false;
-    for(int nn : neighbors){
-      if(mappoints[nn]){
-        too_close_mp_exist=true;
-        break;
-      }
-    }
-    if(too_close_mp_exist)
-      continue;
-
-    Mappoint* mp = new Mappoint(nMappoints++, ins);
     mp->SetXr(qth, Xr);  // new mappoint를 위한 reference frame 지정.
     mp->AddReferenceKeyframe(qth, frame, Xq);
     mp->AddKeyframe(qth, frame);
@@ -388,7 +400,8 @@ void Pipeline::NewFilterOutlierMatches(Frame* curr_frame) {
     Mappoint* mp = _mappoints.at(n);
     if(!mp)
       continue;
-    Instance* ins = _instances.at(n);
+    //Instance* ins = _instances.at(n);
+    Instance* ins = mp->GetInstance();
     if(!ins)
       continue;
     Qth qth = ins->GetQth();
@@ -534,12 +547,19 @@ void SetMatches(std::map<int, std::pair<Mappoint*, double> >& flow_matches,
     Mappoint*const prj_mp = it.second.first;
     bool c1 = flow_matches.count(prj_n);
     bool c2 = matched_mappoints.count(prj_mp);
+#if 0
     if(c1 && c2) // flow match 와 결과가 똑같은 경우.
       continue;
     else if (c2) // flow_match가 연결시킨 mappoint를 다른 keypoint에 연결하려하는경우.
       continue;
     if(mappoints[prj_n]) // 이미 다른 mappoint가 연결된 keypoint
       continue;
+#else
+    if(c2)
+      continue;
+    if(mappoints[prj_n]) // 이미 다른 mappoint가 연결된 keypoint
+      continue;
+#endif
     curr_frame->SetMappoint(prj_mp, prj_n);
   }
   return;
@@ -624,7 +644,6 @@ Frame* Pipeline::Put(const cv::Mat gray,
   vinfo_neighbor_mappoints_.clear();
   vinfo_synced_marker_ = synced_marker;
 
-  const float proj_search_radius = 30.;
   const Qth qth_default = 0;
   cv::Mat outline_mask = synced_marker < 1;
   std::map<Qth, std::set<Pth> > segmented_instances;
@@ -694,11 +713,11 @@ Frame* Pipeline::Put(const cv::Mat gray,
     }
 
     // ProjectionMatch는 flow로부터 motion update와 pth(k_0)!= pth(k) 인 경우에 예외처리가 팔요해보인다.
-    std::map<int, std::pair<Mappoint*, double> > proj_matches = ProjectionMatch(camera_, extractor_, neighbor_mappoints, curr_frame, qth, proj_search_radius);
+    std::map<int, std::pair<Mappoint*, double> > proj_matches = ProjectionMatch(camera_, extractor_, neighbor_mappoints, curr_frame, qth);
     SetMatches(flow_matches, proj_matches, curr_frame);
   } // For qth \ Do pose_track, projection matches
-  FilterOutlierMatches(curr_frame); // 이게 trj는 더 정확한게 모순.
-  //NewFilterOutlierMatches(curr_frame);
+  //FilterOutlierMatches(curr_frame); // 이게 trj는 더 정확한게 모순.
+  NewFilterOutlierMatches(curr_frame);
 
   std::map<Pth, std::set<Mappoint*> > ins2mappoints;
   CountMappoints(curr_frame, ins2mappoints);

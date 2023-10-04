@@ -191,7 +191,7 @@ void Pipeline::Visualize(const cv::Mat rgb) {
     sorted_mappoints[mp->GetId()] = mp;
     const bool& supplied_pt = vinfo_supplied_mappoints_[n];
     if(supplied_pt){
-    //  cv::circle(dst_frame, pt, 3, CV_RGB(255,0,0), 1);
+      cv::circle(dst_frame, pt, 3, CV_RGB(255,0,0), 1);
       continue;
     }
     cv::circle(dst_frame, pt, 3, CV_RGB(0,255,0), -1);

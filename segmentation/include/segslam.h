@@ -94,7 +94,7 @@ public:
   void SetInstances(const cv::Mat synced_marker, const std::map<Pth, Instance*>& instances);
   void SetMeasuredDepths(const cv::Mat depth);
 
-  std::list<int> SearchRadius(const Eigen::Vector2d& uv, double radius) const;
+  std::list<std::pair<int, double> > SearchRadius(const Eigen::Vector2d& uv, double radius) const;
   std::vector<std::vector<int> > SearchRadius(const flann::Matrix<double>& points, double radius) const;
   std::vector<std::vector<int> > SearchRadius(const flann::Matrix<double>& points, double radius, 
                                               std::vector<std::vector<double> >& dists) const;
@@ -262,8 +262,7 @@ std::map<int, std::pair<Mappoint*,double> > ProjectionMatch(const Camera* camera
                                                             const SEG::FeatureDescriptor* extractor,
                                                             const std::set<Mappoint*>& mappoints,
                                                             const Frame* curr_frame, // With predicted Tcq
-                                                            const Qth qth,
-                                                            double search_radius);
+                                                            const Qth qth);
  
 } // namespace NEW_SEG
 

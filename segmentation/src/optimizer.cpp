@@ -206,8 +206,8 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
       const cv::KeyPoint& kpt = frame->GetKeypoint(n);
       Eigen::Vector3d uvi = frame->GetNormalizedPoint(n);
       const float& z = frame->GetDepth(n);
-      float invd = 1. / std::max<float>(z, MIN_NUM); // 함수화?
-      uvi[2] = invd;
+      float measure_invd = 1. / std::max<float>(z, MIN_NUM); // 함수화?
+      uvi[2] = measure_invd;
       Instance* ins = mp->GetInstance();
       Pth pth = ins ? ins->GetId() : -1;
       bool valid_depth = z > MIN_NUM;
@@ -218,7 +218,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
         g2o::OptimizableGraph::Edge* edge_swtichable = nullptr;
         if(valid_depth) {
           //float invd_info = 1e-4;
-          auto ptr = new EdgeSwSE3PointXYZDepth(&param, uv_info, GetInvdInfo(invd));
+          auto ptr = new EdgeSwSE3PointXYZDepth(&param, uv_info, GetInvdInfo(measure_invd));
           ptr->setVertex(0, v_mp);
           ptr->setVertex(1, v_pose);
           ptr->setVertex(2, v_switch);
@@ -242,8 +242,8 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
 
       g2o::Vector3 h(v_pose->estimate().map(v_mp->estimate()));
       double h_invd = GetInverse(h[2]);
-      h.head<2>() *= invd; // [Xc, Yc] /Zc
-      h[2] = invd;
+      h.head<2>() *= h_invd; // [Xc, Yc] /Zc
+      h[2] = h_invd;
       g2o::Vector2 rprj_err(h.head<2>() - uvi.head<2>() );
       if(IsDepthOutlier(h[2], uvi[2]) )
         continue;
@@ -251,7 +251,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
         continue;
       g2o::OptimizableGraph::Edge* edge_filtered = nullptr;
       if(valid_depth) {
-        float invd_info = GetInvdInfo(invd); // 10.7
+        float invd_info = GetInvdInfo(measure_invd); // 10.7
         auto ptr = new EdgeSE3PointXYZDepth(&param, uv_info, invd_info);
         ptr->setVertex(0, v_mp);
         ptr->setVertex(1, v_pose);
