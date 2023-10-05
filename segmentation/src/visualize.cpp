@@ -182,18 +182,31 @@ void Pipeline::Visualize(const cv::Mat rgb) {
   for(size_t n=0; n<keypoints.size(); n++){
     cv::Point2f pt = keypoints[n].pt;
     Mappoint* mp = mappoints[n];
-    if(!mp){
-      cv::circle(dst_frame, pt, 3, CV_RGB(150,150,150), 1);
+    if(mp)
       continue;
-    }
+    cv::circle(dst_frame, pt, 3, CV_RGB(150,150,150), 1);
+  }
+
+  for(size_t n=0; n<keypoints.size(); n++){
+    cv::Point2f pt = keypoints[n].pt;
+    Mappoint* mp = mappoints[n];
+    if(!mp)
+      continue;
+    const bool& supplied_pt = vinfo_supplied_mappoints_[n];
+    if(supplied_pt)
+      cv::circle(dst_frame, pt, 3, CV_RGB(255,0,0), 1);
+  }
+  for(size_t n=0; n<keypoints.size(); n++){
+    cv::Point2f pt = keypoints[n].pt;
+    Mappoint* mp = mappoints[n];
+    if(!mp)
+      continue;
+    const bool& supplied_pt = vinfo_supplied_mappoints_[n];
+    if(supplied_pt)
+      continue;
     Instance* ins = instances[n];
     // Instance* ins = m->GetInstance();
     sorted_mappoints[mp->GetId()] = mp;
-    const bool& supplied_pt = vinfo_supplied_mappoints_[n];
-    if(supplied_pt){
-      cv::circle(dst_frame, pt, 3, CV_RGB(255,0,0), 1);
-      continue;
-    }
     cv::circle(dst_frame, pt, 3, CV_RGB(0,255,0), -1);
     const std::set<Frame*>& keyframes = mp->GetKeyframes(qth);
     for(auto it = keyframes.rbegin(); it!=keyframes.rend(); it++){
@@ -206,12 +219,14 @@ void Pipeline::Visualize(const cv::Mat rgb) {
 
   // Draw patches.
   cv::Size patch_size(30,30);
-  int n_rows = 5;
-  int n_cols = 20;
+  int n_rows = 10;
+  int n_cols = 40;
   cv::Mat dst_patches = cv::Mat::zeros(patch_size.height*n_rows, patch_size.width*n_cols, CV_8UC3); {
     int i_col = 0;
     for(auto it_mp : sorted_mappoints){
       Mappoint* mp = it_mp.second;
+      //if(mp->GetInstance()->GetId() != 101)
+      //  continue;
       std::map<int, Frame*> sorted_keyframes;
       for(Frame* kf : mp->GetKeyframes(qth))
         sorted_keyframes[kf->GetId()] = kf;

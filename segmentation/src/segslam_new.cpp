@@ -243,7 +243,6 @@ void Pipeline::SupplyMappoints(Frame* frame) {
   const auto& keypoints = frame->GetKeypoints();
   const auto& instances = frame->GetInstances();
   const auto& depths    = frame->GetMeasuredDepths();
-  const auto& mappoints = frame->GetMappoints();
 
   const Qth qth = 0;
   vinfo_supplied_mappoints_.clear();
@@ -252,18 +251,18 @@ void Pipeline::SupplyMappoints(Frame* frame) {
   for(int n=0; n < keypoints.size(); n++){
     Instance* ins = instances[n];
     size_t& n_pt = n_per_ins[ins];
-    if(Mappoint* mp = mappoints[n]){
+    if(Mappoint* mp = frame->GetMappoint(n)){
       mp->AddKeyframe(qth, frame); // TODO 모든 qth에 keyframe추가하는건 좋은생각이 아니다.
       n_pt++;
       continue;
     }
     static Ith nMappoints = 0;
-    if(n_pt > 10){
+    if(n_pt > 20){
       const cv::KeyPoint& kpt = keypoints[n];
       std::list< std::pair<int,double> > neighbors = frame->SearchRadius(Eigen::Vector2d(kpt.pt.x, kpt.pt.y), min_mpt_distance);
       bool too_close_mp_exist = false;
       for(const auto& nn : neighbors){
-        if(mappoints[nn.first]){
+        if( frame->GetMappoint(nn.first) ){
           too_close_mp_exist=true;
           break;
         }
@@ -271,7 +270,7 @@ void Pipeline::SupplyMappoints(Frame* frame) {
       if(too_close_mp_exist)
         continue;
     }
-
+    n_pt++;
     Mappoint* mp = new Mappoint(nMappoints++, ins);
     const Eigen::Vector3d Xr
       = depths[n] <1e-5 ? 1e+2*frame->GetNormalizedPoint(n) : depths[n]*frame->GetNormalizedPoint(n);
@@ -379,7 +378,6 @@ std::set<Qth> Pipeline::FrameNeedsToBeKeyframe(Frame* curr_frame) const {
 
 void Pipeline::NewFilterOutlierMatches(Frame* curr_frame) {
   bool use_extrinsic_guess = true;
-  int iterations = 40;
   double rprj_threshold = 5.; // rpj 2->?, rpj 10->ATE 10.26[m], TP|FN 12267,10623
   double confidence = .95;
   int flag = cv::SOLVEPNP_ITERATIVE;
@@ -434,8 +432,8 @@ void Pipeline::NewFilterOutlierMatches(Frame* curr_frame) {
         Eigen::Vector2d rprj_uv = camera_->Project(Xc);
         const Eigen::Vector2d uv(it_pt.pt2d.x, it_pt.pt2d.y);
         double err = (uv-rprj_uv).norm();
-        bool z_err = std::abs(it_pt.z-Xc[2])/it_pt.z > .5;
-        if(err > rprj_threshold || z_err)
+        //bool z_err = std::abs(it_pt.z-Xc[2])/it_pt.z > .5;
+        if(err > rprj_threshold)
           curr_frame->EraseMappoint(it_pt.kpt_index);
       }
       continue;
@@ -456,8 +454,9 @@ void Pipeline::NewFilterOutlierMatches(Frame* curr_frame) {
       kpt_indices.push_back(it_pt.kpt_index);
       depths.push_back(it_pt.z);
     }
+    int iteration =it.second.size() * 1;
     cv::solvePnPRansac(obj_points, img_points, K, D, rvec, tvec,
-                       use_extrinsic_guess, iterations, rprj_threshold, confidence, inliers);
+                       use_extrinsic_guess, iteration, rprj_threshold, confidence, inliers);
     cv::Rodrigues(rvec,R);
     g2o::SE3Quat _Tcq(cvt2Eigen(R), cvt2Eigen(tvec) );
     for(int i=0; i < inliers.rows; i++){
@@ -547,7 +546,7 @@ void SetMatches(std::map<int, std::pair<Mappoint*, double> >& flow_matches,
     Mappoint*const prj_mp = it.second.first;
     bool c1 = flow_matches.count(prj_n);
     bool c2 = matched_mappoints.count(prj_mp);
-#if 0
+#if 1
     if(c1 && c2) // flow match 와 결과가 똑같은 경우.
       continue;
     else if (c2) // flow_match가 연결시킨 mappoint를 다른 keypoint에 연결하려하는경우.
@@ -555,6 +554,7 @@ void SetMatches(std::map<int, std::pair<Mappoint*, double> >& flow_matches,
     if(mappoints[prj_n]) // 이미 다른 mappoint가 연결된 keypoint
       continue;
 #else
+    // TODO description error비교.
     if(c2)
       continue;
     if(mappoints[prj_n]) // 이미 다른 mappoint가 연결된 keypoint
@@ -716,8 +716,8 @@ Frame* Pipeline::Put(const cv::Mat gray,
     std::map<int, std::pair<Mappoint*, double> > proj_matches = ProjectionMatch(camera_, extractor_, neighbor_mappoints, curr_frame, qth);
     SetMatches(flow_matches, proj_matches, curr_frame);
   } // For qth \ Do pose_track, projection matches
-  //FilterOutlierMatches(curr_frame); // 이게 trj는 더 정확한게 모순.
   NewFilterOutlierMatches(curr_frame);
+  FilterOutlierMatches(curr_frame); // 이게 trj는 더 정확한게 모순.
 
   std::map<Pth, std::set<Mappoint*> > ins2mappoints;
   CountMappoints(curr_frame, ins2mappoints);
@@ -727,6 +727,22 @@ Frame* Pipeline::Put(const cv::Mat gray,
   }
   // MergeEquivalentInstances(ins2mappoints, synced_marker);
 
+  {
+    cv::Mat dst = curr_frame->GetRgb().clone();
+    const auto& keypoints = curr_frame->GetKeypoints();
+    const auto& mappoints = curr_frame->GetMappoints();
+    for(int n=0; n<keypoints.size(); n++){
+      const auto& kpt = keypoints[n];
+      Mappoint* mp = mappoints[n];
+      if(!mp)
+        cv::circle(dst, kpt.pt, 3, CV_RGB(120,120,120), 1);
+      else
+        cv::circle(dst, kpt.pt, 3, CV_RGB(0,255,0), -1);
+    }
+    cv::imshow("kpt, mpt", dst);
+  }
+
+#if 1
   std::map<Pth,float>& density_scores = vinfo_density_socres_;
   for(const auto& it : marker_areas){
     const Pth& pth = it.first;
@@ -777,6 +793,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
       if(ins2mappoints.count(pth))// mp 없는 instance도 있으니까.
          n_mappoints4next_rig += ins2mappoints.at(pth).size();
   }
+#endif
 
   std::set<Qth> need_keyframe = FrameNeedsToBeKeyframe(curr_frame);
   for(const Qth& qth : need_keyframe){

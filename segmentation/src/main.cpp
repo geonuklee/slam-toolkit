@@ -156,7 +156,13 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
   NEW_SEG::EvalWriter eval_writer(output_seq_dir);
 
   char c = 0;
+  g2o::SE3Quat TCw;
   for(int i=0; i<dataset.Size(); i+=1){
+    //if(i < 200){
+    //  TCw = gt_Tcws.at(i);
+    //  viewer.SetCurrCamera(i, TCw);
+    //  continue;
+    //}
     const cv::Mat rgb   = dataset.GetImage(i, cv::IMREAD_COLOR);
     const cv::Mat rgb_r = dataset.GetRightImage(i, cv::IMREAD_COLOR);
     cv::Mat gray, gray_r;
@@ -177,7 +183,7 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     const std::map<int,size_t>& marker_areas = img_tracker->GetMarkerAreas();
     NEW_SEG::Frame* frame = pipeline.Put(gray, depth, flow, synced_marker, marker_areas,
                                          gradx, grady, valid_grad, rgb);
-    g2o::SE3Quat Tcw = frame->GetTcq(0);
+    g2o::SE3Quat Tcw = TCw*frame->GetTcq(0);
     pipeline.Visualize(rgb);
     viewer.SetCurrCamera(i, Tcw);
     //viewer.SetMappoints(frame->Get3dMappoints());

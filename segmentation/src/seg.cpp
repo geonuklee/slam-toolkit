@@ -20,6 +20,7 @@ ImageTrackerNew::ImageTrackerNew() {
   n_instance_ = 0;
   dof_ = cv::optflow::createOptFlow_DIS(cv::optflow::DISOpticalFlow::PRESET_ULTRAFAST);
   //dof_ = cv::optflow::createOptFlow_DIS(cv::optflow::DISOpticalFlow::PRESET_FAST);
+  //dof_ = cv::optflow::createOptFlow_DIS(cv::optflow::DISOpticalFlow::PRESET_MEDIUM);
 }
 
 struct MarkerOverlapStats{

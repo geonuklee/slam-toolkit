@@ -15,7 +15,12 @@
 #include <opencv2/imgproc.hpp>
 
 inline float GetInvdInfo(const float& invd){
-  return invd*invd*1e+2;
+  return invd*invd*1e-2;
+  return invd*invd*1e+2; // 이걸로 바꿔도 될것같은데, 그전에 motion prediction model 적용해야 중간에 tracking failure가 안일어날것으로보임.
+}
+
+inline float GetSwitchableInvdInfo(const float& invd){
+  return invd*invd*1e+4;
 }
 
 namespace NEW_SEG {
@@ -71,12 +76,12 @@ g2o::SE3Quat PoseTracker::GetTcq(const Camera* camera,
     optimizer.addVertex(v_mp);
     v_mappoints[mp]  = v_mp;
     const float& z = depths[n];
-    float invd = 1./std::max<float>(z, MIN_NUM);
+    float measured_invd = 1./std::max<float>(z, MIN_NUM);
     Eigen::Vector3d uvi = normalized_points[n];
     g2o::OptimizableGraph::Edge* edge = nullptr;
     if(z >  MIN_NUM){
-      auto ptr = new EdgeSE3PointXYZDepth(&param, uv_info, GetInvdInfo(invd));
-      uvi[2] = invd;
+      auto ptr = new EdgeSE3PointXYZDepth(&param, uv_info, GetSwitchableInvdInfo(measured_invd));
+      uvi[2] = measured_invd;
       ptr->setVertex(0, v_mp);
       ptr->setVertex(1, v_pose);
       ptr->setMeasurement( uvi );
@@ -279,7 +284,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
 
   for(auto it_v_sw : prior_edges){
     const auto& n = swedges_parameter.at(it_v_sw.first);
-    double info = 1e-6 * n * n;
+    double info = 1e-7 * n * n;
     it_v_sw.second->SetInfomation(info);
   }
 
