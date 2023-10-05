@@ -42,6 +42,7 @@ void ImageTrackerNew::Put(const cv::Mat _gray,
   int i, j, u, v;
   if(! prev_gray_.empty()){
     // optical flow etime : 6~7 milli sec
+    // ref) https://stackoverflow.com/questions/38131822/what-is-output-from-opencvs-dense-optical-flow-farneback-function-how-can-th
     cv::Mat flowxy;
     dof_->calc(prev_gray_, _gray, flowxy);
     cv::split(flowxy, flow_);

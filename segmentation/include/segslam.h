@@ -218,7 +218,7 @@ public:
              const cv::Mat valid_grad,
              const cv::Mat vis_rgb
             );
-  void Visualize(const cv::Mat rgb); // visualize.cpp
+  void Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask); // visualize.cpp
   RigidGroup* GetRigidGroup(Qth qth) const { return qth2rig_groups_.count(qth) ? qth2rig_groups_.at(qth) : nullptr; }
   const std::map<Pth, Instance*>& GetInstances()  const { return pth2instances_; }
 

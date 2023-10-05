@@ -89,16 +89,12 @@ target_link_libraries(example_segmentation ${CMAKE_SOURCE_DIR}/../stereo_seg/lib
   ${PYTHON_LIBRARIES}
 )
 
-set_source_files_properties(src/edge.cpp PROPERTIES COMPILE_FLAGS "-mavx2") # No optmization
-
+set_source_files_properties(src/edge.cpp PROPERTIES COMPILE_FLAGS "-mavx2")
 #set_target_properties(example_segmentation PROPERTIES UNITY_BUILD_MODE BATCH UNITY_BUILD_BATCH_SIZE 10)
 #set_source_files_properties(src/debug.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
-#set_source_files_properties(src/optimizer.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
-set_source_files_properties(src/segslam_new.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
-set_source_files_properties(src/visualize.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
-
-set_source_files_properties(src/seg_viewer.cpp PROPERTIES COMPILE_FLAGS "-O3") # Too slow for non optimization.
-set_source_files_properties(../pipeline/src/common.cpp PROPERTIES COMPILE_FLAGS "-O3") # Too slow for non optimization.
+#set_source_files_properties(src/matcher.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
+#set_source_files_properties(src/seg_viewer.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
+#set_source_files_properties(src/segslam_new.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
 
 target_link_libraries(example_segmentation
 ${OpenCV_LIBS}
@@ -117,5 +113,6 @@ debug g2o_types_sba_d
 #optimized g2o_types_slam3d_d
 stdc++fs
 )
+
 
 

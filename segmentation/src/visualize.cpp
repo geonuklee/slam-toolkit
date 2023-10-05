@@ -1,8 +1,10 @@
 #include "segslam.h"
 #include "util.h"
+#include <opencv2/core.hpp>
 #include <opencv2/core/types.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
+#include <string>
 
 namespace NEW_SEG {
 
@@ -122,7 +124,7 @@ void PutInstanceInfoBox(const float& switch_threshold,
 }
 
 
-void Pipeline::Visualize(const cv::Mat rgb) {
+void Pipeline::Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask) {
   Qth qth = 0;
   RigidGroup* rig = qth2rig_groups_.at(qth);
   cv::Mat dst_frame = rgb.clone();
@@ -178,7 +180,6 @@ void Pipeline::Visualize(const cv::Mat rgb) {
   const auto& keypoints = prev_frame_->GetKeypoints();
   const auto& mappoints = prev_frame_->GetMappoints();
   const auto& instances = prev_frame_->GetInstances();
-  std::map<Ith, Mappoint*> sorted_mappoints;
   for(size_t n=0; n<keypoints.size(); n++){
     cv::Point2f pt = keypoints[n].pt;
     Mappoint* mp = mappoints[n];
@@ -196,6 +197,7 @@ void Pipeline::Visualize(const cv::Mat rgb) {
     if(supplied_pt)
       cv::circle(dst_frame, pt, 3, CV_RGB(255,0,0), 1);
   }
+  std::list<Mappoint*> sorted_mappoints;
   for(size_t n=0; n<keypoints.size(); n++){
     cv::Point2f pt = keypoints[n].pt;
     Mappoint* mp = mappoints[n];
@@ -206,7 +208,7 @@ void Pipeline::Visualize(const cv::Mat rgb) {
       continue;
     Instance* ins = instances[n];
     // Instance* ins = m->GetInstance();
-    sorted_mappoints[mp->GetId()] = mp;
+    sorted_mappoints.push_back(mp);
     cv::circle(dst_frame, pt, 3, CV_RGB(0,255,0), -1);
     const std::set<Frame*>& keyframes = mp->GetKeyframes(qth);
     for(auto it = keyframes.rbegin(); it!=keyframes.rend(); it++){
@@ -217,14 +219,30 @@ void Pipeline::Visualize(const cv::Mat rgb) {
     }
   }
 
+  sorted_mappoints.sort([](Mappoint* a, Mappoint* b) {
+                        Pth pa = a->GetInstance()->GetId();
+                        Pth pb = b->GetInstance()->GetId();
+                        if(pa != pb)
+                          return pa < pb;
+                        return a->GetId() < b->GetId();
+                        });
+
   // Draw patches.
   cv::Size patch_size(30,30);
   int n_rows = 10;
   int n_cols = 40;
-  cv::Mat dst_patches = cv::Mat::zeros(patch_size.height*n_rows, patch_size.width*n_cols, CV_8UC3); {
+  cv::Mat dst_patches = cv::Mat::zeros(patch_size.height*n_rows, patch_size.width*n_cols, CV_8UC3);
+  dst_patches.setTo(CV_RGB(200,0,255));
+  {
+    static std::map<Jth, cv::Mat> gt_masks;
+    gt_masks[prev_frame_->GetId()] = gt_dynamic_mask;
     int i_col = 0;
-    for(auto it_mp : sorted_mappoints){
-      Mappoint* mp = it_mp.second;
+    for(Mappoint* mp : sorted_mappoints){
+      Frame* ref = mp->GetRefFrame(0);
+      cv::Point2f pt_ref = ref->GetKeypoint(ref->GetIndex(mp)).pt;
+      if(!gt_masks[ref->GetId()].at<uchar>(pt_ref))
+        continue;
+      Pth pth = mp->GetInstance()->GetId();
       //if(mp->GetInstance()->GetId() != 101)
       //  continue;
       std::map<int, Frame*> sorted_keyframes;
@@ -245,6 +263,16 @@ void Pipeline::Visualize(const cv::Mat rgb) {
         cv::Rect rgb_roi(x, y, patch_size.width, patch_size.height);
         cv::Rect dst_roi(patch_size.width*i_col, patch_size.height*i_row,patch_size.width, patch_size.height);
         rgb(rgb_roi).copyTo(dst_patches(dst_roi));
+        {
+          cv::Point pt(patch_size.width*i_col, patch_size.height*i_row);
+          cv::putText(dst_patches, std::to_string(kf->GetId()%100),pt, cv::FONT_HERSHEY_SIMPLEX, .4, CV_RGB(200,0,255) );
+        }
+
+        if(i_row==0){
+          cv::Point pt(patch_size.width*i_col, dst_patches.rows-2);
+          cv::putText(dst_patches, std::to_string(pth%100),pt, cv::FONT_HERSHEY_SIMPLEX, .5, CV_RGB(0,0,0) );
+        }
+
         if(++i_row >= n_rows)
           break;
       }

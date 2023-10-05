@@ -13,8 +13,8 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
                                                        const Frame* prev_frame,
                                                        bool verbose,
                                                        Frame* curr_frame) {
-  double search_threshold = 30.; // 기대와 달리 optical flow 자체가 꽤 부정확해서, 참고만 되지 정확하진 않다.
-  double best12_threshold = .5;
+  double search_threshold = 2.;
+  double best12_threshold = .8;
   //const double search_radius_min = 5.; // [pixel]
   //const double far_depth         = 50.; // [meter] for min radius.
   //const double search_radius_max = 20.; // [pixel]
@@ -43,7 +43,7 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
       const cv::KeyPoint& kpt0 = keypoints0[n0];
       const cv::Point2f&  pt0  = kpt0.pt;
       //const auto& dpt01 = flow0.at<cv::Point2f>(pt0);
-      cv::Point2f dpt01(flow[0].at<float>(pt0.x), flow[1].at<float>(pt0.y));
+      cv::Point2f dpt01(flow[0].at<float>(pt0), flow[1].at<float>(pt0));
       Eigen::Vector2d eig_pt1(pt0.x+dpt01.x, pt0.y+dpt01.y);
       if(!curr_frame->IsInFrame(camera,eig_pt1))  //  땅바닥 제외
         continue;
@@ -53,11 +53,8 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
         cv::circle(dst0, pt0, 3,  CV_RGB(255,0,0), -1);
         cv::line(  dst0, pt0, pt1, CV_RGB(0,255,0), 1);
         cv::circle(dst1, pt1, 3,  CV_RGB(255,0,0), -1);
-        cv::line(  dst1, pt0, pt1, CV_RGB(0,255,0), 1);
       }
-
       std::list< std::pair<int,double> > candidates = curr_frame->SearchRadius(eig_pt1, search_threshold);
-      //std::list< std::pair<int,double> > candidates = curr_frame->SearchRadius(eig_pt1, cv::norm(dpt01));
       if(candidates.empty())
         continue;
       const cv::Mat desc0 = prev_frame->GetDescription(n0);
@@ -65,13 +62,15 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
       double dist1 = dist0;
       int champ0 = -1;
       int champ1 = -1;
-      double champ0_err = 0.;
+      float champ0_err = 0.;
       for(const auto& candi : candidates){
         const int& n1 = candi.first;
         const cv::Mat desc1 = curr_frame->GetDescription(n1);
         const cv::KeyPoint& kpt1 = keypoints1[n1];
-        if(std::abs(kpt0.octave-kpt1.octave) > 1)
-          continue;
+        //if(std::abs(kpt0.octave-kpt1.octave) > 1) continue;
+        //float diff_angle = std::abs(kpt0.angle-kpt1.angle);
+        //if(diff_angle >  180) diff_angle -= 360; // cv::fastAtan2 degree.
+        //if(diff_angle < -180) diff_angle += 360;
         double dist = extractor->GetDistance(desc0,desc1);
         if(dist < dist0) {
           dist1 = dist0;
@@ -116,8 +115,8 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
         cv::circle(dst1, pt1, 3,   CV_RGB(0,0,255), -1);
         cv::line(  dst1, pt1, pt0, CV_RGB(0,255,0), 1);
       }
-      //cv::imshow("flow 01", dst0);
-      cv::imshow("flow 10", dst1);
+      cv::imshow("flow0", dst0);
+      cv::imshow("flow1", dst1);
     }
 #if 0
     // matches의 분포로 재연결 판정.

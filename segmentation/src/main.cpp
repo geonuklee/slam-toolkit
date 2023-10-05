@@ -126,6 +126,16 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
   const std::string seq(argv[1]);
   KittiTrackingDataset dataset(dataset_type, seq, dataset_path);
   const EigenMap<int, g2o::SE3Quat>& gt_Tcws = dataset.GetTcws();
+  {
+    g2o::SE3Quat Twc0 = gt_Tcws.begin()->second.inverse();
+    g2o::SE3Quat Twcf = gt_Tcws.rbegin()->second.inverse();
+    double translation = (Twcf.translation()-Twc0.translation()).norm();
+    if(translation < 10){
+      std::cout << "Pass seq for too short translation" << std::endl;
+      return 0;
+    }
+  }
+
   const std::string config_fn = GetPackageDir()+"/config/kitti_tracking.yaml";
   SegViewer viewer(gt_Tcws, config_fn);
   bool stop = false;
@@ -158,7 +168,7 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
   char c = 0;
   g2o::SE3Quat TCw;
   for(int i=0; i<dataset.Size(); i+=1){
-    //if(i < 200){
+    //if(i < 350){
     //  TCw = gt_Tcws.at(i);
     //  viewer.SetCurrCamera(i, TCw);
     //  continue;
@@ -183,8 +193,11 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     const std::map<int,size_t>& marker_areas = img_tracker->GetMarkerAreas();
     NEW_SEG::Frame* frame = pipeline.Put(gray, depth, flow, synced_marker, marker_areas,
                                          gradx, grady, valid_grad, rgb);
-    g2o::SE3Quat Tcw = TCw*frame->GetTcq(0);
-    pipeline.Visualize(rgb);
+    g2o::SE3Quat Tcw =frame->GetTcq(0) *  TCw.inverse();
+    {
+      cv::Mat dynamic_mask = dataset.GetDynamicMask(i);
+      pipeline.Visualize(rgb, dynamic_mask);
+    }
     viewer.SetCurrCamera(i, Tcw);
     //viewer.SetMappoints(frame->Get3dMappoints());
     std::set<int> uniq_labels;

@@ -16,11 +16,11 @@
 
 inline float GetInvdInfo(const float& invd){
   return invd*invd*1e-2;
-  return invd*invd*1e+2; // 이걸로 바꿔도 될것같은데, 그전에 motion prediction model 적용해야 중간에 tracking failure가 안일어날것으로보임.
+  //return invd*invd*1e+2; //별 차이 없었음.
 }
 
 inline float GetSwitchableInvdInfo(const float& invd){
-  return invd*invd*1e+4;
+  return invd*invd*1e+3;
 }
 
 namespace NEW_SEG {
@@ -80,7 +80,7 @@ g2o::SE3Quat PoseTracker::GetTcq(const Camera* camera,
     Eigen::Vector3d uvi = normalized_points[n];
     g2o::OptimizableGraph::Edge* edge = nullptr;
     if(z >  MIN_NUM){
-      auto ptr = new EdgeSE3PointXYZDepth(&param, uv_info, GetSwitchableInvdInfo(measured_invd));
+      auto ptr = new EdgeSE3PointXYZDepth(&param, uv_info, GetInvdInfo(measured_invd));
       uvi[2] = measured_invd;
       ptr->setVertex(0, v_mp);
       ptr->setVertex(1, v_pose);
@@ -155,6 +155,10 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
   std::map<Pth, EdgeSwitchPrior*>     prior_edges;
   std::map<Pth, double>               swedges_parameter;
 
+  Frame*const kf_latest = neighbor_keyframes.rbegin()->second;
+  const int kf_id_latest = kf_latest->GetKfId(qth);
+  Frame*const kf_oldest = neighbor_keyframes.begin()->second;
+
   for(Mappoint* mp : neighbor_mappoints){
     // n_kf는 mappoint의 keyframes가 아니라, LBA의 keyframes.
     size_t n_kf = mp->GetKeyframes(qth).size();
@@ -211,8 +215,14 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
       const cv::KeyPoint& kpt = frame->GetKeypoint(n);
       Eigen::Vector3d uvi = frame->GetNormalizedPoint(n);
       const float& z = frame->GetDepth(n);
-      float measure_invd = 1. / std::max<float>(z, MIN_NUM); // 함수화?
+      double measure_invd = 1. / std::max<float>(z, MIN_NUM); // 함수화?
       uvi[2] = measure_invd;
+      g2o::Vector3 h(v_pose->estimate().map(v_mp->estimate()));
+      double h_invd = GetInverse(h[2]);
+      h.head<2>() *= h_invd; // [Xc, Yc] /Zc
+      h[2] = h_invd;
+      double greater_invd = std::max(measure_invd,h_invd);
+
       Instance* ins = mp->GetInstance();
       Pth pth = ins ? ins->GetId() : -1;
       bool valid_depth = z > MIN_NUM;
@@ -222,8 +232,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
         swedges_parameter[pth] += 1.;
         g2o::OptimizableGraph::Edge* edge_swtichable = nullptr;
         if(valid_depth) {
-          //float invd_info = 1e-4;
-          auto ptr = new EdgeSwSE3PointXYZDepth(&param, uv_info, GetInvdInfo(measure_invd));
+          auto ptr = new EdgeSwSE3PointXYZDepth(&param, uv_info, GetSwitchableInvdInfo(greater_invd));
           ptr->setVertex(0, v_mp);
           ptr->setVertex(1, v_pose);
           ptr->setVertex(2, v_switch);
@@ -245,10 +254,6 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
         edge_swtichable->setRobustKernel(rk);
       }
 
-      g2o::Vector3 h(v_pose->estimate().map(v_mp->estimate()));
-      double h_invd = GetInverse(h[2]);
-      h.head<2>() *= h_invd; // [Xc, Yc] /Zc
-      h[2] = h_invd;
       g2o::Vector2 rprj_err(h.head<2>() - uvi.head<2>() );
       if(IsDepthOutlier(h[2], uvi[2]) )
         continue;
@@ -289,6 +294,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
   }
 
   optimizer.setVerbose(false);
+#if 0
   if(!v_switches.empty()){
     for(auto it_mp : v_mappoints)
       it_mp.second->setFixed(true);
@@ -305,19 +311,59 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
           edge->setLevel(0);
     }
   }
-
-  for(auto it_mp : v_mappoints)
-    it_mp.second->setFixed(false);
+  for(auto it_mp : v_mappoints){
+    Mappoint* mp = it_mp.first;
+#if 1
+    int kf_id_ref = mp->GetRefFrame(qth)->GetKfId(qth);
+    it_mp.second->setFixed(kf_id_latest-kf_id_ref > 5);
+#else
+    int ref_pth = mp->GetRefFrame(qth)->GetId();
+    if(v_poses.count(ref_pth) && !v_poses.at(ref_pth).first->fixed() )
+      it_mp.second->setFixed(false);
+    else
+      it_mp.second->setFixed(true);
+#endif
+  }
   for(auto it_pose : v_poses)
     it_pose.second.first->setFixed(it_pose.second.second < 20);
   if(!v_poses.empty()){
     g2o::OptimizableGraph::Vertex* v_oldest = v_poses.begin()->second.first;
     v_oldest->setFixed(true);
   }
+#else
 
+  for(auto it_mp : v_mappoints){
+    Mappoint* mp = it_mp.first;
+    //int kf_id_ref = mp->GetRefFrame(qth)->GetKfId(qth);
+    //it_mp.second->setFixed(kf_id_latest-kf_id_ref > 5);
+    int ref_pth = mp->GetRefFrame(qth)->GetId();
+    if(v_poses.count(ref_pth) && !v_poses.at(ref_pth).first->fixed() )
+      it_mp.second->setFixed(false);
+    else
+      it_mp.second->setFixed(true);
+  }
+  if(!v_switches.empty()){
+    for(auto it_pose : v_poses)
+      it_pose.second.first->setFixed(it_pose.first != curr_frame->GetId());
+
+    optimizer.initializeOptimization(0); // Optimize switchable edges only
+    optimizer.optimize(n_iter);
+    for(auto it : v_switches)
+      it.second->setFixed(true);
+    for(auto it : filtered_edges){
+      VertexSwitchLinear* v_switch  = v_switches.at(it.first);
+      if(v_switch->estimate() < .3)
+        for(auto edge : it.second)
+          edge->setLevel(0);
+    }
+  }
+#endif
+  for(auto it_pose : v_poses)
+    it_pose.second.first->setFixed(it_pose.second.second < 20);
+  g2o::OptimizableGraph::Vertex* v_oldest = v_poses.at(kf_oldest->GetId()).first;
+  v_oldest->setFixed(true);
   optimizer.initializeOptimization(1);  // Optimize filtered edges only
   optimizer.optimize(n_iter);
-
   // Retrieve
   //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
   const Jth curr_jth = curr_frame->GetId();

@@ -239,7 +239,7 @@ Pipeline::~Pipeline() {
 }
 
 void Pipeline::SupplyMappoints(Frame* frame) {
-  const double min_mpt_distance = 5.;
+  const double min_mpt_distance = 20.;
   const auto& keypoints = frame->GetKeypoints();
   const auto& instances = frame->GetInstances();
   const auto& depths    = frame->GetMeasuredDepths();
@@ -378,7 +378,7 @@ std::set<Qth> Pipeline::FrameNeedsToBeKeyframe(Frame* curr_frame) const {
 
 void Pipeline::NewFilterOutlierMatches(Frame* curr_frame) {
   bool use_extrinsic_guess = true;
-  double rprj_threshold = 5.; // rpj 2->?, rpj 10->ATE 10.26[m], TP|FN 12267,10623
+  double rprj_threshold = 3.; // rpj 2->?, rpj 10->ATE 10.26[m], TP|FN 12267,10623
   double confidence = .95;
   int flag = cv::SOLVEPNP_ITERATIVE;
   cv::Mat K = cvt2cvMat(camera_->GetK() );
@@ -626,6 +626,20 @@ void Pipeline::MergeEquivalentInstances(std::map<Pth, std::set<Mappoint*> >& ins
   return;
 }
 
+g2o::SE3Quat PredictMotion(const Frame* prev_frame,
+                           Qth qth) {
+  static std::map<Qth,g2o::SE3Quat > Tc0qs;
+  const g2o::SE3Quat Tc1q = prev_frame->GetTcq(qth);
+  if(!Tc0qs.count(qth) ){
+    Tc0qs[qth] = Tc1q;
+    return Tc1q;
+  }
+  const g2o::SE3Quat Tc0q = Tc0qs.at(qth);
+  const g2o::SE3Quat Tc1c0 = Tc1q * Tc0q.inverse();
+  Tc0qs[qth] = Tc1q;
+  return Tc1c0 * Tc1q;
+};
+
 Frame* Pipeline::Put(const cv::Mat gray,
                      const cv::Mat depth,
                      const std::vector<cv::Mat>& flow,
@@ -699,9 +713,10 @@ Frame* Pipeline::Put(const cv::Mat gray,
   { // for qth in prev_frame
     const Qth qth = 0;
     RigidGroup* rig = qth2rig_groups_.at(qth);
-    bool verbose_track = false;
-    g2o::SE3Quat Tcq = pose_tracker_->GetTcq(camera_, qth_default, curr_frame, verbose_track);
-    curr_frame->SetTcq(qth_default, Tcq);
+    g2o::SE3Quat pred_Tcq = PredictMotion(prev_frame_,qth);
+    curr_frame->SetTcq(qth_default, pred_Tcq);
+    //g2o::SE3Quat Tcq = pose_tracker_->GetTcq(camera_, qth, curr_frame, false);
+    //curr_frame->SetTcq(qth, Tcq);
 
     Frame* latest_kf = keyframes_.at(qth).rbegin()->second;
     std::set<Mappoint*>     & neighbor_mappoints = vinfo_neighbor_mappoints_[qth];
@@ -711,13 +726,15 @@ Frame* Pipeline::Put(const cv::Mat gray,
       std::cerr << "qth = " << qth << ", failure to get mappoints" << std::endl;
       throw -1;
     }
-
     // ProjectionMatch는 flow로부터 motion update와 pth(k_0)!= pth(k) 인 경우에 예외처리가 팔요해보인다.
     std::map<int, std::pair<Mappoint*, double> > proj_matches = ProjectionMatch(camera_, extractor_, neighbor_mappoints, curr_frame, qth);
     SetMatches(flow_matches, proj_matches, curr_frame);
+    bool verbose_track = false;
+    g2o::SE3Quat Tcq = pose_tracker_->GetTcq(camera_, qth, curr_frame, verbose_track);
+    curr_frame->SetTcq(qth, Tcq);
   } // For qth \ Do pose_track, projection matches
   NewFilterOutlierMatches(curr_frame);
-  FilterOutlierMatches(curr_frame); // 이게 trj는 더 정확한게 모순.
+  //FilterOutlierMatches(curr_frame); // 이게 trj는 더 정확한게 모순.
 
   std::map<Pth, std::set<Mappoint*> > ins2mappoints;
   CountMappoints(curr_frame, ins2mappoints);
@@ -726,21 +743,6 @@ Frame* Pipeline::Put(const cv::Mat gray,
     ins->SetMappoints(it.second);
   }
   // MergeEquivalentInstances(ins2mappoints, synced_marker);
-
-  {
-    cv::Mat dst = curr_frame->GetRgb().clone();
-    const auto& keypoints = curr_frame->GetKeypoints();
-    const auto& mappoints = curr_frame->GetMappoints();
-    for(int n=0; n<keypoints.size(); n++){
-      const auto& kpt = keypoints[n];
-      Mappoint* mp = mappoints[n];
-      if(!mp)
-        cv::circle(dst, kpt.pt, 3, CV_RGB(120,120,120), 1);
-      else
-        cv::circle(dst, kpt.pt, 3, CV_RGB(0,255,0), -1);
-    }
-    cv::imshow("kpt, mpt", dst);
-  }
 
 #if 1
   std::map<Pth,float>& density_scores = vinfo_density_socres_;
