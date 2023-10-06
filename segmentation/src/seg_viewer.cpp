@@ -6,15 +6,16 @@
 #include <pangolin/scene/axis.h>
 
 
-SegViewer::SegViewer(const EigenMap<int, g2o::SE3Quat>& gt_Tcws, std::string config_fn)
+SegViewer::SegViewer(const EigenMap<int, g2o::SE3Quat>& gt_Tcws, std::string config_fn, cv::Size dst_size)
   : name_ ("SegViewer"),
   gt_Tcws_(gt_Tcws),
   req_exit_(false)
 {
+  dst_size_ = dst_size;
   curr_k_ = 0;
   cv::FileStorage fsettings(config_fn, cv::FileStorage::READ);
-  size_.width   = fsettings["Viewer.width"];
-  size_.height  = fsettings["Viewer.height"];
+  trj_size_.width   = fsettings["Viewer.width"];
+  trj_size_.height  = fsettings["Viewer.height"];
   vp_f_         = fsettings["Viewer.vp_f"];
   z_near_       = fsettings["Viewer.z_near"];
   z_far_        = fsettings["Viewer.z_far"];
@@ -31,10 +32,11 @@ SegViewer::SegViewer(const EigenMap<int, g2o::SE3Quat>& gt_Tcws, std::string con
   thread_ = std::thread([&]() { Run(); });
 }
 
-void SegViewer::SetCurrCamera(int k, const g2o::SE3Quat& Tcw) {
+void SegViewer::SetCurrCamera(int k, const g2o::SE3Quat& Tcw, const cv::Mat& dst) {
   std::unique_lock<std::mutex> lock(mutex_viewer_);
   curr_k_ = k;
   est_Tcws_[k] = Tcw;
+  curr_dst_ = dst;
 }
 
 void SegViewer::SetMappoints(const EigenMap<int, Eigen::Vector3d>& mappoints) {
@@ -51,51 +53,70 @@ void SegViewer::Join(bool req_exit) {
       std::unique_lock<std::mutex> lock(mutex_viewer_);
       req_exit_ = req_exit;
   }
-  thread_.join();
+  if( thread_.joinable() )
+    thread_.join();
   return;
 }
 
 void SegViewer::Run(){
-  pangolin::CreateWindowAndBind(name_, size_.width, size_.height);
+  const int menu_width = 150;
+  int height = std::max(trj_size_.height, dst_size_.height);
+  pangolin::CreateWindowAndBind(name_, dst_size_.width+trj_size_.width+menu_width, height);
+
   glEnable(GL_DEPTH_TEST);
-  // Issue specific OpenGl we might need
   glEnable (GL_BLEND);
   glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-  pangolin::CreatePanel("menu").SetBounds(0.0,1.0,0.0,pangolin::Attach::Pix(175));
-  pangolin::Var<bool> menu_follow_camera("menu.Follow Camera",true,true);
-  pangolin::Var<bool> menu_show_points("menu.Show Points",false,true);
+  glPixelStorei(GL_UNPACK_ALIGNMENT,1); //  For GlTexture from cv::Mat
+
+  pangolin::CreatePanel("menu").SetBounds(0.0,1.0,0.0,pangolin::Attach::Pix(menu_width));
+  pangolin::Var<bool> menu_follow_camera("menu.Follow cam",true,true);
+  pangolin::Var<bool> menu_show_points(  "menu.Show points",false,true);
 
   bool bFollow = true;
   bool bLocalizationMode = false;
-  auto projection_matrix = pangolin::ProjectionMatrix(size_.width, size_.height,
+  auto projection_matrix = pangolin::ProjectionMatrix(trj_size_.width, trj_size_.height,
                                                       vp_f_, vp_f_,
-                                                      size_.width/2.,size_.height/2., z_near_,z_far_);
+                                                      trj_size_.width/2.,trj_size_.height/2., z_near_,z_far_);
   auto lookat = pangolin::ModelViewLookAt(ex_, ey_, ez_, lx_, ly_, lz_, ux_, uy_, uz_);
+  //auto lookat =  pangolin::ModelViewLookAt(1,0.5,-2,0,0,0, pangolin::AxisNegY);
+  pangolin::OpenGlRenderState s_cam(projection_matrix, lookat);
 
-  pangolin::OpenGlRenderState s_cam(projection_matrix,
-                                    lookat);
-  pangolin::Handler3D handler(s_cam);
-  pangolin::View& d_cam = pangolin::CreateDisplay()
-    .SetBounds(0.0, 1.0, pangolin::Attach::Pix(175), 1.0, -float(size_.width)/float(size_.height))
+  pangolin::View& d_cam = pangolin::Display("cam1")
+    .SetBounds(0.0, 1.0, pangolin::Attach::Pix(menu_width), pangolin::Attach::Pix(menu_width+trj_size_.width) )
+    .SetAspect(-float(trj_size_.width)/float(trj_size_.height))
     .SetHandler(new pangolin::Handler3D(s_cam));
 
-  // Issue specific OpenGl we might need
-  glEnable (GL_BLEND);
-  glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  pangolin::View& d_img1 = pangolin::Display("img1")
+    .SetBounds(0., 1., pangolin::Attach::Pix(menu_width+trj_size_.width), 1.)
+    .SetAspect(-float(dst_size_.width)/float(height) );
+
+  pangolin::Display("multi")
+      .AddDisplay(d_cam)
+      .AddDisplay(d_img1)
+      ;
 
   pangolin::OpenGlMatrix gl_Twc;
   gl_Twc.SetIdentity();
   s_cam.Follow(gl_Twc);
+  pangolin::GlTexture img_texture(dst_size_.width,dst_size_.height,GL_RGB,false,0,GL_RGB,GL_UNSIGNED_BYTE);
+
+  //pangolin::RegisterKeyPressCallback(pangolin::PANGO_CTRL + 'b', [&](){
+  pangolin::RegisterKeyPressCallback('q', [&](){
+                                     std::cout << "Exit!" << std::endl;
+                                     req_exit_ = true;
+                                     });
 
   while( !pangolin::ShouldQuit() ) {
     // Sync member variables
     int curr_k;
     bool req_exit;
+    cv::Mat curr_dst;
     EigenMap<int,g2o::SE3Quat> est_Tcws; {
       std::unique_lock<std::mutex> lock(mutex_viewer_);
       curr_k = curr_k_;
       req_exit = req_exit_;
       est_Tcws = est_Tcws_;
+      cv::flip(curr_dst_, curr_dst,0);
     }
     if(req_exit)
       break;
@@ -106,9 +127,8 @@ void SegViewer::Run(){
       Twc = est_Tcws.at(curr_k).inverse();
     }
     auto t = Twc.translation();
-    gl_Twc = Convert(Twc);
-
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    gl_Twc = Convert(Twc);
     if(menu_follow_camera && bFollow) {
       s_cam.Follow(gl_Twc);
     }
@@ -120,15 +140,18 @@ void SegViewer::Run(){
     else if(!menu_follow_camera && bFollow) {
       bFollow = false;
     }
-
-    d_cam.Activate(s_cam);
     glClearColor(0.0f,0.0f,0.0f,1.0f);
-
-    if(menu_show_points){
-      DrawPoints();
-    }
+    d_cam.Activate(s_cam);
     DrawTrajectories(est_Tcws);
+    if(menu_show_points)
+      DrawPoints();
     DrawPose(Twc);
+    d_img1.Activate();
+    if(!curr_dst.empty()){
+      img_texture.Upload(curr_dst.data,GL_BGR,GL_UNSIGNED_BYTE);
+      glColor4f(1.0f,1.0f,1.0f,1.0f);
+      img_texture.RenderToViewport();
+    }
 
     pangolin::FinishFrame();
     usleep(1e+6/fps_); // micro sec 
@@ -176,23 +199,23 @@ void SegViewer::DrawPose(const g2o::SE3Quat& _Twc) {
   glLineWidth(5);
 
 #if 0
-  glColor3f(1., 0., 0.);
+  glColor4f(1., 0., 0.,1.);
   glBegin(GL_LINES);
   glVertex3f(0,0,0);
   glVertex3f(w,0,0);
 
-  glColor3f(0, 1., 0.);
+  glColor4f(0, 1., 0.,1.);
   glVertex3f(0,0,0);
   glVertex3f(0,w,0);
 
-  glColor3f(0, 0., 1.);
+  glColor4f(0, 0., 1.,1.);
   glVertex3f(0,0,0);
   glVertex3f(0,0,w);
   glEnd();
 
 #else
   glLineWidth(2);
-  glColor3f(0., 0., 1.);
+  glColor4f(0., 0., 1.,1.);
 
   glBegin(GL_LINES);
   glVertex3f(0,0,0);
@@ -224,26 +247,26 @@ void SegViewer::DrawPose(const g2o::SE3Quat& _Twc) {
 void SegViewer::DrawTrajectories(const EigenMap<int,g2o::SE3Quat>& est_Tcws) {
   int curr_k = est_Tcws.empty()? 0 : est_Tcws.rbegin()->first;
   if(!gt_Tcws_.empty()){ // Draw ground truth trajectories
-    glLineWidth(1);
-    glColor3f(.6,.6,.6);
-    glBegin(GL_LINES);
     for(size_t i=0; i+1 < gt_Tcws_.size(); i++){
-      if(i >= curr_k){
-        glLineWidth(1);
-        glColor3f(.3,.3,.3);
-      }
+      glLineWidth(1);
+      if(i >= curr_k)
+        glColor4f(.3,.3,.3,1.);
+      else
+        glColor4f(.6,.6,.6,1.);
+      glBegin(GL_LINES);
       const g2o::SE3Quat Twc0 = gt_Tcws_.at(i).inverse();
       const g2o::SE3Quat Twc1 = gt_Tcws_.at(i+1).inverse();
       const auto& t0 = Twc0.translation();
       const auto& t1 = Twc1.translation();
       glVertex3f(t0.x(), t0.y(), t0.z());
       glVertex3f(t1.x(), t1.y(), t1.z());
+      glEnd();
     }
-    glEnd();
   }
 
   if(!est_Tcws.empty()){ // Draw ground truth trajectories
-    glColor3f(0.,1.,0.);
+    glColor4f(0.,1.,0.,1.);
+    glLineWidth(1);
     glPointSize(3.);
     glBegin(GL_LINES);
     for(size_t i=0; i+1 < est_Tcws.size(); i++){
@@ -256,21 +279,20 @@ void SegViewer::DrawTrajectories(const EigenMap<int,g2o::SE3Quat>& est_Tcws) {
     }
     glEnd();
   }
-
   return;
 }
 
 void SegViewer::DrawPoints() {
   glBegin(GL_POINTS);
   glPointSize(.3);
-  glColor3f(.5,.5,.5);
+  glColor4f(.5,.5,.5,1.);
   for(auto it : all_mappoints_){
     if(curr_mappoints_.count(it.first) )
       continue;
     glVertex3f(it.second.x(), it.second.y(), it.second.z() );
   }
   glPointSize(1.);
-  glColor3f(1.,1.,0.);
+  glColor4f(1.,1.,0.,1.);
   for(auto it : curr_mappoints_)
     glVertex3f(it.second.x(), it.second.y(), it.second.z() );
   glEnd();
@@ -298,7 +320,6 @@ void TestPangolin(int argc, char** argv) {
   glEnable(GL_DEPTH_TEST);
   glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-
   pangolin::CreatePanel("menu").SetBounds(0.0,1.0,0.0,pangolin::Attach::Pix(menu_width));
   pangolin::Var<bool> menu_follow_camera("menu.Follow cam",true,true);
   pangolin::Var<bool> menu_show_points("menu.Show pt",false,true);
@@ -309,12 +330,12 @@ void TestPangolin(int argc, char** argv) {
   pangolin::Handler3D handler(s_cam);
   pangolin::View& d_cam = pangolin::Display("cam1")
     .SetBounds(0., 1., pangolin::Attach::Pix(menu_width), pangolin::Attach::Pix(menu_width+trj_width))
-    .SetAspect(float(trj_width)/float(height) )
+    .SetAspect(-float(trj_width)/float(height) )
     .SetHandler(new pangolin::Handler3D(s_cam));
 
   pangolin::View& d_img1 = pangolin::Display("img1")
     .SetBounds(0., 1., pangolin::Attach::Pix(menu_width+trj_width), 1.)
-    .SetAspect( float(im_width)/float(height) ); // todo rgb의 width height로 ?
+    .SetAspect( float(im_width)/float(height) );
 
   pangolin::Display("multi")
       .AddDisplay(d_img1)

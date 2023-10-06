@@ -94,9 +94,14 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
       return 0;
     }
   }
+  cv::Size dst_size;{
+    const auto& rgb = dataset.GetImage(0);
+    dst_size.width = rgb.cols;
+    dst_size.height = 2*rgb.rows;
+  }
 
   const std::string config_fn = GetPackageDir()+"/config/kitti_tracking.yaml";
-  SegViewer viewer(gt_Tcws, config_fn);
+  SegViewer viewer(gt_Tcws, config_fn, dst_size);
   bool stop = false;
   bool req_exit = true;
 
@@ -124,7 +129,6 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
   std::filesystem::create_directories(output_seq_dir);
   NEW_SEG::EvalWriter eval_writer(output_seq_dir);
 
-  char c = 0;
   g2o::SE3Quat TCw;
   for(int i=0; i<dataset.Size(); i+=1){
     //if(i < 350){
@@ -153,11 +157,12 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     NEW_SEG::Frame* frame = pipeline.Put(gray, depth, flow, synced_marker, marker_areas,
                                          gradx, grady, valid_grad, rgb);
     g2o::SE3Quat Tcw =frame->GetTcq(0) *  TCw.inverse();
+    cv::Mat dst;
     {
       cv::Mat dynamic_mask = dataset.GetDynamicMask(i);
-      pipeline.Visualize(rgb, dynamic_mask);
+      pipeline.Visualize(rgb, dynamic_mask, dst);
     }
-    viewer.SetCurrCamera(i, Tcw);
+    viewer.SetCurrCamera(i, Tcw, dst);
     //viewer.SetMappoints(frame->Get3dMappoints());
     std::set<int> uniq_labels;
     for(auto it : marker_areas)
@@ -166,7 +171,9 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     cv::Mat gt_dmask = dataset.GetDynamicMask(i);
     NEW_SEG::RigidGroup* rig = pipeline.GetRigidGroup(0);
     eval_writer.Write(frame, rig, synced_marker, uniq_labels, gt_insmask, gt_dmask);
-    c = cv::waitKey(stop?0:1);
+    if(viewer.IsShutDowned())
+      break;
+    char c = cv::waitKey(stop?0:1);
     if(c == 'q'){
       req_exit = true;
       break;

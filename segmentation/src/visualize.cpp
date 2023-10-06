@@ -124,7 +124,7 @@ void PutInstanceInfoBox(const float& switch_threshold,
 }
 
 
-void Pipeline::Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask) {
+void Pipeline::Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask, cv::Mat& dst) {
   Qth qth = 0;
   RigidGroup* rig = qth2rig_groups_.at(qth);
   cv::Mat dst_frame = rgb.clone();
@@ -228,9 +228,9 @@ void Pipeline::Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask) {
                         });
 
   // Draw patches.
-  cv::Size patch_size(30,30);
-  int n_rows = 10;
-  int n_cols = 40;
+  cv::Size patch_size(20,20);
+  int n_rows = 5;
+  int n_cols = 10;
   cv::Mat dst_patches = cv::Mat::zeros(patch_size.height*n_rows, patch_size.width*n_cols, CV_8UC3);
   dst_patches.setTo(CV_RGB(200,0,255));
   {
@@ -300,11 +300,11 @@ void Pipeline::Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask) {
     cv::putText(dst_marker, msg, cv::Point(5,size.height+5),fontFace, fontScale, CV_RGB(255,0,0), fontThick);
   }
 
-  cv::Mat dst;
   cv::vconcat(dst_marker,dst_frame,dst);
-  cv::imshow("dst", dst);
-  cv::imshow("patches", dst_patches);
   //cv::imshow("switchstates", dst_switchstates);
+  //cv::imshow("dst", dst);
+  cv::imshow("dpatches", dst_patches);
+  cv::moveWindow("dpatches", 10, 900);
   return;
 } // Pipeline::Visualize
 
