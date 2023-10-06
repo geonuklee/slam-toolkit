@@ -239,7 +239,7 @@ Pipeline::~Pipeline() {
 }
 
 void Pipeline::SupplyMappoints(Frame* frame) {
-  const double min_mpt_distance = 20.;
+  const double min_mpt_distance = 15.;
   const auto& keypoints = frame->GetKeypoints();
   const auto& instances = frame->GetInstances();
   const auto& depths    = frame->GetMeasuredDepths();

@@ -79,47 +79,6 @@ void TestKittiTrackingDataset(){
 }
 
 #include "seg_viewer.h"
-void TestPangolin(int argc, char** argv) {
-  const std::string dataset_path = GetPackageDir()+ "/kitti_tracking_dataset/";
-  const std::string dataset_type = "training";
-  const std::string seq(argv[1]);
-  KittiTrackingDataset dataset(dataset_type, seq, dataset_path);
-  const EigenMap<int, g2o::SE3Quat>& gt_Tcws = dataset.GetTcws();
-  const std::string config_fn = GetPackageDir()+"/config/kitti_tracking.yaml";
-  SegViewer viewer(gt_Tcws, config_fn);
-  bool stop = true;
-
-  for(int i =0; i < dataset.Size(); i++){
-    auto gt_Twc = gt_Tcws.at(i).inverse();
-    cv::Mat rgb = dataset.GetImage(i);
-    cv::Mat depth = dataset.GetDepthImage(i);
-    cv::Mat instance_mask = dataset.GetInstanceMask(i);
-    cv::Mat d_mask = dataset.GetDynamicMask(i);
-    if(instance_mask.empty())
-      instance_mask = cv::Mat::zeros(rgb.size(), CV_32SC1);
-    if(d_mask.empty())
-      d_mask = cv::Mat::zeros(rgb.size(), CV_8UC1);
-
-    g2o::SE3Quat err;
-    err.setTranslation(Eigen::Vector3d(1.,0., 0.2));
-    g2o::SE3Quat est_Tcw = err *gt_Twc.inverse();
-    viewer.SetCurrCamera(i, est_Tcw);
-
-    cv::imshow("dmask", 255*d_mask);
-    cv::imshow("Ins mask", GetColoredLabel(instance_mask) );
-    cv::imshow("rgb", rgb);
-    cv::imshow("depth", .01*depth);
-    char c = cv::waitKey(stop?0:1);
-    if(c=='q')
-      break;
-    else if(c=='s')
-      stop = !stop;
-  }
-  bool req_exit = true;
-  viewer.Join(req_exit); // close request 도 추가는 해야겠다.
-  return;
-}
-
 int TestKittiTrackingNewSLAM(int argc, char** argv) {
   const std::string dataset_path = GetPackageDir()+ "/kitti_tracking_dataset/";
   const std::string dataset_type = "training";

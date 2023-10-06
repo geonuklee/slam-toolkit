@@ -1,6 +1,8 @@
 #include "seg_viewer.h"
 #include <g2o/types/slam3d/se3quat.h>
+#include <opencv2/highgui.hpp>
 #include <pangolin/display/display.h>
+#include <pangolin/display/view.h>
 #include <pangolin/scene/axis.h>
 
 
@@ -118,8 +120,6 @@ void SegViewer::Run(){
     else if(!menu_follow_camera && bFollow) {
       bFollow = false;
     }
-
-
 
     d_cam.Activate(s_cam);
     glClearColor(0.0f,0.0f,0.0f,1.0f);
@@ -274,6 +274,79 @@ void SegViewer::DrawPoints() {
   for(auto it : curr_mappoints_)
     glVertex3f(it.second.x(), it.second.y(), it.second.z() );
   glEnd();
+}
+
+void setImageData(unsigned char * imageArray, int size){
+  for(int i = 0 ; i < size;i++) {
+    imageArray[i] = (unsigned char)(rand()/(RAND_MAX/255.0));
+  }
+}
+
+void TestPangolin(int argc, char** argv) {
+  std::string rgb_fn = std::string(PACKAGE_DIR)+"/kitti_tracking_dataset/training/image_02/0000/000000.png";
+  cv::Mat rgb = cv::imread(rgb_fn);
+  int im_width = rgb.cols;
+  int trj_width = 300.;
+  int height = rgb.rows;
+  float vp_f = 400;
+  float near = 0.01;
+  float far = 1000.;
+  float fps = 20.;
+  int menu_width = 140;
+
+  pangolin::CreateWindowAndBind("pangolin", im_width+trj_width+menu_width, height);
+  glEnable(GL_DEPTH_TEST);
+  glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+
+  pangolin::CreatePanel("menu").SetBounds(0.0,1.0,0.0,pangolin::Attach::Pix(menu_width));
+  pangolin::Var<bool> menu_follow_camera("menu.Follow cam",true,true);
+  pangolin::Var<bool> menu_show_points("menu.Show pt",false,true);
+
+  pangolin::OpenGlMatrix proj = pangolin::ProjectionMatrix(trj_width,height,420,420,trj_width/2.,height/2.,0.1,1000);
+  pangolin::OpenGlRenderState s_cam(proj, pangolin::ModelViewLookAt(1,0.5,-2,0,0,0, pangolin::AxisY) );
+
+  pangolin::Handler3D handler(s_cam);
+  pangolin::View& d_cam = pangolin::Display("cam1")
+    .SetBounds(0., 1., pangolin::Attach::Pix(menu_width), pangolin::Attach::Pix(menu_width+trj_width))
+    .SetAspect(float(trj_width)/float(height) )
+    .SetHandler(new pangolin::Handler3D(s_cam));
+
+  pangolin::View& d_img1 = pangolin::Display("img1")
+    .SetBounds(0., 1., pangolin::Attach::Pix(menu_width+trj_width), 1.)
+    .SetAspect( float(im_width)/float(height) ); // todo rgb의 width height로 ?
+
+  pangolin::Display("multi")
+      .AddDisplay(d_img1)
+      .AddDisplay(d_cam)
+      ;
+
+  // Issue specific OpenGl we might need
+  glEnable (GL_BLEND);
+  glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+  glPixelStorei(GL_UNPACK_ALIGNMENT,1);
+  pangolin::GlTexture imageTexture(im_width,height,GL_RGB,false,0,GL_RGB,GL_UNSIGNED_BYTE);
+
+  while( !pangolin::ShouldQuit() ) {
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glClearColor(0.0f,0.0f,0.0f,1.0f);
+    d_cam.Activate(s_cam);
+    pangolin::glDrawColouredCube();
+
+    //setImageData(imageArray,3*im_width*height);
+    cv::Mat fliped_rgb;
+    cv::flip(rgb, fliped_rgb,0);
+    imageTexture.Upload(fliped_rgb.data,GL_BGR,GL_UNSIGNED_BYTE);
+    d_img1.Activate();
+    glColor4f(1.0f,1.0f,1.0f,1.0f);
+    imageTexture.RenderToViewport();
+
+    pangolin::FinishFrame();
+    usleep(1e+4);
+  }
+
+  return;
 }
 
 

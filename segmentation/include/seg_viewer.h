@@ -32,4 +32,6 @@ private:
   std::thread  thread_;
 };
 
+void TestPangolin(int argc, char** argv);
+
 #endif
