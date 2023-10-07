@@ -247,21 +247,32 @@ void SegViewer::DrawPose(const g2o::SE3Quat& _Twc) {
 void SegViewer::DrawTrajectories(const EigenMap<int,g2o::SE3Quat>& est_Tcws) {
   int curr_k = est_Tcws.empty()? 0 : est_Tcws.rbegin()->first;
   if(!gt_Tcws_.empty()){ // Draw ground truth trajectories
-    for(size_t i=0; i+1 < gt_Tcws_.size(); i++){
-      glLineWidth(1);
-      if(i >= curr_k)
-        glColor4f(.3,.3,.3,1.);
-      else
-        glColor4f(.6,.6,.6,1.);
-      glBegin(GL_LINES);
+    size_t i = 0;
+    glLineWidth(2);
+    glColor4f(1.,1.,1,.3);
+    glBegin(GL_LINES);
+    for(i=0; i+1 < gt_Tcws_.size(); i++){
       const g2o::SE3Quat Twc0 = gt_Tcws_.at(i).inverse();
       const g2o::SE3Quat Twc1 = gt_Tcws_.at(i+1).inverse();
       const auto& t0 = Twc0.translation();
       const auto& t1 = Twc1.translation();
       glVertex3f(t0.x(), t0.y(), t0.z());
       glVertex3f(t1.x(), t1.y(), t1.z());
-      glEnd();
+      if( i+1 == curr_k)
+        break;
     }
+    glEnd();
+    glColor4f(1.,1.,1,.6);
+    glBegin(GL_LINES);
+    for(; i+1 < gt_Tcws_.size(); i++){
+      const g2o::SE3Quat Twc0 = gt_Tcws_.at(i).inverse();
+      const g2o::SE3Quat Twc1 = gt_Tcws_.at(i+1).inverse();
+      const auto& t0 = Twc0.translation();
+      const auto& t1 = Twc1.translation();
+      glVertex3f(t0.x(), t0.y(), t0.z());
+      glVertex3f(t1.x(), t1.y(), t1.z());
+    }
+    glEnd();
   }
 
   if(!est_Tcws.empty()){ // Draw ground truth trajectories
@@ -331,7 +342,7 @@ void TestPangolin(int argc, char** argv) {
   pangolin::View& d_cam = pangolin::Display("cam1")
     .SetBounds(0., 1., pangolin::Attach::Pix(menu_width), pangolin::Attach::Pix(menu_width+trj_width))
     .SetAspect(-float(trj_width)/float(height) )
-    .SetHandler(new pangolin::Handler3D(s_cam));
+    .SetHandler(&handler);
 
   pangolin::View& d_img1 = pangolin::Display("img1")
     .SetBounds(0., 1., pangolin::Attach::Pix(menu_width+trj_width), 1.)
@@ -364,7 +375,7 @@ void TestPangolin(int argc, char** argv) {
     imageTexture.RenderToViewport();
 
     pangolin::FinishFrame();
-    usleep(1e+4);
+    //usleep(1e+4);
   }
 
   return;

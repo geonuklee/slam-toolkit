@@ -61,6 +61,7 @@ public:
   const std::vector<cv::Mat>& GetFlow() const { return flow_; }  // delta uv {0}<-{1} on coordinate {0}.
   cv::Mat GetSyncedMarker() const { return prev_sync_marker_; }
   const std::map<int, size_t>& GetMarkerAreas () const { return marker_areas_; }
+  void ChangeSyncedMarker(cv::Mat synced_marker) { prev_sync_marker_ = synced_marker; }
 private:
   int n_instance_;
   cv::Ptr<cv::DenseOpticalFlow> dof_;

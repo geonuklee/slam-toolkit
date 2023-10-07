@@ -88,6 +88,9 @@ void Frame::SetMappoint(Mappoint* mp, int index) {
     throw std::invalid_argument("Erase previous mp before overwrite new mp.");
   mappoints_[index] = mp;
   mappoints_index_[mp] = index;
+  Instance* ins = instances_[index];
+  if(ins)
+    ins->AddMappoint(mp);
   return;
 }
 
@@ -209,6 +212,13 @@ RigidGroup::~RigidGroup() {
   delete bg_instance_;
 }
 
+bool RigidGroup::RemoveExcludedInstance(Instance* ins) {
+  if(!excluded_instances_.count(ins->GetId()))
+    return false;
+  excluded_instances_.erase(ins->GetId());
+  return true;
+}
+
 bool RigidGroup::ExcludeInstance(Instance *ins) {
   const Pth pth = ins->GetId();
   excluded_instances_[pth] = ins;
@@ -243,7 +253,6 @@ void Pipeline::SupplyMappoints(Frame* frame) {
   const auto& keypoints = frame->GetKeypoints();
   const auto& instances = frame->GetInstances();
   const auto& depths    = frame->GetMeasuredDepths();
-
   const Qth qth = 0;
   vinfo_supplied_mappoints_.clear();
   vinfo_supplied_mappoints_.resize(keypoints.size(), false);
@@ -346,7 +355,9 @@ std::map<Qth, size_t> CountMappoints(Frame* frame){
       continue;
     if(ins->GetQth() < 0)
       continue;
-    n_mappoints[ins->GetQth()]++;
+    Qth qth = ins->GetQth();
+    if(qth > 0) throw -1; // TODO Remove after impelment mutliple qth.
+    n_mappoints[qth]++;
   }
   return n_mappoints;
 }
@@ -566,64 +577,65 @@ void SetMatches(std::map<int, std::pair<Mappoint*, double> >& flow_matches,
 }
 
 void CountMappoints(Frame* frame,
-                    std::map<Pth, std::set<Mappoint*> >& ins2mappoints){
+                    std::map<Instance*, std::set<Mappoint*> >& ins2mappoints){
   const auto& keypoints = frame->GetKeypoints();
   const auto& mappoints = frame->GetMappoints();
+  const auto& instances = frame->GetInstances();
   for(size_t n=0; n<keypoints.size(); n++){
     Mappoint* mpt = mappoints[n];
     if(!mpt)
       continue;
-    Instance* ins = mpt->GetInstance();
+    Instance* ins = instances[n];
     if(!ins)
       continue;
-    Pth pth = ins->GetId();
-    if(pth > -1)
-      ins2mappoints[pth].insert(mpt);
+    if(ins->GetId() < 0) // bg instance
+      continue;
+    ins2mappoints[ins].insert(mpt);
   }
   return;
 }
 
-void Pipeline::MergeEquivalentInstances(std::map<Pth, std::set<Mappoint*> >& ins2mappoints,
-                                        cv::Mat& synced_marker) {
+std::map<Instance*,Instance*> Pipeline::MergeEquivalentInstances(const std::map<Instance*, std::set<Mappoint*> >& _mappoints_of_currins,
+                                                                 const std::map<Pth,float>& density_scores){
   std::map<Instance*, Instance*> equivalent_instances;
-  for(auto it : ins2mappoints){
-    Instance* ins1 = pth2instances_.at(it.first);
+  for(auto it_ins1 :_mappoints_of_currins){
+    Instance* ins1 = it_ins1.first;
     Pth pth1 = ins1->GetId();
+    if(density_scores.at(pth1) < 1.)
+      continue;
+
+    const std::set<Mappoint*>& curr_mappoints = it_ins1.second;
     std::map<Instance*,size_t> ins0counts;
-    for(Mappoint* mp : it.second)
-      ins0counts[mp->GetInstance()]++;
-    Instance* best_ins = nullptr;
-    size_t best_count = 0;
-    for(auto it : ins0counts){
-      if(it.second < best_count)
-        continue;
-      if(it.first->GetMappoints().empty())
-        continue;
-      best_count = it.second;
-      best_ins = it.first;
-    }
-    if(!best_ins)
+    for(Mappoint* mp : curr_mappoints)
+      ins0counts[mp->GetInstance()]++; // mp->GetInstance는 ins0를 가리킨다.
+    if(ins0counts.count(ins1))
       continue;
-    float n1(best_count);
-    float n2(best_ins->GetMappoints().size());
-    float pseudo_recall = n1/ n2;
-    if(ins1 == best_ins)
-      continue;
-    if(pseudo_recall > .5){
-      printf("Merging for recall(%d/%d) = %.3f\n", ins1->GetId(), best_ins->GetId(), pseudo_recall);
-      equivalent_instances[ins1] = best_ins; // Convert ins1 -> best_ins
+
+    Instance* ins0 = nullptr;
+    float best_iou = .0;
+    for(auto it_ins0 : ins0counts){
+      if(it_ins0.first->GetQth() > -1) // Merging은 dynamic instance에 대해서만 수행할 예정.
+        continue;
+      const size_t n_intersec = it_ins0.second;
+      const size_t n0 = it_ins0.first->GetLatestKfMappoints().size();
+      const size_t n1 = it_ins1.second.size();
+      if(std::min(n0,n1) < 5)
+        continue;
+      float iou = float(n_intersec) / float(n0+n1-n_intersec);
+      if(iou < best_iou)
+        continue;
+      best_iou = iou;
+      ins0 = it_ins0.first;
     }
+    if(!ins0)
+      continue;
+    //printf("Matching (%d/%d) for iou %.3f\n", ins0->GetId(), pth1, best_iou);
+    if(best_iou < .3)
+      continue;
+    printf("Need Merge(%d/%d) for iou %.3f\n", ins0->GetId(), pth1, best_iou);
+    equivalent_instances[ins1] = ins0; // Convert ins1 -> best_ins
   }
-  for(auto it : equivalent_instances){
-    Pth pth1 = it.first->GetId();
-    Pth pth0 = it.second->GetId();
-    synced_marker.setTo(pth0, synced_marker==pth1);
-    pth2instances_.erase(pth1);
-    delete it.first;
-    ins2mappoints[pth0] = ins2mappoints.at(pth1);
-    ins2mappoints.erase(pth1);
-  }
-  return;
+  return equivalent_instances;
 }
 
 g2o::SE3Quat PredictMotion(const Frame* prev_frame,
@@ -644,7 +656,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
                      const cv::Mat depth,
                      const std::vector<cv::Mat>& flow,
                      cv::Mat& synced_marker,
-                     const std::map<int,size_t>& marker_areas,
+                     std::map<int,size_t> marker_areas,
                      const cv::Mat gradx,
                      const cv::Mat grady,
                      const cv::Mat valid_grad,
@@ -660,7 +672,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
 
   const Qth qth_default = 0;
   cv::Mat outline_mask = synced_marker < 1;
-  std::map<Qth, std::set<Pth> > segmented_instances;
+  std::map<Qth, std::set<Instance*> > segmented_instances;
   std::set<Pth> new_instances;
   for(const auto& it : marker_areas){
     Instance* ins = nullptr;
@@ -671,7 +683,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
     }
     else
       ins = pth2instances_.at(it.first);
-    segmented_instances[ins->GetQth()].insert(ins->GetId());
+    segmented_instances[ins->GetQth()].insert(ins);
   }
   if(segmented_instances.empty())
     throw -1;
@@ -736,20 +748,66 @@ Frame* Pipeline::Put(const cv::Mat gray,
   NewFilterOutlierMatches(curr_frame);
   //FilterOutlierMatches(curr_frame); // 이게 trj는 더 정확한게 모순.
 
-  std::map<Pth, std::set<Mappoint*> > ins2mappoints;
+  std::map<Instance*, std::set<Mappoint*> > ins2mappoints;
   CountMappoints(curr_frame, ins2mappoints);
-  for(auto it : ins2mappoints){
-    Instance* ins = pth2instances_.at(it.first);
-    ins->SetMappoints(it.second);
+  std::map<Instance*, Instance*> equivalent_instances; {
+    std::map<Pth,float> density_scores0;
+    for(const auto& it : marker_areas){
+      const Pth& pth = it.first;
+      const size_t& area = it.second;
+      Instance* ins = pth2instances_.at(pth);
+      float npoints = ins2mappoints.count(ins) ? ins2mappoints.at(ins).size() : 0.;
+      float dense = npoints > 0 ? float(npoints) / float(area) : 0.;
+      density_scores0[pth] = dense / density_threshold;
+    }
+    equivalent_instances = MergeEquivalentInstances(ins2mappoints, density_scores0);
   }
-  // MergeEquivalentInstances(ins2mappoints, synced_marker);
+  /*
+  * [x] Frame에 먼저 할당된 Instance*를 제거( curr_frame->SetInstance)
+  * [] mappoint에서 ins 참고하는경우.
+  * [x] pth2instances_ 에서 제거.
+  * [x] Pipeline::Put()의 segmented_instances에서 변경.
+  * [x] marker_areas에서 변경.
+  */
+  if(!equivalent_instances.empty()){
+    for(auto it : segmented_instances){
+      std::set<Instance*> copied = it.second;
+      bool updated = false;
+      for(Instance* ins_curr : it.second){
+        if(!equivalent_instances.count(ins_curr))
+          continue;
+        copied.erase(ins_curr);
+        copied.insert(equivalent_instances.at(ins_curr));
+        updated = true;
+      }
+      if(!updated)
+        continue;
+      segmented_instances[it.first] = copied;
+    }
+    for(auto it : equivalent_instances){
+      Pth pth_curr = it.first->GetId();
+      Pth pth_past = it.second->GetId();
+      pth2instances_.erase(pth_curr);
+      ins2mappoints[it.second] = ins2mappoints.at(it.first);
+      ins2mappoints.erase(it.first);
+      synced_marker.setTo(pth_past, synced_marker==pth_curr);
+      marker_areas[pth_past] = marker_areas[pth_curr];
+      marker_areas.erase(pth_curr);
+      for(Mappoint* mp : it.first->GetMappoints())
+        mp->ChangeInstance(it.second);
+      it.second->AddMappoints(it.first->GetMappoints());
+      delete it.first;
+      pth_removed2replacing_[pth_curr] = pth_past;
+    }
+    curr_frame->SetInstances(synced_marker, pth2instances_);
+  }
 
-#if 1
   std::map<Pth,float>& density_scores = vinfo_density_socres_;
   for(const auto& it : marker_areas){
     const Pth& pth = it.first;
     const size_t& area = it.second;
-    float npoints = ins2mappoints.count(pth) ? ins2mappoints.at(pth).size() : 0.;
+    Instance* ins = pth2instances_.at(pth);
+    float npoints = ins2mappoints.count(ins) ? ins2mappoints.at(ins).size() : 0.;
     float dense = npoints > 0 ? float(npoints) / float(area) : 0.;
     density_scores[pth] = dense / density_threshold;
   }
@@ -791,11 +849,10 @@ Frame* Pipeline::Put(const cv::Mat gray,
     }
 
     size_t n_mappoints4next_rig = 0;
-    for(Pth pth : instances4next_rig)
+    /* for(Pth pth : instances4next_rig)
       if(ins2mappoints.count(pth))// mp 없는 instance도 있으니까.
-         n_mappoints4next_rig += ins2mappoints.at(pth).size();
+         n_mappoints4next_rig += ins2mappoints.at(pth).size(); */
   }
-#endif
 
   std::set<Qth> need_keyframe = FrameNeedsToBeKeyframe(curr_frame);
   for(const Qth& qth : need_keyframe){
@@ -805,8 +862,13 @@ Frame* Pipeline::Put(const cv::Mat gray,
     curr_frame->SetKfId(qth, kf_id );
     keyframes_[qth][curr_frame->GetId()] = curr_frame;
   }
-  if(!need_keyframe.empty())
+  if(!need_keyframe.empty()){
     SupplyMappoints(curr_frame);
+    std::map<Instance*, std::set<Mappoint*> > lkf_ins2mappoints;
+    CountMappoints(curr_frame, lkf_ins2mappoints);
+    for(auto it : lkf_ins2mappoints)
+      it.first->SetLatestKfMappoints(it.second);
+  }
   if(prev_frame_ && ! prev_frame_->IsKeyframe() )
     delete prev_frame_;
   prev_frame_ = curr_frame;

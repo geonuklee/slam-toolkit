@@ -167,6 +167,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
         continue;
     }
     Instance* ins = mp->GetInstance();
+    //Instance* ins = mp->GetLatestInstance();
     if(ins && ins->GetId() > 0 ){
       mp_counts[ins->GetId()]++;
     }
@@ -225,7 +226,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
 
       Instance* ins = mp->GetInstance();
       Pth pth = ins ? ins->GetId() : -1;
-      bool valid_depth = z > MIN_NUM;
+      bool valid_depth = z > 10.; // 너무 가까운데서 stereo disparity가 부정확.
       bool switchable = v_switches.count(pth) ;
       if(switchable ){
         VertexSwitchLinear* v_switch = v_switches.at(pth);

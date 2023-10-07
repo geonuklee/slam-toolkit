@@ -400,10 +400,15 @@ EvalWriter::EvalWriter(std::string output_seq_dir)
 }
 
 
-void EvalWriter::WriteInstances(const std::map<Pth, Instance*>& instances) {
-  for(auto it : instances){
+void EvalWriter::WriteInstances(const std::map<Pth, Pth>& pth_removed2replacing) {
+  for(auto it : pth_removed2replacing){
     Pth pth = it.first;
-    Qth qth = it.second->GetQth();
+    Qth qth = pth2qth_[it.second];
+    pth2qth_[pth] = qth;
+  }
+  for(auto it : pth2qth_){
+    Pth pth = it.first;
+    Qth qth = it.second;
     instances_output_ << pth << " " << qth << std::endl;
   }
   instances_output_.flush();
@@ -413,7 +418,6 @@ void EvalWriter::WriteInstances(const std::map<Pth, Instance*>& instances) {
 void EvalWriter::Write(Frame* frame,
                        RigidGroup* static_rig,
                        const cv::Mat synced_marker,
-                       const std::set<int>& uniq_labels,
                        const cv::Mat gt_insmask,
                        const cv::Mat gt_dmask) {
   const Qth qth = static_rig->GetId();
@@ -426,6 +430,7 @@ void EvalWriter::Write(Frame* frame,
   }
 
   int frame_id = frame->GetId();
+  std::set<int> uniq_labels;
   {
     /* 2. keypoints 저장.
     */
@@ -441,12 +446,11 @@ void EvalWriter::Write(Frame* frame,
       if(ins && ins->GetId() != 0)
         est_on_dynamic = 1;
       int gt_on_dynamic =  gt_dmask.at<uchar>(pt) > 0 ? 1 : 0;
-      keypoints_output_ << frame_id << " "
-                        << n << " "
-                        << ins_id << " "
-                        << has_mp << " "
-                        << pt.x << " "
-                        << pt.y  << std::endl;
+      keypoints_output_ << frame_id << " " << n << " " << ins_id << " " << has_mp << " " << pt.x << " " << pt.y  << std::endl;
+      if(ins){
+        pth2qth_[ins->GetId()] = ins->GetQth();
+        uniq_labels.insert(ins->GetId());
+      }
     }
     keypoints_output_.flush();
   }

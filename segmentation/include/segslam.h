@@ -72,10 +72,16 @@ public:
   void SetQth(const Qth& qth) { qth_ = qth; }
 
   const std::set<Mappoint*>& GetMappoints() const { return mappoints_; }
-  void SetMappoints(const std::set<Mappoint*>& mappoints) { mappoints_ = mappoints;}
+  void AddMappoint(Mappoint* mp) { mappoints_.insert(mp); }
+  void AddMappoints(const std::set<Mappoint*>& mappoints) { mappoints_.insert(mappoints.begin(), mappoints.end());}
+
+  void SetLatestKfMappoints(const std::set<Mappoint*>& mappoints)  { latest_kf_mappoints_ = mappoints; }
+  const std::set<Mappoint*>& GetLatestKfMappoints() const { return latest_kf_mappoints_; }
+
 private:
   Qth qth_;
-  std::set<Mappoint*> mappoints_;
+  std::set<Mappoint*> mappoints_; // all
+  std::set<Mappoint*> latest_kf_mappoints_;
   const Pth pth_;
 };
 
@@ -92,6 +98,7 @@ public:
                                     const cv::Mat& mask);
 
   void SetInstances(const cv::Mat synced_marker, const std::map<Pth, Instance*>& instances);
+  void SetInstance(int index, Instance* ins) { instances_[index] = ins; }
   void SetMeasuredDepths(const cv::Mat depth);
 
   std::list<std::pair<int, double> > SearchRadius(const Eigen::Vector2d& uv, double radius) const;
@@ -152,8 +159,10 @@ private:
 class Mappoint {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-  Mappoint(Ith id, Instance* ins) : id_(id), ins_(ins) {}
+  Mappoint(Ith id, Instance* ins) : id_(id), ins_(ins), latest_ins_(ins) {}
   Instance* GetInstance() const { return ins_; }
+  Instance* GetLatestInstance() const { return ins_; }
+  void ChangeInstance(Instance* ins) { ins_ = ins; if(latest_ins_==ins) latest_ins_=ins;}
   const Ith& GetId() const { return id_; }
   void GetFeature(const Qth& qth, bool latest, cv::Mat& description, cv::KeyPoint& kpt) const;
 
@@ -179,7 +188,8 @@ public:
 
 private:
   const Ith id_;
-  Instance*const ins_;
+  Instance* ins_;
+  Instance* latest_ins_;
 
   // TODO 더이상 ins가 Qth를 포함하지 않을경우 제외해야하는데, 모순이다.
   std::map<Qth, Frame*> ref_;
@@ -196,7 +206,9 @@ struct RigidGroup {
   Instance* GetBgInstance() const { return bg_instance_; }
   const Qth& GetId() const { return id_; }
   const std::map<Pth, Instance*>& GetExcludedInstances() const { return excluded_instances_; }
-private:
+  bool RemoveExcludedInstance(Instance* ins);
+
+ private:
   const Qth id_;
   Instance*const bg_instance_;
   std::map<Pth, Instance*> excluded_instances_;
@@ -212,7 +224,7 @@ public:
              const cv::Mat depth,
              const std::vector<cv::Mat>& flow,
              cv::Mat& synced_marker,
-             const std::map<int,size_t>& marker_areas,
+             std::map<int,size_t> marker_areas,
              const cv::Mat gradx,
              const cv::Mat grady,
              const cv::Mat valid_grad,
@@ -223,8 +235,8 @@ public:
   const std::map<Pth, Instance*>& GetInstances()  const { return pth2instances_; }
 
 private:
-  void MergeEquivalentInstances(std::map<Pth, std::set<Mappoint*> >& ins2mappoints,
-                                cv::Mat& synced_marker);
+  std::map<Instance*,Instance*> MergeEquivalentInstances(const std::map<Instance*, std::set<Mappoint*> >& ins2mappoints,
+                                                         const std::map<Pth,float>& density_scores);
   std::set<Qth> FrameNeedsToBeKeyframe(Frame* frame) const;
   void SupplyMappoints(Frame* frame);
   void FilterOutlierMatches(Frame* curr_frame);

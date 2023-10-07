@@ -129,11 +129,12 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
   std::filesystem::create_directories(output_seq_dir);
   NEW_SEG::EvalWriter eval_writer(output_seq_dir);
 
+  cv::Mat empty_dst = cv::Mat::zeros(dst_size.height, dst_size.width, CV_8UC3);
   g2o::SE3Quat TCw;
   for(int i=0; i<dataset.Size(); i+=1){
-    //if(i < 350){
+    //if(i < 450){
     //  TCw = gt_Tcws.at(i);
-    //  viewer.SetCurrCamera(i, TCw);
+    //  viewer.SetCurrCamera(i, TCw, empty_dst);
     //  continue;
     //}
     const cv::Mat rgb   = dataset.GetImage(i, cv::IMREAD_COLOR);
@@ -156,21 +157,17 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     const std::map<int,size_t>& marker_areas = img_tracker->GetMarkerAreas();
     NEW_SEG::Frame* frame = pipeline.Put(gray, depth, flow, synced_marker, marker_areas,
                                          gradx, grady, valid_grad, rgb);
-    g2o::SE3Quat Tcw =frame->GetTcq(0) *  TCw.inverse();
-    cv::Mat dst;
-    {
+    img_tracker->ChangeSyncedMarker(synced_marker);
+    g2o::SE3Quat Tcw = frame->GetTcq(0) * TCw;
+    cv::Mat dst; {
       cv::Mat dynamic_mask = dataset.GetDynamicMask(i);
       pipeline.Visualize(rgb, dynamic_mask, dst);
     }
     viewer.SetCurrCamera(i, Tcw, dst);
-    //viewer.SetMappoints(frame->Get3dMappoints());
-    std::set<int> uniq_labels;
-    for(auto it : marker_areas)
-      uniq_labels.insert(it.first);
     cv::Mat gt_insmask = dataset.GetInstanceMask(i);
     cv::Mat gt_dmask = dataset.GetDynamicMask(i);
     NEW_SEG::RigidGroup* rig = pipeline.GetRigidGroup(0);
-    eval_writer.Write(frame, rig, synced_marker, uniq_labels, gt_insmask, gt_dmask);
+    eval_writer.Write(frame, rig, synced_marker, gt_insmask, gt_dmask);
     if(viewer.IsShutDowned())
       break;
     char c = cv::waitKey(stop?0:1);
@@ -181,7 +178,7 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     else if (c == 's')
       stop = !stop;
   }
-  eval_writer.WriteInstances( pipeline.GetInstances() );
+  eval_writer.WriteInstances(pipeline.GetPthRemoved2Replacing());
   viewer.Join(req_exit);
   return 1;
 }
