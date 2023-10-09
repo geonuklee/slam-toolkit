@@ -158,10 +158,8 @@ void Pipeline::Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask, cv::M
   for(size_t i = 0; i < dst_frame.rows; i++){
     for(size_t j = 0; j < dst_frame.cols; j++){
       cv::Vec3b& pixel = dst_frame.at<cv::Vec3b>(i,j);
-      if(outline.at<uchar>(i,j)){
-        pixel[0] = pixel[1] =pixel[2] = 0;
+      if(outline.at<uchar>(i,j))
         continue;
-      }
       const Pth& pth = vinfo_synced_marker_.at<int32_t>(i,j);
       const float& r = dist_from_outline.at<float>(i,j);
       std::pair<cv::Point2f, float>& cp = pth2center[pth];
@@ -169,10 +167,16 @@ void Pipeline::Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask, cv::M
         cp.first = cv::Point2f(j,i);
         cp.second = r;
       }
-      if(excluded.count(pth)){
-        pixel[0] = pixel[1] = 0;
-        pixel[2] = 255;
-      }
+    }
+  }
+ dst_frame.setTo(CV_RGB(0,0,0), outline);
+  for(Pth pth : excluded)
+    dst_frame.setTo(CV_RGB(255,0,0), vinfo_synced_marker_==pth);
+  if(vinfo_switch_states_.count(qth)){
+    for(auto it : vinfo_switch_states_.at(qth)){
+      if(it.second > switch_threshold_)
+        continue;
+      dst_frame.setTo(CV_RGB(255,255,0), vinfo_synced_marker_==it.first);
     }
   }
   cv::addWeighted(rgb, .5, dst_frame, .5, 1., dst_frame);

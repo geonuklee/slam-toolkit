@@ -80,6 +80,12 @@ void TestKittiTrackingDataset(){
 
 #include "seg_viewer.h"
 int TestKittiTrackingNewSLAM(int argc, char** argv) {
+  if(argc < 3){
+    std::cout << "Need 3 argc" << std::endl;
+    std::cout << argc << std::endl;
+    std::cout << argv[2] << std::endl;
+    return -1;
+  }
   const std::string dataset_path = GetPackageDir()+ "/kitti_tracking_dataset/";
   const std::string dataset_type = "training";
   const std::string seq(argv[1]);
@@ -102,9 +108,6 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
 
   const std::string config_fn = GetPackageDir()+"/config/kitti_tracking.yaml";
   SegViewer viewer(gt_Tcws, config_fn, dst_size);
-  bool stop = false;
-  bool req_exit = true;
-
   const auto& D = dataset.GetCamera()->GetD();
   const StereoCamera* camera = dynamic_cast<const StereoCamera*>(dataset.GetCamera());
   assert(camera);
@@ -114,13 +117,15 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
   const float fy = camera->GetK()(1,1);
   const float min_disp = 1.;
   const float snyc_min_iou = .5;
-  SEG::CvFeatureDescriptor extractor;
   std::shared_ptr<OutlineEdgeDetector> edge_detector( new OutlineEdgeDetectorWithSIMD );  // After   2.5 [milli sec]
   std::shared_ptr<Segmentor> segmentor( new SegmentorNew );                               // After  5~10 [milli sec] , with octave 2
   std::shared_ptr<ImageTrackerNew> img_tracker( new ImageTrackerNew);                     // Afte  10~11 [milli sec]
-  NEW_SEG::Pipeline pipeline(camera, &extractor);                                             // After   ~50 [milli sec]
+  NEW_SEG::Pipeline pipeline(camera);                                                     // After   ~50 [milli sec]
 
-  std::string output_dir = std::string(PACKAGE_DIR)+"/output";
+  std::string output_dir = std::string(PACKAGE_DIR)+std::string("/")+std::string(argv[2]);
+  bool stop = std::string(argv[2])!="output_batch";
+  bool req_exit = true;
+
   if(! std::filesystem::exists(output_dir) )
     std::filesystem::create_directories(output_dir);
   std::string output_seq_dir = output_dir+"/"+dataset_type+"_"+seq;
@@ -132,7 +137,7 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
   cv::Mat empty_dst = cv::Mat::zeros(dst_size.height, dst_size.width, CV_8UC3);
   g2o::SE3Quat TCw;
   for(int i=0; i<dataset.Size(); i+=1){
-    //if(i < 450){
+    //if(i < 900){
     //  TCw = gt_Tcws.at(i);
     //  viewer.SetCurrCamera(i, TCw, empty_dst);
     //  continue;

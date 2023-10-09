@@ -234,18 +234,16 @@ bool RigidGroup::ExcludeInstance(Instance *ins) {
   return true;
 }
 
-Pipeline::Pipeline(const Camera* camera,
-                   SEG::FeatureDescriptor*const extractor
-                  )
-  :extractor_(extractor),
-  camera_(camera),
+Pipeline::Pipeline(const Camera* camera)
+  : camera_(camera),
   prev_frame_(nullptr),
   pose_tracker_(new PoseTracker)
 {
+  extractor_ = new SEG::CvFeatureDescriptor;
 }
 
 Pipeline::~Pipeline() {
-
+  delete extractor_;
 }
 
 void Pipeline::SupplyMappoints(Frame* frame) {
@@ -259,6 +257,8 @@ void Pipeline::SupplyMappoints(Frame* frame) {
   std::map<Instance*, size_t> n_per_ins;
   for(int n=0; n < keypoints.size(); n++){
     Instance* ins = instances[n];
+    if(!ins)
+      continue;
     size_t& n_pt = n_per_ins[ins];
     if(Mappoint* mp = frame->GetMappoint(n)){
       mp->AddKeyframe(qth, frame); // TODO 모든 qth에 keyframe추가하는건 좋은생각이 아니다.
@@ -387,10 +387,16 @@ std::set<Qth> Pipeline::FrameNeedsToBeKeyframe(Frame* curr_frame) const {
   return need_keyframes;
 }
 
-void Pipeline::NewFilterOutlierMatches(Frame* curr_frame) {
+void Pipeline::NewFilterOutlierMatches(Frame* curr_frame, bool verbose) {
   bool use_extrinsic_guess = true;
-  double rprj_threshold = 3.; // rpj 2->?, rpj 10->ATE 10.26[m], TP|FN 12267,10623
+  double rprj_threshold = 2.;
   double confidence = .95;
+  cv::Mat dst;
+  if(verbose){
+    //dst = curr_frame->GetRgb().clone();
+    dst = GetColoredLabel(vinfo_synced_marker_);
+    cv::addWeighted(cv::Mat::zeros(dst.rows,dst.cols,CV_8UC3), .5, dst, .5, 1., dst);
+  }
   int flag = cv::SOLVEPNP_ITERATIVE;
   cv::Mat K = cvt2cvMat(camera_->GetK() );
   cv::Mat D = cvt2cvMat(camera_->GetD() );
@@ -409,23 +415,23 @@ void Pipeline::NewFilterOutlierMatches(Frame* curr_frame) {
     Mappoint* mp = _mappoints.at(n);
     if(!mp)
       continue;
-    //Instance* ins = _instances.at(n);
+    int kpt_idx0 = prev_frame_->GetIndex(mp);
+    if(kpt_idx0 < 0)
+      continue;
     Instance* ins = mp->GetInstance();
     if(!ins)
       continue;
-    Qth qth = ins->GetQth();
-    if(qth < 0)
-      continue;
-    Eigen::Vector3d Xq = mp->GetXq(qth);
+    const Eigen::Vector3d X0 = prev_frame_->GetDepth(kpt_idx0) * prev_frame_->GetNormalizedPoint(kpt_idx0);
     Points pt;
     pt.pt2d = _keypoints.at(n).pt;
-    pt.pt3d.x = Xq.x();
-    pt.pt3d.y = Xq.y();
-    pt.pt3d.z = Xq.z();
+    pt.pt3d.x = X0.x();
+    pt.pt3d.y = X0.y();
+    pt.pt3d.z = X0.z();
     pt.kpt_index = n;
     pt.z = _depths[n];
     segmented_points[ins].push_back(pt);
   }
+
   std::vector<cv::Point3f> obj_points;
   std::vector<cv::Point2f> img_points;
   std::vector<int> kpt_indices;
@@ -435,26 +441,9 @@ void Pipeline::NewFilterOutlierMatches(Frame* curr_frame) {
   kpt_indices.reserve(_mappoints.size());
   depths.reserve(_mappoints.size());
   for(auto it : segmented_points){
-    const g2o::SE3Quat& Tcq = curr_frame->GetTcq(it.first->GetQth());
-    int N = it.second.size();
-    if(N < 4){
-      for(const auto& it_pt : it.second){
-        Eigen::Vector3d Xc = Tcq * Eigen::Vector3d(it_pt.pt3d.x,it_pt.pt3d.y,it_pt.pt3d.z);
-        Eigen::Vector2d rprj_uv = camera_->Project(Xc);
-        const Eigen::Vector2d uv(it_pt.pt2d.x, it_pt.pt2d.y);
-        double err = (uv-rprj_uv).norm();
-        //bool z_err = std::abs(it_pt.z-Xc[2])/it_pt.z > .5;
-        if(err > rprj_threshold)
-          curr_frame->EraseMappoint(it_pt.kpt_index);
-      }
+    if(it.second.size() < 5)
       continue;
-    }
-    cv::Mat R = cvt2cvMat(Tcq.rotation().matrix());
-    const auto t = Tcq.translation();
     cv::Mat tvec, rvec, inliers;
-    tvec = ( cv::Mat_<double>(3,1) <<t.x(), t.y(), t.z());
-    cv::Rodrigues(R, rvec);
-
     obj_points.clear();
     img_points.clear();
     kpt_indices.clear();
@@ -465,22 +454,45 @@ void Pipeline::NewFilterOutlierMatches(Frame* curr_frame) {
       kpt_indices.push_back(it_pt.kpt_index);
       depths.push_back(it_pt.z);
     }
-    int iteration =it.second.size() * 1;
+    int iteration = std::max<int>(5,it.second.size() * .2);
     cv::solvePnPRansac(obj_points, img_points, K, D, rvec, tvec,
                        use_extrinsic_guess, iteration, rprj_threshold, confidence, inliers);
+    cv::Mat R;
     cv::Rodrigues(rvec,R);
     g2o::SE3Quat _Tcq(cvt2Eigen(R), cvt2Eigen(tvec) );
-    for(int i=0; i < inliers.rows; i++){
-      if( inliers.at<uchar>(i,0)) 
-        continue;
-      //const auto& _obj = obj_points[i];
-      //Eigen::Vector3d Xc = Tcq*Eigen::Vector3d(_obj.x,_obj.y,_obj.z);
-      //bool z_err = std::abs(depths[i]-Xc[2])/depths[i] > .5;
-      //if( inliers.at<uchar>(i,0) && !z_err)
-      //  continue;
-      curr_frame->EraseMappoint(kpt_indices.at(i)); // keyframe이 아니라서 mp->RemoveKeyframe 등을 호출하지 않는다.
+    int n_inlier = 0;
+    for(int i=0; i < inliers.rows; i++)
+      if( inliers.at<uchar>(i,0))
+        n_inlier++;
+    const float inlier_ratio = float(n_inlier) / float(inliers.rows);
+    if(inlier_ratio < .7 ) { // 나무 texture나 occlusion처럼 feature tracking이 제대로 안되는 instance
+      for(int i=0; i < inliers.rows; i++){
+        curr_frame->EraseMappoint(kpt_indices.at(i));
+        if(verbose)
+          cv::circle(dst, img_points.at(i), 3, CV_RGB(255,0,0), -1 );
+      }
+      std::cout << "Filtering pth #" << it.first->GetId() << std::endl;
+    }
+    else{
+      for(int i=0; i < inliers.rows; i++){
+        if( inliers.at<uchar>(i,0)){
+          if(verbose)
+            cv::circle(dst, img_points.at(i), 3, CV_RGB(0,255,0), -1 );
+          continue;
+        }
+        //const auto& _obj = obj_points[i];
+        //Eigen::Vector3d Xc = Tcq*Eigen::Vector3d(_obj.x,_obj.y,_obj.z);
+        //bool z_err = std::abs(depths[i]-Xc[2])/depths[i] > .5;
+        //if( inliers.at<uchar>(i,0) && !z_err)
+        //  continue;
+        if(verbose)
+          cv::circle(dst, img_points.at(i), 3, CV_RGB(255,0,0), -1 );
+        curr_frame->EraseMappoint(kpt_indices.at(i)); // keyframe이 아니라서 mp->RemoveKeyframe 등을 호출하지 않는다.
+      }
     }
   }
+  if(verbose)
+    cv::imshow("filter", dst);
   return;
 }
 
@@ -663,7 +675,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
                      const cv::Mat vis_rgb
                     ) {
   switch_threshold_ = .3;
-  float density_threshold = 1. / 50. / 50.; // NxN pixel에 한개 이상의 mappoint가 존재해야 dense instance
+  float density_threshold = 1. / 30. / 30.; // NxN pixel에 한개 이상의 mappoint가 존재해야 dense instance
 
   vinfo_switch_states_.clear();
   vinfo_neighbor_frames_.clear();
@@ -671,7 +683,8 @@ Frame* Pipeline::Put(const cv::Mat gray,
   vinfo_synced_marker_ = synced_marker;
 
   const Qth qth_default = 0;
-  cv::Mat outline_mask = synced_marker < 1;
+  //cv::Mat outline_mask = synced_marker < 1;
+  cv::Mat outline_mask = cv::Mat::zeros(synced_marker.rows, synced_marker.cols, CV_8UC1);
   std::map<Qth, std::set<Instance*> > segmented_instances;
   std::set<Pth> new_instances;
   for(const auto& it : marker_areas){
@@ -745,8 +758,8 @@ Frame* Pipeline::Put(const cv::Mat gray,
     g2o::SE3Quat Tcq = pose_tracker_->GetTcq(camera_, qth, curr_frame, verbose_track);
     curr_frame->SetTcq(qth, Tcq);
   } // For qth \ Do pose_track, projection matches
-  NewFilterOutlierMatches(curr_frame);
-  //FilterOutlierMatches(curr_frame); // 이게 trj는 더 정확한게 모순.
+  bool verbose_filter = false;
+  NewFilterOutlierMatches(curr_frame, verbose_filter);
 
   std::map<Instance*, std::set<Mappoint*> > ins2mappoints;
   CountMappoints(curr_frame, ins2mappoints);
@@ -762,13 +775,6 @@ Frame* Pipeline::Put(const cv::Mat gray,
     }
     equivalent_instances = MergeEquivalentInstances(ins2mappoints, density_scores0);
   }
-  /*
-  * [x] Frame에 먼저 할당된 Instance*를 제거( curr_frame->SetInstance)
-  * [] mappoint에서 ins 참고하는경우.
-  * [x] pth2instances_ 에서 제거.
-  * [x] Pipeline::Put()의 segmented_instances에서 변경.
-  * [x] marker_areas에서 변경.
-  */
   if(!equivalent_instances.empty()){
     for(auto it : segmented_instances){
       std::set<Instance*> copied = it.second;

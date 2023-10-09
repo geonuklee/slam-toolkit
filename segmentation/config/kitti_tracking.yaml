@@ -6,7 +6,7 @@
 Viewer.CameraSize: 0.7
 Viewer.CameraLineWidth: 3
 
-Viewer.width: 500 
+Viewer.width: 300
 Viewer.height: 600
 Viewer.z_near: 0.1
 Viewer.z_far: 2000.

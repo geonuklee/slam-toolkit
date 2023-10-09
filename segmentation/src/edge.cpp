@@ -394,7 +394,8 @@ void GetConcaveEdges(const cv::Mat& _gradx,
                      const cv::Mat& _grady,
                      const cv::Mat _depth,
                      float fx, float fy,
-                     const int offset,
+                     const int hoffset,
+                     const int voffset,
                      float _neg_hessian_threshold, // -100.f
                      cv::Mat& _edge) {
   if(_edge.empty())
@@ -428,23 +429,23 @@ void GetConcaveEdges(const cv::Mat& _gradx,
   T m_i_zero  = _mm256_set1_ps(0.f);
   T m_weighted_h_th;
 
-  const int e_offset_step = offset*estep;
-  const int g_offset_step = offset*gstep;
-  for(v = 0; v < offset; v++){
+  const int e_offset_step = voffset*estep;
+  const int g_offset_step = voffset*gstep;
+  for(v = 0; v < voffset; v++){
     depth += dstep;
     gradx += gstep;
     grady += gstep;
     edge  += estep;
   }
-  for( v = offset; v < size.height-offset; v++ ) {
-    for( u = offset; u < size.width-offset-vstep; u+=vstep ) {
+  for( ; v < size.height-voffset; v++ ) {
+    for( u = hoffset; u < size.width-hoffset-vstep; u+=vstep ) {
       const Real* d_cp = depth + u;
       const Real* gx_cp = gradx + u;
       const Real* gy_cp = grady + u;
       uchar* e = edge + u;
       m_cp       = _mm256_loadu_ps(d_cp);
-      m_gx0      = _mm256_loadu_ps(gx_cp-offset);
-      m_gx1      = _mm256_loadu_ps(gx_cp+offset);
+      m_gx0      = _mm256_loadu_ps(gx_cp-hoffset);
+      m_gx1      = _mm256_loadu_ps(gx_cp+hoffset);
       m_gy0      = _mm256_loadu_ps(gy_cp-g_offset_step);
       m_gy1      = _mm256_loadu_ps(gy_cp+g_offset_step);
 
@@ -483,9 +484,10 @@ void GetConcaveEdges(const cv::Mat& _gradx,
 } // namespace WithSIMD
 
 void OutlineEdgeDetectorWithSIMD::PutDepth(cv::Mat depth, float fx, float fy) {
-  const int grad_sample_offset = 4;
-  const int concave_sample_offset = 4;
-  const float neg_hessian_threshold = -100.;
+  const int grad_sample_offset = 3;
+  const int concave_hsample_offset = 3;
+  const int concave_vsample_offset = 6;
+  const float neg_hessian_threshold = -50.;
 
   valid_mask_ = depth > 0.;// 너무 가까운데는 depth 추정이 제대로 안됨.
   cv::erode(valid_mask_,valid_mask_,cv::Mat::ones(10,10,CV_8UC1) ); 
@@ -498,7 +500,7 @@ void OutlineEdgeDetectorWithSIMD::PutDepth(cv::Mat depth, float fx, float fy) {
   //cv::GaussianBlur(depth,filtered_depth, cv::Size(7,7), 0., 0.); // Shallow groove가 필요없어서 그냥 Gaussian
   WithSIMD::GetDDEdges(depth,dd_edges_); // concave_edge를 보완해주는 positive detection이 없음.
   WithSIMD::GetGrad(depth, fx, fy, grad_sample_offset, gradx_, grady_);
-  WithSIMD::GetConcaveEdges(gradx_,grady_,depth,fx,fy,concave_sample_offset,neg_hessian_threshold, concave_edges_);
+  WithSIMD::GetConcaveEdges(gradx_,grady_,depth,fx,fy,concave_hsample_offset,concave_vsample_offset,neg_hessian_threshold, concave_edges_);
   cv::bitwise_or(concave_edges_, dd_edges_, outline_edges_);
   cv::bitwise_and(outline_edges_, valid_mask_, outline_edges_);
   cv::erode(outline_edges_,outline_edges_,cv::Mat::ones(3,3,CV_8UC1) ); 

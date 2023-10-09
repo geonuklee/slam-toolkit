@@ -18,11 +18,16 @@ class FeatureDescriptor {
 public:
   virtual void Extract(const cv::Mat gray, cv::InputArray mask, std::vector<cv::KeyPoint>& keypoints, cv::Mat& descriptors) = 0;
   virtual double GetDistance(const cv::Mat& desc0, const cv::Mat& desc1) const = 0;
+  virtual ~FeatureDescriptor() {}
+  double GetScaleFactor() const { return scaleFactor; }
+protected:
+  double scaleFactor;
 };
 
 class OrbSlam2FeatureDescriptor : public FeatureDescriptor {
 public:
   OrbSlam2FeatureDescriptor(int nfeatures, float scale_factor, int nlevels, int initial_fast_th, int min_fast_th);
+  ~OrbSlam2FeatureDescriptor() {}
   void Extract(const cv::Mat gray, cv::InputArray mask, std::vector<cv::KeyPoint>& keypoints, cv::Mat& descriptors);
   inline double GetDistance(const cv::Mat& desc0, const cv::Mat& desc1) const;
 private:
@@ -32,6 +37,7 @@ private:
 class CvFeatureDescriptor : public FeatureDescriptor {
 public:
   CvFeatureDescriptor();
+  ~CvFeatureDescriptor() {}
   void Extract(const cv::Mat gray, cv::InputArray mask, std::vector<cv::KeyPoint>& keypoints, cv::Mat& descriptors);
   inline double GetDistance(const cv::Mat& desc0, const cv::Mat& desc1) const;
 
@@ -41,7 +47,6 @@ private:
   void ComputeKeyPointsOctTree(std::vector<std::vector<cv::KeyPoint> >& allKeypoints, const cv::Mat& mask);
   std::vector<cv::Point> pattern;
   int nfeatures;
-  double scaleFactor;
   int nlevels;
   int iniThFAST;
   int min_kpt_distance;
@@ -132,11 +137,6 @@ public:
 
   EigenMap<Ith, Eigen::Vector3d> Get3dMappoints(Qth qth=0) const;
 
-  /* TODO
-  void UpdateCovisibilities();
-  const std::map<Qth, std::list< std::pair<Frame*, size_t> > >& GetCovisibilities () const { return covisiblities_; }
-  */
-
 private:
   std::vector<cv::KeyPoint>    keypoints_;
   EigenVector<Eigen::Vector3d> normalized_;
@@ -148,7 +148,6 @@ private:
   flann::Index<flann::L2<double> >* flann_kdtree_;
   std::map<const Mappoint*, int> mappoints_index_;
 
-  //std::map<Qth, std::list< std::pair<Frame*, size_t> > > covisiblities_; // covisibile keyframes for 'qth'
   std::map<Qth, std::shared_ptr<g2o::SE3Quat> > Tcq_;
   std::map<Qth, int32_t> kf_id_;
   cv::Mat rgb_;
@@ -218,7 +217,7 @@ class PoseTracker;
 class Mapper;
 class Pipeline {
 public:
-  Pipeline(const Camera* camera, SEG::FeatureDescriptor*const extractor);
+  Pipeline(const Camera* camera);
   ~Pipeline();
   Frame* Put(const cv::Mat gray,
              const cv::Mat depth,
@@ -233,16 +232,16 @@ public:
   void Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask, cv::Mat& dst); // visualize.cpp
   RigidGroup* GetRigidGroup(Qth qth) const { return qth2rig_groups_.count(qth) ? qth2rig_groups_.at(qth) : nullptr; }
   const std::map<Pth, Instance*>& GetInstances()  const { return pth2instances_; }
-
+  const std::map<Pth, Pth>& GetPthRemoved2Replacing() const { return pth_removed2replacing_; }
 private:
   std::map<Instance*,Instance*> MergeEquivalentInstances(const std::map<Instance*, std::set<Mappoint*> >& ins2mappoints,
                                                          const std::map<Pth,float>& density_scores);
   std::set<Qth> FrameNeedsToBeKeyframe(Frame* frame) const;
   void SupplyMappoints(Frame* frame);
   void FilterOutlierMatches(Frame* curr_frame);
-  void NewFilterOutlierMatches(Frame* curr_frame);
+  void NewFilterOutlierMatches(Frame* curr_frame, bool verbose);
 
-  SEG::FeatureDescriptor*const extractor_;
+  SEG::FeatureDescriptor* extractor_;
   const Camera*const camera_;
   std::shared_ptr<PoseTracker> pose_tracker_;
   std::shared_ptr<Mapper> mapper_;
@@ -253,7 +252,7 @@ private:
   std::map<Pth, Instance*>   pth2instances_;
   std::map<Ith, Mappoint* >  ith2mappoints_;
 
-
+  std::map<Pth, Pth> pth_removed2replacing_; // log for evaluation
   std::vector<bool> vinfo_supplied_mappoints_;
   float switch_threshold_;
   std::map<Qth, std::map<Pth, float> >  vinfo_switch_states_;

@@ -21,7 +21,8 @@ sys.path.append('tum_rgbd_benchmark_tools')
 from converter import *
 from associate import *
 from evaluate_ate import align
-from evaluate_rpe import evaluate_trajectory, transform44
+#from evaluate_rpe import evaluate_trajectory, transform44
+import evaluate_rpe as rpe
 
 from tabulate import tabulate
 
@@ -139,7 +140,7 @@ class Evaluator:
                 gid2ondynamic[gid] = gt_dmask[xy[1],xy[0]] > 0
 
             for eid in eids: # mask는 dynamic 판정이 뒤늦게 일어나므로, LBA widnow가 반영함에도, FN로 판정되는 케이스가 있음. 
-                if eid > 0:
+                if eid > 0 and eid in eid2qth: # mappoint가 없는 instance(eid) 는 eid2qth에 저장안됨.
                     eid2ondynamic[eid] = eid2qth[eid] != 0
             #est_cp_locations, est_cp_distances = GetMarkerCenters(est_ins)
             #for eid, xy in est_cp_locations.items():
@@ -154,10 +155,9 @@ class Evaluator:
                 eid, iou = gid2best_est[gid]
                 info = (n, gid, eid )
                 true_segmentation = iou > .5
-                try:
-                    est_on_dynamic = eid2ondynamic[eid]
-                except:
-                    import pdb; pdb.set_trace()
+                if not eid in eid2qth: # mappoint가 없는 instance(eid) 는 eid2qth에 저장안됨.
+                    continue
+                est_on_dynamic = eid2ondynamic[eid]
 
                 if gt_on_dynamic == est_on_dynamic:
                     if gt_on_dynamic:
@@ -240,7 +240,7 @@ class Evaluator:
         offset = 0.
         max_difference = 0.02
         max_pairs = 10000
-        fixed_delta = False
+        fixed_delta = True
         delta = 1.0
         delta_unit = 'm' # \'s\' for seconds, \'m\' for meters, \'rad\' for radians, \'f\' for frames
         '''
@@ -269,9 +269,9 @@ class Evaluator:
         ate_median = np.median(trans_error)
 
         # convert to 4by4 trajectory
-        traj_gt = dict([(k,transform44([k]+v)) for k,v in first_list.items()])
-        traj_est = dict([(k,transform44([k]+v)) for k,v in second_list.items()])
-        result = evaluate_trajectory(traj_gt, traj_est, max_pairs, fixed_delta, 1., 'm', offset, scale)
+        traj_gt = dict([(k, rpe.transform44([k]+v)) for k,v in first_list.items()])
+        traj_est = dict([(k,rpe.transform44([k]+v)) for k,v in second_list.items()])
+        result = rpe.evaluate_trajectory(traj_gt, traj_est, max_pairs, fixed_delta, 1., 'm', offset, scale)
         trans_error = numpy.array(result)[:,4]
         rot_error = numpy.array(result)[:,5]
         rpe_meter_trans_rmse   = np.sqrt(np.dot(trans_error,trans_error) / len(trans_error))
@@ -293,7 +293,7 @@ class Evaluator:
 
 def batch_evaluation():
     dataset_path ="./kitti_tracking_dataset"
-    output_dir = './output'
+    output_dir = './output_batch'
     targets = listdir(output_dir)
     targets = [x for x in targets if osp.isdir( osp.join(output_dir, x) )]
     targets = sorted(targets, key=lambda x: int(x.split('_')[1]) )
@@ -311,7 +311,7 @@ def batch_evaluation():
         seq = int( target.split('_')[1] )
         ax.set_title('Seq %d'%seq)
         e = Evaluator(dataset_path, output_dir, target)
-        mask_data, mask_header = e.eval_mask(False)
+        mask_data, mask_header = e.eval_mask()
         mask_datas.append(mask_data)
         trj_data, trj_header = e.eval_trj(ax=ax)
         trj_datas.append(trj_data)
@@ -340,13 +340,18 @@ def each_evaluation(target='training_0003'):
     e = Evaluator(dataset_path, output_dir, target)
     fig = plt.figure()
     ax = fig.add_subplot(111)
-    mask_data, mask_header = e.eval_mask()
     trj_data, trj_header = e.eval_trj(ax=ax)
-    mask_table = tabulate([mask_data], headers=mask_header, tablefmt="pretty")
     trj_table = tabulate([trj_data], headers=trj_header, tablefmt="pretty")
-    print(mask_table)
     print(trj_table)
-    plt.show(block=True)
+    extent = ax.get_window_extent().transformed(fig.dpi_scale_trans.inverted())
+    ax.axis('equal')
+    ax.set_aspect('equal', 'box')
+    seq = int( target.split('_')[1] )
+    fig.savefig(osp.join(output_dir,'trj_%d.png'%seq), dpi=100)
+    #mask_data, mask_header = e.eval_mask()
+    #mask_table = tabulate([mask_data], headers=mask_header, tablefmt="pretty")
+    #print(mask_table)
+    #plt.show(block=True)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

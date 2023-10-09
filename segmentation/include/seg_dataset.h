@@ -45,14 +45,14 @@ public:
   void Write(Frame* frame,
              RigidGroup* static_rig,
              const cv::Mat synced_marker,
-             const std::set<int>& uniq_labels,
              const cv::Mat gt_insmask,
              const cv::Mat gt_dmask
              );
 
-  void WriteInstances(const std::map<Pth, Instance*>& instances);
+  void WriteInstances(const std::map<Pth, Pth>& pth_removed2replacing);
 
 private:
+  std::map<int, int> pth2qth_; // Update from Write()
   const std::string output_seq_dir_;
   const std::string output_mask_dir_;
   std::ofstream trj_output_;

@@ -276,10 +276,10 @@ double OrbSlam2FeatureDescriptor::GetDistance(const cv::Mat& desc0, const cv::Ma
 CvFeatureDescriptor::CvFeatureDescriptor() 
   : FeatureDescriptor() {
   nfeatures = 4000;
-  scaleFactor = 1.2f;
+  scaleFactor = 1.4f;
   nlevels = 3;
   iniThFAST = 20;
-  min_kpt_distance = 10.; // For each level
+  min_kpt_distance = 0.; // For each level
   // ---------------------------------------------
   mvScaleFactor.resize(nlevels);
   mvLevelSigma2.resize(nlevels);

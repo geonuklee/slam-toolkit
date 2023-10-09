@@ -1,3 +1,4 @@
+#include "g2o_types.h"
 #include "pybind11/attr.h"
 #include "segslam.h"
 #include "camera.h"
@@ -13,8 +14,9 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
                                                        const Frame* prev_frame,
                                                        bool verbose,
                                                        Frame* curr_frame) {
-  double search_threshold = 2.;
-  double best12_threshold = .8;
+  double search_threshold = 2.; // optical flow가 속도와 타협하느라 부정확한걸 감안해야함.
+  double search_threshold2 = 10.;
+  double best12_threshold = .5;
   //const double search_radius_min = 5.; // [pixel]
   //const double far_depth         = 50.; // [meter] for min radius.
   //const double search_radius_max = 20.; // [pixel]
@@ -47,13 +49,6 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
       Eigen::Vector2d eig_pt1(pt0.x+dpt01.x, pt0.y+dpt01.y);
       if(!curr_frame->IsInFrame(camera,eig_pt1))  //  땅바닥 제외
         continue;
-
-      if(verbose){
-        cv::Point2f pt1(eig_pt1.x(), eig_pt1.y());
-        cv::circle(dst0, pt0, 3,  CV_RGB(255,0,0), -1);
-        cv::line(  dst0, pt0, pt1, CV_RGB(0,255,0), 1);
-        cv::circle(dst1, pt1, 3,  CV_RGB(255,0,0), -1);
-      }
       std::list< std::pair<int,double> > candidates = curr_frame->SearchRadius(eig_pt1, search_threshold);
       if(candidates.empty())
         continue;
@@ -84,17 +79,14 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
           champ1 = n1;
         }
       }
-      if(champ0_err > search_threshold)
+      if(champ0_err > search_threshold || champ0 < 0){
+        if(verbose){
+          cv::Point2f cv_pt1(pt0.x+dpt01.x, pt0.y+dpt01.y);
+          cv::line(dst0, pt0, cv_pt1, CV_RGB(255,255,0), 1);
+          cv::circle(dst0, pt0, 2,   CV_RGB(255,255,0), -1);
+        }
         continue;
-      if(champ0 < 0)
-        continue;
-      /*{
-      const cv::KeyPoint& kpt1 = keypoints1[champ0];
-      if(std::abs(kpt0.angle - kpt1.angle) > 20.) // flow match는 낮은 angle 오차 허용.
-      continue;
-      if(kpt0.octave != kpt1.octave)
-      continue;
-      }*/
+      }
       if(dist0 < dist1 * best12_threshold){
         if(matches.count(champ0)){
           // 이미 matching candidate가 있는 keypoint가 선택된 경우,
@@ -113,7 +105,7 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
         const cv::Point2f& pt0 = prev_frame->GetKeypoint(i0).pt;
         cv::circle(dst0, pt0, 3,   CV_RGB(0,0,255), -1);
         cv::circle(dst1, pt1, 3,   CV_RGB(0,0,255), -1);
-        cv::line(  dst1, pt1, pt0, CV_RGB(0,255,0), 1);
+        cv::line(  dst1, pt1, pt0, CV_RGB(0,0,255), 1);
       }
       cv::imshow("flow0", dst0);
       cv::imshow("flow1", dst1);
@@ -179,10 +171,14 @@ std::map<int, std::pair<Mappoint*,double> > ProjectionMatch(const Camera* camera
   std::vector<std::vector<double> > err_squares;
   std::vector<std::vector<int> > batch_search = curr_frame->SearchRadius(queries, search_radius2, err_squares);
 
+  const double scale_factor = extractor->GetScaleFactor();
+  const double inv_scalefactor = 1./scale_factor;
   for(size_t key_mp = 0; key_mp < batch_search.size(); key_mp++){
     Mappoint* query_mp = key_table.at(key_mp);
+    //const double& expected_depth = expected_depths.at(key_mp);
     cv::Mat desc0; cv::KeyPoint kpt0;
     query_mp->GetFeature(qth, use_latest_desc, desc0, kpt0);
+    double z0 = std::max(1e-8, query_mp->GetXq(qth).z());
     const std::vector<int>& each_search = batch_search.at(key_mp);
     const std::vector<double>& each_err_square = err_squares.at(key_mp);
     double dist0 = 999999999.;
@@ -197,10 +193,20 @@ std::map<int, std::pair<Mappoint*,double> > ProjectionMatch(const Camera* camera
       const cv::KeyPoint& kpt1 = curr_frame->GetKeypoint(idx);
       if(! curr_frame->IsInFrame(camera, Eigen::Vector2d(kpt1.pt.x, kpt1.pt.y)) )
         continue;
+      //const double& z1 = curr_frame->GetDepth(idx);
+      //int exp_octave = kpt0.octave;
+      //double s = z1/z0;
+      //while( s >= scale_factor){
+      //  s /= scale_factor;
+      //  exp_octave++;
+      //}
+      //while( s <= inv_scalefactor){
+      //  s *= scale_factor;
+      //  exp_octave--;
+      //}
+      //if(std::abs(exp_octave-kpt1.octave) > 1)
+      //  continue;
       double dist = extractor->GetDistance(desc0,desc1);
-      //if(std::abs(kpt0.angle - kpt1.angle) > 40.) continue
-      if(std::abs(kpt0.octave-kpt1.octave) > 1)
-        continue;
       if(dist < dist0){
         dist1 = dist0;
         champ1 = champ0;
@@ -217,6 +223,9 @@ std::map<int, std::pair<Mappoint*,double> > ProjectionMatch(const Camera* camera
       continue;
     if(champ0_err > search_radius)
       continue;
+    //const double& depth_champ = curr_frame->GetDepth(champ0);
+    //if(std::abs(depth_champ-expected_depth)/depth_champ > .1)
+    //  continue;
     if(dist0 < dist1 * best12_threshold){
       if(matches.count(champ0)){
         // 이미 matching candidate가 있는 keypoint가 선택된 경우,
