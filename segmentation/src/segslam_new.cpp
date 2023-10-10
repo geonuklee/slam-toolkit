@@ -23,6 +23,18 @@
 #include <vector>
 
 namespace NEW_SEG {
+
+void Mappoint::RemoveKeyframe(Frame* frame) {
+  for(auto& it : keyframes_){
+    const Qth& qth = it.first;
+    std::set<Frame*>& keyframes = it.second;
+    if(keyframes.count(frame) )
+      keyframes.erase(frame);
+  }
+  return;
+}
+
+
 Frame::Frame(const Jth id,
              const cv::Mat vis_rgb)
   : id_(id), rgb_(vis_rgb), is_kf_(false)
@@ -130,6 +142,50 @@ std::vector<std::vector<int> > Frame::SearchRadius(const flann::Matrix<double>& 
   return indices;
 }
 
+void Frame::AddKeypoints(const Camera*const camera,
+                         const std::vector< cv::KeyPoint >& added_keypoints,
+                         const std::vector< Mappoint* >&    added_mappoints,
+                         const std::vector< Instance* >&    added_instances,
+                         const std::vector< float >&       added_depths
+                         ) {
+  size_t N = keypoints_.size()+added_keypoints.size();
+  keypoints_.reserve(N);
+  mappoints_.reserve(N);
+  instances_.reserve(N);
+  measured_depths_.reserve(N);
+  normalized_.reserve(N);
+
+  cv::Mat descs = cv::Mat(added_keypoints.size(), descriptions_.cols, descriptions_.type());
+  for(int i =0; i<added_keypoints.size(); i++){
+    const cv::KeyPoint& kpt = added_keypoints.at(i);
+    Mappoint* mp = added_mappoints.at(i);
+    Instance* ins = added_instances.at(i);
+    const float& z = added_depths.at(i);
+    keypoints_.push_back(kpt);
+    mappoints_.push_back(nullptr); // SetMappoint from Piptline::Put
+    instances_.push_back(ins);
+    measured_depths_.push_back(z);
+    Eigen::Vector2d uv(kpt.pt.x,kpt.pt.y);
+    Eigen::Vector3d nuv = camera->NormalizedUndistort(uv);
+    normalized_.push_back( nuv );
+    descs.row(i) = mp->GetDescription();
+  }
+  cv::vconcat(descriptions_, descs, descriptions_);
+
+  flann_keypoints_
+    = flann::Matrix<double>(new double[2*keypoints_.size()], keypoints_.size(), 2);
+  flann_kdtree_
+    = new flann::Index< flann::L2<double> >(flann_keypoints_, flann::KDTreeSingleIndexParams());
+  for(size_t i = 0; i < keypoints_.size(); i++){
+    const cv::Point2f& pt = keypoints_.at(i).pt;
+    flann_keypoints_[i][0] = pt.x;
+    flann_keypoints_[i][1] = pt.y;
+  }
+  flann_kdtree_->buildIndex();
+
+  return;
+}
+
 void Frame::ExtractAndNormalizeKeypoints(const cv::Mat gray,
                                          const Camera* camera,
                                          SEG::FeatureDescriptor* extractor,
@@ -141,7 +197,8 @@ void Frame::ExtractAndNormalizeKeypoints(const cv::Mat gray,
   normalized_.reserve(keypoints_.size());
   for(int n=0; n<keypoints_.size(); n++){
     const auto& pt = keypoints_[n].pt;
-    normalized_[n] = camera->NormalizedUndistort(Eigen::Vector2d(pt.x,pt.y));
+    Eigen::Vector3d nuv = camera->NormalizedUndistort(Eigen::Vector2d(pt.x,pt.y));
+    normalized_.push_back(nuv);
   }
   // ref : https://github.com/mariusmuja/flann/blob/master/examples/flann_example.cpp
   flann_keypoints_
@@ -185,21 +242,6 @@ EigenMap<Ith, Eigen::Vector3d> Frame::Get3dMappoints(Qth qth) const {
     vec3d[mp->GetId()] = mp->GetXq(qth);
   }
   return vec3d;
-}
-
-void Mappoint::GetFeature(const Qth& qth, bool latest, cv::Mat& description, cv::KeyPoint& kpt) const {
-  Frame* frame = nullptr;
-  if(qth < 0)
-    frame = ref_.begin()->second;
-  else
-    if(latest)
-      frame = *keyframes_.at(qth).rbegin();
-    else
-      frame = ref_.at(qth);
-  int kpt_idx = frame->GetIndex(this);
-  description = frame->GetDescription(kpt_idx);
-  kpt         = frame->GetKeypoint(kpt_idx);
-  return;
 }
 
 RigidGroup::RigidGroup(Qth qth, Frame* first_frame)
@@ -265,9 +307,9 @@ void Pipeline::SupplyMappoints(Frame* frame) {
       n_pt++;
       continue;
     }
+    const cv::KeyPoint& kpt = keypoints[n];
     static Ith nMappoints = 0;
-    if(n_pt > 20){
-      const cv::KeyPoint& kpt = keypoints[n];
+    if(n_pt > 15){
       std::list< std::pair<int,double> > neighbors = frame->SearchRadius(Eigen::Vector2d(kpt.pt.x, kpt.pt.y), min_mpt_distance);
       bool too_close_mp_exist = false;
       for(const auto& nn : neighbors){
@@ -280,7 +322,7 @@ void Pipeline::SupplyMappoints(Frame* frame) {
         continue;
     }
     n_pt++;
-    Mappoint* mp = new Mappoint(nMappoints++, ins);
+    Mappoint* mp = new Mappoint(nMappoints++,ins,kpt,frame->GetDescription(n));
     const Eigen::Vector3d Xr
       = depths[n] <1e-5 ? 1e+2*frame->GetNormalizedPoint(n) : depths[n]*frame->GetNormalizedPoint(n);
     const Eigen::Vector3d Xq = frame->GetTcq(qth).inverse()*Xr;
@@ -379,7 +421,7 @@ std::set<Qth> Pipeline::FrameNeedsToBeKeyframe(Frame* curr_frame) const {
       continue;
     }
     const size_t& n_mappoints_lkf = lkf_n_mappoints.at(qth);
-    size_t min_mpt_threshold = std::max<size_t>(10, .5 * n_mappoints_lkf);
+    size_t min_mpt_threshold = std::max<size_t>(50, .5 * n_mappoints_lkf);
     //printf("KF test. Jth %d, Qth %d,  %ld / %ld (%ld)\n", curr_frame->GetId(), qth,n_mappoints_curr, min_mpt_threshold, n_mappoints_lkf);
     if(n_mappoints_curr < min_mpt_threshold)
       need_keyframes.insert(qth);
@@ -387,10 +429,10 @@ std::set<Qth> Pipeline::FrameNeedsToBeKeyframe(Frame* curr_frame) const {
   return need_keyframes;
 }
 
-void Pipeline::NewFilterOutlierMatches(Frame* curr_frame, bool verbose) {
+void Pipeline::NewFilterOutlierMatches(Frame* curr_frame,const EigenMap<Qth, g2o::SE3Quat>& Tcps, bool verbose) {
   bool use_extrinsic_guess = true;
   double rprj_threshold = 2.;
-  double confidence = .95;
+  double confidence = .99;
   cv::Mat dst;
   if(verbose){
     //dst = curr_frame->GetRgb().clone();
@@ -408,149 +450,98 @@ void Pipeline::NewFilterOutlierMatches(Frame* curr_frame, bool verbose) {
     cv::Point2f pt2d;
     cv::Point3f pt3d;
     double z;
-    int kpt_index;
+    int kptid_curr;
+    int kptid_prev;
+    Mappoint* mp;
   };
   std::map<Instance*,std::list<Points> > segmented_points;
   for(int n =0; n < _mappoints.size(); n++){
-    Mappoint* mp = _mappoints.at(n);
-    if(!mp)
+    Points pt;
+    pt.mp = _mappoints.at(n);
+    pt.kptid_curr = n;
+    if(!pt.mp)
       continue;
-    int kpt_idx0 = prev_frame_->GetIndex(mp);
-    if(kpt_idx0 < 0)
+    pt.kptid_prev = prev_frame_->GetIndex(pt.mp);
+    if(pt.kptid_prev < 0)
       continue;
-    Instance* ins = mp->GetInstance();
+    //Instance* ins = mp->GetInstance();
+    Instance* ins = pt.mp->GetLatestInstance();
     if(!ins)
       continue;
-    const Eigen::Vector3d X0 = prev_frame_->GetDepth(kpt_idx0) * prev_frame_->GetNormalizedPoint(kpt_idx0);
-    Points pt;
+    const Eigen::Vector3d Xp = prev_frame_->GetDepth(pt.kptid_prev) * prev_frame_->GetNormalizedPoint(pt.kptid_prev);
     pt.pt2d = _keypoints.at(n).pt;
-    pt.pt3d.x = X0.x();
-    pt.pt3d.y = X0.y();
-    pt.pt3d.z = X0.z();
-    pt.kpt_index = n;
+    pt.pt3d.x = Xp.x();
+    pt.pt3d.y = Xp.y();
+    pt.pt3d.z = Xp.z();
     pt.z = _depths[n];
     segmented_points[ins].push_back(pt);
   }
 
   std::vector<cv::Point3f> obj_points;
   std::vector<cv::Point2f> img_points;
-  std::vector<int> kpt_indices;
-  std::vector<double> depths;
   obj_points.reserve(_mappoints.size());
   img_points.reserve(_mappoints.size());
-  kpt_indices.reserve(_mappoints.size());
-  depths.reserve(_mappoints.size());
+
+  //std::list< std::pair<Pth, std::string> > sorted_msges;
   for(auto it : segmented_points){
     if(it.second.size() < 5)
       continue;
     cv::Mat tvec, rvec, inliers;
     obj_points.clear();
     img_points.clear();
-    kpt_indices.clear();
-    depths.clear();
     for(const auto& it_pt : it.second){
       obj_points.push_back(it_pt.pt3d);
       img_points.push_back(it_pt.pt2d);
-      kpt_indices.push_back(it_pt.kpt_index);
-      depths.push_back(it_pt.z);
     }
+    Qth qth = it.first->GetQth();
     int iteration = std::max<int>(5,it.second.size() * .2);
     cv::solvePnPRansac(obj_points, img_points, K, D, rvec, tvec,
-                       use_extrinsic_guess, iteration, rprj_threshold, confidence, inliers);
+                       use_extrinsic_guess, iteration, rprj_threshold, confidence, inliers, cv::SOLVEPNP_EPNP);
     cv::Mat R;
     cv::Rodrigues(rvec,R);
-    g2o::SE3Quat _Tcq(cvt2Eigen(R), cvt2Eigen(tvec) );
-    int n_inlier = 0;
-    for(int i=0; i < inliers.rows; i++)
-      if( inliers.at<uchar>(i,0))
-        n_inlier++;
-    const float inlier_ratio = float(n_inlier) / float(inliers.rows);
-    if(inlier_ratio < .7 ) { // 나무 texture나 occlusion처럼 feature tracking이 제대로 안되는 instance
-      for(int i=0; i < inliers.rows; i++){
-        curr_frame->EraseMappoint(kpt_indices.at(i));
-        if(verbose)
-          cv::circle(dst, img_points.at(i), 3, CV_RGB(255,0,0), -1 );
+    g2o::SE3Quat _Tcp(cvt2Eigen(R), cvt2Eigen(tvec) ); // Transform : {c}urrent camera <- {p}revious camera
+    //if(Tcps.count(qth)){
+    //  double t_max = 1.;
+    //  if(_Tcp.translation().norm() > t_max){
+    //    _Tcp= Tcps.at(qth);
+    //  }
+    //}
+#if 1
+    auto it_points = it.second.begin();
+    for(int i=0; i < obj_points.size(); i++){
+      const Points& pt = *it_points;
+      const auto& _obj = obj_points[i];
+      Eigen::Vector3d Xc = _Tcp*Eigen::Vector3d(_obj.x,_obj.y,_obj.z);
+      cv::Point2f uv;{
+        Eigen::Vector2d eig_uv = camera_->Project(Xc);
+        uv.x = eig_uv[0];
+        uv.y = eig_uv[1];
       }
-      std::cout << "Filtering pth #" << it.first->GetId() << std::endl;
-    }
-    else{
-      for(int i=0; i < inliers.rows; i++){
-        if( inliers.at<uchar>(i,0)){
-          if(verbose)
-            cv::circle(dst, img_points.at(i), 3, CV_RGB(0,255,0), -1 );
-          continue;
-        }
-        //const auto& _obj = obj_points[i];
-        //Eigen::Vector3d Xc = Tcq*Eigen::Vector3d(_obj.x,_obj.y,_obj.z);
-        //bool z_err = std::abs(depths[i]-Xc[2])/depths[i] > .5;
-        //if( inliers.at<uchar>(i,0) && !z_err)
-        //  continue;
-        if(verbose)
-          cv::circle(dst, img_points.at(i), 3, CV_RGB(255,0,0), -1 );
-        curr_frame->EraseMappoint(kpt_indices.at(i)); // keyframe이 아니라서 mp->RemoveKeyframe 등을 호출하지 않는다.
+      cv::Point2f rprj_err = img_points.at(i) - uv;
+      bool uv_inlier = std::abs(rprj_err.x)+std::abs(rprj_err.y) < rprj_threshold;
+      bool z_inlier = std::abs(pt.z-Xc[2])/pt.z < .2;
+      bool inlier = uv_inlier && z_inlier;
+      if(verbose){
+        cv::circle(dst, img_points.at(i), 3, inlier?CV_RGB(0,255,0):CV_RGB(255,0,0), -1 );
+        cv::line(dst, img_points.at(i), uv, CV_RGB(255,255,0),1);
       }
+      if(!inlier){
+        curr_frame->EraseMappoint(pt.kptid_curr); // keyframe이 아니라서 mp->RemoveKeyframe 등을 호출하지 않는다.
+        if(prev_frame_->IsKeyframe())
+          pt.mp->RemoveKeyframe(prev_frame_);
+        prev_frame_->EraseMappoint(pt.kptid_prev); // keyframe에서..
+      }
+
+      it_points++;
     }
+#endif
   }
-  if(verbose)
+  if(verbose){
+    //sorted_msges.sort([](const std::pair<Pth,std::string>& a, const std::pair<Pth,std::string>& b) { return a.first < b.first; } );
+    //for(auto it : sorted_msges)
+    //  std::cout << it.second << std::endl;
+    //std::cout << "================" << std::endl;
     cv::imshow("filter", dst);
-  return;
-}
-
-void Pipeline::FilterOutlierMatches(Frame* curr_frame) {
-  const std::vector<Mappoint*>&    mappoints = curr_frame->GetMappoints();
-  const std::vector<cv::KeyPoint>& keypoints = curr_frame->GetKeypoints();
-
-  // instance 별로..
-  std::vector<double> all_errors;
-  all_errors.reserve(mappoints.size());
-
-  std::map<Instance*, std::list<double> > valid_errors;
-  for(int n = 0; n < mappoints.size(); n++){
-    Mappoint* mp = mappoints.at(n);
-    if(!mp){
-      all_errors.push_back(0.);
-      continue;
-    }
-    Instance* ins = mp->GetInstance();
-    const Qth& qth = ins->GetQth();
-    if(qth < 0){
-      all_errors.push_back(0.);
-      continue;
-    }
-    const g2o::SE3Quat& Tcq = curr_frame->GetTcq(qth);
-    const Eigen::Vector3d Xc = Tcq * mp->GetXq(qth);
-    Eigen::Vector2d rprj_uv = camera_->Project(Xc);
-    const auto& pt = keypoints.at(n).pt;
-    const Eigen::Vector2d uv(pt.x, pt.y);
-    double err = (uv-rprj_uv).norm();
-    all_errors.push_back(err);
-    valid_errors[ins].push_back(err);
-  }
-
-  std::map<Instance*, double > err_thresholds;
-  for(auto it : valid_errors){
-    std::list<double>& errors = it.second;
-    errors.sort();
-    auto it_median = errors.begin();
-    std::advance(it_median, errors.size()/2);
-    err_thresholds[it.first] = 3. * (*it_median);
-  }
-  //double err_threshold = 5.;
-
-  for(int n = 0; n < mappoints.size(); n++){
-    Mappoint* mp = mappoints.at(n);
-    if(!mp)
-      continue;
-    Instance* ins = mp->GetInstance();
-    if(ins->GetQth()<0)
-      continue;
-    const double& err = all_errors.at(n);
-    const double& err_th = err_thresholds.at(ins);
-    if(err < 10.) // TODO
-      continue;
-    //if(err < err_th)
-    //  continue;
-    curr_frame->EraseMappoint(n); // keyframe이 아니라서 mp->RemoveKeyframe 등을 호출하지 않는다.
   }
   return;
 }
@@ -613,7 +604,7 @@ std::map<Instance*,Instance*> Pipeline::MergeEquivalentInstances(const std::map<
   for(auto it_ins1 :_mappoints_of_currins){
     Instance* ins1 = it_ins1.first;
     Pth pth1 = ins1->GetId();
-    if(density_scores.at(pth1) < 1.)
+    if(density_scores.count(pth1) && density_scores.at(pth1) < 1.)
       continue;
 
     const std::set<Mappoint*>& curr_mappoints = it_ins1.second;
@@ -642,7 +633,7 @@ std::map<Instance*,Instance*> Pipeline::MergeEquivalentInstances(const std::map<
     if(!ins0)
       continue;
     //printf("Matching (%d/%d) for iou %.3f\n", ins0->GetId(), pth1, best_iou);
-    if(best_iou < .3)
+    if(best_iou < .7)
       continue;
     printf("Need Merge(%d/%d) for iou %.3f\n", ins0->GetId(), pth1, best_iou);
     equivalent_instances[ins1] = ins0; // Convert ins1 -> best_ins
@@ -675,7 +666,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
                      const cv::Mat vis_rgb
                     ) {
   switch_threshold_ = .3;
-  float density_threshold = 1. / 30. / 30.; // NxN pixel에 한개 이상의 mappoint가 존재해야 dense instance
+  float density_threshold = 1. / 40. / 40.; // NxN pixel에 한개 이상의 mappoint가 존재해야 dense instance
 
   vinfo_switch_states_.clear();
   vinfo_neighbor_frames_.clear();
@@ -683,8 +674,8 @@ Frame* Pipeline::Put(const cv::Mat gray,
   vinfo_synced_marker_ = synced_marker;
 
   const Qth qth_default = 0;
-  //cv::Mat outline_mask = synced_marker < 1;
-  cv::Mat outline_mask = cv::Mat::zeros(synced_marker.rows, synced_marker.cols, CV_8UC1);
+  cv::Mat outline_mask = synced_marker < 1;
+  //cv::Mat outline_mask = cv::Mat::zeros(synced_marker.rows, synced_marker.cols, CV_8UC1);
   std::map<Qth, std::set<Instance*> > segmented_instances;
   std::set<Pth> new_instances;
   for(const auto& it : marker_areas){
@@ -703,7 +694,6 @@ Frame* Pipeline::Put(const cv::Mat gray,
 
   static Jth nFrames = 0;
   Frame* curr_frame = new Frame(nFrames++, vis_rgb);
-  curr_frame->ExtractAndNormalizeKeypoints(gray, camera_, extractor_, outline_mask);
   curr_frame->ExtractAndNormalizeKeypoints(gray, camera_, extractor_, outline_mask);
   curr_frame->SetMeasuredDepths(depth);
   curr_frame->SetInstances(synced_marker, pth2instances_);
@@ -726,7 +716,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
 
   bool verbose_flowmatch = false;
   std::map<int, std::pair<Mappoint*, double> > flow_matches
-    = FlowMatch(camera_, extractor_, flow, prev_frame_, verbose_flowmatch, curr_frame);
+    = FlowMatch(camera_, extractor_, flow, prev_frame_, depth, synced_marker, pth2instances_, verbose_flowmatch, curr_frame);
   std::map<Mappoint*,int> matched_mappoints;
   for(auto it : flow_matches){
     curr_frame->SetMappoint(it.second.first, it.first);
@@ -735,7 +725,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
 
   static std::map<Qth, std::map<Pth,size_t> > n_consecutiv_switchoff;
   int nq = 1;
-  { // for qth in prev_frame
+  EigenMap<Qth, g2o::SE3Quat> Tcps; { // for qth in prev_frame
     const Qth qth = 0;
     RigidGroup* rig = qth2rig_groups_.at(qth);
     g2o::SE3Quat pred_Tcq = PredictMotion(prev_frame_,qth);
@@ -757,9 +747,10 @@ Frame* Pipeline::Put(const cv::Mat gray,
     bool verbose_track = false;
     g2o::SE3Quat Tcq = pose_tracker_->GetTcq(camera_, qth, curr_frame, verbose_track);
     curr_frame->SetTcq(qth, Tcq);
+    Tcps[qth] = Tcq * prev_frame_->GetTcq(qth).inverse();
   } // For qth \ Do pose_track, projection matches
   bool verbose_filter = false;
-  NewFilterOutlierMatches(curr_frame, verbose_filter);
+  NewFilterOutlierMatches(curr_frame, Tcps, verbose_filter);
 
   std::map<Instance*, std::set<Mappoint*> > ins2mappoints;
   CountMappoints(curr_frame, ins2mappoints);

@@ -348,10 +348,10 @@ def each_evaluation(target='training_0003'):
     ax.set_aspect('equal', 'box')
     seq = int( target.split('_')[1] )
     fig.savefig(osp.join(output_dir,'trj_%d.png'%seq), dpi=100)
-    #mask_data, mask_header = e.eval_mask()
-    #mask_table = tabulate([mask_data], headers=mask_header, tablefmt="pretty")
-    #print(mask_table)
-    #plt.show(block=True)
+    mask_data, mask_header = e.eval_mask()
+    mask_table = tabulate([mask_data], headers=mask_header, tablefmt="pretty")
+    print(mask_table)
+    plt.show(block=True)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

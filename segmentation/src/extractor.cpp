@@ -273,6 +273,25 @@ double OrbSlam2FeatureDescriptor::GetDistance(const cv::Mat& desc0, const cv::Ma
   return ORB_SLAM2::ORBextractor::DescriptorDistance(desc0, desc1);
 }
 
+NewFeatureDescriptor::NewFeatureDescriptor() {
+  int nfeatures = 4000;
+  scaleFactor = 1.4f;
+  int nlevels = 3;
+  int iniThFAST = 20;
+  orb_ = cv::ORB::create(nfeatures,scaleFactor,nlevels, 31,0,2,cv::ORB::HARRIS_SCORE,31,iniThFAST);
+}
+
+void NewFeatureDescriptor::Extract(const cv::Mat gray, cv::InputArray mask, std::vector<cv::KeyPoint>& keypoints, cv::Mat& descriptors) {
+  cv::Mat _mask = mask.getMat();
+  orb_->detect(gray, keypoints, ~_mask);
+  orb_->compute(gray, keypoints, descriptors);
+  return;
+}
+
+double NewFeatureDescriptor::GetDistance(const cv::Mat& desc0, const cv::Mat& desc1) const {
+  return ORB_SLAM2::ORBextractor::DescriptorDistance(desc0, desc1);
+}
+
 CvFeatureDescriptor::CvFeatureDescriptor() 
   : FeatureDescriptor() {
   nfeatures = 4000;
@@ -497,11 +516,11 @@ void CvFeatureDescriptor::Extract(const cv::Mat gray,
                                   cv::Mat& descriptors) {
   assert(gray.type() == CV_8UC1 );
   cv::Mat _mask = mask.getMat();
+#if 0
   // Pre-compute the scale pyramid
   ComputePyramid(gray);
   std::vector < std::vector< cv::KeyPoint> > allKeypoints;
   ComputeKeyPointsOctTree(allKeypoints, _mask); // level 별로 nfeatures 개수만큼 featur extraction.
-#if 1
   int nkeypoints = 0;
   for (int level = 0; level < nlevels; ++level)
       nkeypoints += (int)allKeypoints[level].size();
@@ -532,10 +551,11 @@ void CvFeatureDescriptor::Extract(const cv::Mat gray,
       // And add the keypoints to the output
       _keypoints.insert(_keypoints.end(), scaled_keypoints.begin(), scaled_keypoints.end());
   }
+#else
+  static auto orb_ = cv::ORB::create(nfeatures,scaleFactor,nlevels, 31,0,2,cv::ORB::HARRIS_SCORE,31,iniThFAST);
+  orb_->detect(gray, _keypoints, ~_mask);
+  orb_->compute(gray, _keypoints, descriptors);
 #endif
-  //static auto orb_ = cv::ORB::create(nfeatures,scaleFactor,nlevels,edgeThreshold,firstLevel,WTA_K,scoreType,patchSize,fastThreshold);
-  //orb_->detect(gray, keypoints);
-  //orb_->compute(gray, keypoints, descriptors);
   return;
 }
 

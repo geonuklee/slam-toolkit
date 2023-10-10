@@ -3,6 +3,7 @@
 #include <flann/flann.hpp> // include it before opencv
 #include <g2o/types/slam3d/se3quat.h>
 #include <opencv2/core/mat.hpp>
+#include <opencv2/features2d.hpp>
 #include "Eigen/src/Core/Matrix.h"
 #include "stdafx.h"
 #include "seg.h"
@@ -40,7 +41,6 @@ public:
   ~CvFeatureDescriptor() {}
   void Extract(const cv::Mat gray, cv::InputArray mask, std::vector<cv::KeyPoint>& keypoints, cv::Mat& descriptors);
   inline double GetDistance(const cv::Mat& desc0, const cv::Mat& desc1) const;
-
   std::vector<cv::Mat> mvImagePyramid;
 private:
   void ComputePyramid(cv::Mat image);
@@ -56,6 +56,16 @@ private:
   std::vector<float> mvInvScaleFactor;
   std::vector<float> mvLevelSigma2;
   std::vector<float> mvInvLevelSigma2;
+};
+
+class NewFeatureDescriptor : public FeatureDescriptor {
+public:
+  NewFeatureDescriptor();
+  ~NewFeatureDescriptor() {}
+  void Extract(const cv::Mat gray, cv::InputArray mask, std::vector<cv::KeyPoint>& keypoints, cv::Mat& descriptors);
+  inline double GetDistance(const cv::Mat& desc0, const cv::Mat& desc1) const;
+private:
+  cv::Ptr<cv::ORB> orb_;
 };
 
 } // namespace SEG
@@ -97,10 +107,17 @@ public:
   ~Frame();
   bool IsInFrame(const Camera* camera, const Eigen::Vector2d& uv) const;
   int GetIndex(const Mappoint* mp) const { return mappoints_index_.count(mp) ? mappoints_index_.at(mp) : -1; }
+
   void ExtractAndNormalizeKeypoints(const cv::Mat gray,
                                     const Camera* camera,
                                     SEG::FeatureDescriptor* extractor,
                                     const cv::Mat& mask);
+  void AddKeypoints(const Camera*const camera,
+                    const std::vector< cv::KeyPoint >& added_keypoints,
+                    const std::vector< Mappoint* >&    added_mappoints,
+                    const std::vector< Instance* >&    added_instances,
+                    const std::vector< float >&        added_depths
+                    );
 
   void SetInstances(const cv::Mat synced_marker, const std::map<Pth, Instance*>& instances);
   void SetInstance(int index, Instance* ins) { instances_[index] = ins; }
@@ -125,6 +142,7 @@ public:
 
   void ReduceMem() { rgb_ = cv::Mat(); }
   const cv::Mat GetDescription(int i) const { return descriptions_.row(i); }
+  const cv::Mat GetDescriptions() const { return descriptions_; }
   const cv::KeyPoint& GetKeypoint(int i) const {  return keypoints_.at(i); }
   const float& GetDepth(int i) const { return measured_depths_.at(i); }
   const Jth GetId() const { return id_; }
@@ -158,7 +176,7 @@ private:
 class Mappoint {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-  Mappoint(Ith id, Instance* ins) : id_(id), ins_(ins), latest_ins_(ins) {}
+  Mappoint(Ith id, Instance* ins, const cv::KeyPoint& kpt, cv::Mat desc) : id_(id), ins_(ins), latest_ins_(ins), kpt_(kpt), desc_(desc) {}
   Instance* GetInstance() const { return ins_; }
   Instance* GetLatestInstance() const { return ins_; }
   void ChangeInstance(Instance* ins) { ins_ = ins; if(latest_ins_==ins) latest_ins_=ins;}
@@ -169,9 +187,11 @@ public:
   const std::map<Qth,Frame*>& GetRefFrames() const { return ref_; }
   bool HasEstimate4Rig(const Qth& qth) const { return ref_.count(qth); }
   void AddKeyframe(Qth qth, Frame* frame) { keyframes_[qth].insert(frame); }
-  void RemoveKeyframe(Qth qth, Frame* frame) { keyframes_[qth].erase(frame); }
+  void RemoveKeyframe(Frame* frame);
   const std::map<Qth, std::set<Frame*> >& GetKeyframes() const { return keyframes_; }
   const std::set<Frame*>& GetKeyframes(Qth qth) const { return keyframes_.at(qth); }
+  const cv::Mat& GetDescription() const { return desc_; }
+  const cv::KeyPoint& GetKeypoint() const { return kpt_; }
 
   // Ref coordinate에서 본 Xr. Depth Camera의 Measurement
   void AddReferenceKeyframe(const Qth& qth, Frame* ref, const Eigen::Vector3d& Xq) { ref_[qth] = ref; SetXq(qth, Xq); }
@@ -195,6 +215,8 @@ private:
   std::map<Qth, std::set<Frame*> > keyframes_; // GetNeighbors에 필요
   std::map<Qth, std::shared_ptr<Eigen::Vector3d> >Xr_; // Measurement
   std::map<Qth, std::shared_ptr<Eigen::Vector3d> >Xq_; // rig마다 독립된 Mapping값을 가진다.
+  const cv::KeyPoint kpt_;
+  const cv::Mat desc_;
 };
 
 
@@ -238,8 +260,7 @@ private:
                                                          const std::map<Pth,float>& density_scores);
   std::set<Qth> FrameNeedsToBeKeyframe(Frame* frame) const;
   void SupplyMappoints(Frame* frame);
-  void FilterOutlierMatches(Frame* curr_frame);
-  void NewFilterOutlierMatches(Frame* curr_frame, bool verbose);
+  void NewFilterOutlierMatches(Frame* curr_frame, const EigenMap<Qth, g2o::SE3Quat>& Tcps, bool verbose);
 
   SEG::FeatureDescriptor* extractor_;
   const Camera*const camera_;
@@ -263,9 +284,12 @@ private:
 }; // class Pipeline
 
 std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
-                                                       const SEG::FeatureDescriptor* extractor,
+                                                       SEG::FeatureDescriptor* extractor,
                                                        const std::vector<cv::Mat>& flow,
                                                        const Frame* prev_frame,
+                                                       const cv::Mat& curr_depth,
+                                                       const cv::Mat& curr_marker,
+                                                       const std::map<Pth,Instance*>& pth2instances,
                                                        bool verbose,
                                                        Frame* curr_frame) ;
 

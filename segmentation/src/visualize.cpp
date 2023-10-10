@@ -199,7 +199,7 @@ void Pipeline::Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask, cv::M
       continue;
     const bool& supplied_pt = vinfo_supplied_mappoints_[n];
     if(supplied_pt)
-      cv::circle(dst_frame, pt, 3, CV_RGB(255,0,0), 1);
+      cv::circle(dst_frame, pt, 2, CV_RGB(255,0,255), 1);
   }
   std::list<Mappoint*> sorted_mappoints;
   for(size_t n=0; n<keypoints.size(); n++){
@@ -214,12 +214,17 @@ void Pipeline::Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask, cv::M
     // Instance* ins = m->GetInstance();
     sorted_mappoints.push_back(mp);
     cv::circle(dst_frame, pt, 3, CV_RGB(0,255,0), -1);
-    const std::set<Frame*>& keyframes = mp->GetKeyframes(qth);
+    std::list<Frame*> keyframes;
+    for(Frame* kf : mp->GetKeyframes(qth))
+      keyframes.push_back(kf);
+    keyframes.sort([](Frame* a, Frame* b) { return a->GetId() < b->GetId(); } );
     for(auto it = keyframes.rbegin(); it!=keyframes.rend(); it++){
-      const cv::Point2f& pt_next = (*it)->GetKeypoint( (*it)->GetIndex(mp) ).pt;
+      Frame* kf = *it;
+      int index = kf->GetIndex(mp);
+      const cv::Point2f& pt_next = kf->GetKeypoint( index ).pt;
       cv::line(dst_frame, pt, pt_next, CV_RGB(0,0,255), 1);
-      if(*it != prev_frame_)
-        break;
+      //if(kf != prev_frame_)
+      //  break;
     }
   }
 

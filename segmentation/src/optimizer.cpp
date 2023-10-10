@@ -20,7 +20,8 @@ inline float GetInvdInfo(const float& invd){
 }
 
 inline float GetSwitchableInvdInfo(const float& invd){
-  return invd*invd*1e+3;
+  return invd*invd;
+  //return invd*invd*1e+3;
 }
 
 namespace NEW_SEG {
@@ -166,8 +167,8 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
       if(curr_frame->GetIndex(mp) < 0 )
         continue;
     }
-    Instance* ins = mp->GetInstance();
-    //Instance* ins = mp->GetLatestInstance();
+    //Instance* ins = mp->GetInstance();
+    Instance* ins = mp->GetLatestInstance();
     if(ins && ins->GetId() > 0 ){
       mp_counts[ins->GetId()]++;
     }
@@ -226,7 +227,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
 
       Instance* ins = mp->GetInstance();
       Pth pth = ins ? ins->GetId() : -1;
-      bool valid_depth = z > 10.; // 너무 가까운데서 stereo disparity가 부정확.
+      bool valid_depth = z > 5.; // 너무 가까운데서 stereo disparity가 부정확.
       bool switchable = v_switches.count(pth) ;
       if(switchable ){
         VertexSwitchLinear* v_switch = v_switches.at(pth);

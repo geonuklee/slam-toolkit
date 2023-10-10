@@ -9,9 +9,12 @@ inline double lerp(double x0, double y0, double x1, double y1, double x) {
 
 namespace NEW_SEG {
 std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
-                                                       const SEG::FeatureDescriptor* extractor,
+                                                       SEG::FeatureDescriptor* extractor,
                                                        const std::vector<cv::Mat>& flow,
                                                        const Frame* prev_frame,
+                                                       const cv::Mat& curr_depth,
+                                                       const cv::Mat& curr_marker,
+                                                       const std::map<Pth,Instance*>& pth2instances,
                                                        bool verbose,
                                                        Frame* curr_frame) {
   double search_threshold = 2.; // optical flow가 속도와 타협하느라 부정확한걸 감안해야함.
@@ -26,7 +29,6 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
   const auto& depths0    = prev_frame->GetMeasuredDepths();
   const auto& keypoints1 = curr_frame->GetKeypoints();
   std::map<int, std::pair<Mappoint*, double> > matches;
-  for(size_t iter = 0; iter <2; iter++){
     std::vector<int> grids = {0, 0, 0, 0};
     cv::Mat dst0, dst1;
     if(verbose){
@@ -38,6 +40,7 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
         cv::circle(dst1,  keypoints1[n].pt, 3, CV_RGB(150,150,150), 1);
     }
 
+    int n_mappoints = 0;
     for(int n0=0; n0 < mappoints0.size(); n0++){
       Mappoint* mp0 = mappoints0[n0];
       if(!mp0)
@@ -49,10 +52,12 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
       Eigen::Vector2d eig_pt1(pt0.x+dpt01.x, pt0.y+dpt01.y);
       if(!curr_frame->IsInFrame(camera,eig_pt1))  //  땅바닥 제외
         continue;
+      n_mappoints++;
       std::list< std::pair<int,double> > candidates = curr_frame->SearchRadius(eig_pt1, search_threshold);
       if(candidates.empty())
         continue;
-      const cv::Mat desc0 = prev_frame->GetDescription(n0);
+      //const cv::Mat desc0 = prev_frame->GetDescription(n0);
+      const cv::Mat desc0 = mp0->GetDescription();
       double dist0 = 1e+9;
       double dist1 = dist0;
       int champ0 = -1;
@@ -97,6 +102,49 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
         matches[champ0] = std::make_pair(mp0,dist0);
       }
     } // for mappoints0
+
+    std::set<Mappoint*> matched_mappoints;
+    for(auto it : matches)
+      matched_mappoints.insert(it.second.first);
+    std::vector< cv::KeyPoint > added_keypoints;
+    std::vector< Mappoint* >    added_mappoints;
+    std::vector< Instance* >    added_instances;
+    std::vector< float >        added_depths;
+    {
+      int N = n_mappoints - matched_mappoints.size();
+      added_keypoints.reserve(N);
+      added_mappoints.reserve(N);
+      added_instances.reserve(N);
+      added_depths.reserve(N);
+    }
+    for(int n0=0; n0 < mappoints0.size(); n0++){
+      Mappoint* mp0 = mappoints0[n0];
+      if(!mp0)
+        continue;
+      if(matched_mappoints.count(mp0))
+        continue;
+      const cv::KeyPoint& kpt0 = keypoints0[n0];
+      const cv::Point2f&  pt0  = kpt0.pt;
+      cv::Point2f dpt01(flow[0].at<float>(pt0), flow[1].at<float>(pt0));
+      Eigen::Vector2d eig_pt1(pt0.x+dpt01.x, pt0.y+dpt01.y);
+      if(!curr_frame->IsInFrame(camera,eig_pt1))  //  땅바닥 제외
+        continue;
+      cv::KeyPoint kpt = kpt0;
+      kpt.pt.x = eig_pt1[0];
+      kpt.pt.y = eig_pt1[1];
+      Pth pth = curr_marker.at<int32_t>(kpt.pt);
+      if(pth <1)
+        continue;
+      Instance* ins = pth2instances.at(pth);
+      float z = curr_depth.at<float>(kpt.pt);
+      matches[keypoints1.size()+added_keypoints.size()]  = std::make_pair(mp0, 0.);
+      added_keypoints.push_back(kpt);
+      added_mappoints.push_back(mp0);
+      added_instances.push_back(ins);
+      added_depths.push_back(z);
+    }
+    curr_frame->AddKeypoints(camera, added_keypoints,added_mappoints,added_instances,added_depths);
+
     if(!dst1.empty()){ // Visualization
       for(auto it : matches){
         const int& i1 = it.first;
@@ -105,31 +153,12 @@ std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
         const cv::Point2f& pt0 = prev_frame->GetKeypoint(i0).pt;
         cv::circle(dst0, pt0, 3,   CV_RGB(0,0,255), -1);
         cv::circle(dst1, pt1, 3,   CV_RGB(0,0,255), -1);
-        cv::line(  dst1, pt1, pt0, CV_RGB(0,0,255), 1);
+        cv::line(  dst1, pt1, pt0, CV_RGB(0,255,255), 1);
       }
       cv::imshow("flow0", dst0);
       cv::imshow("flow1", dst1);
     }
-#if 0
-    // matches의 분포로 재연결 판정.
-    for(auto it : matches){
-      const cv::KeyPoint& kpt1 = curr_frame->GetKeypoint(it.first);
-      int r = int( grids.size() * (kpt1.pt.x / camera->GetWidth()) );
-      r = std::max<int>(0,r);
-      r = std::min<int>(grids.size()-1,r);
-      grids[r]++;
-    }
-    if(grids[0]+grids[1]> 10 && grids[2]+grids[3]>10)
-      break;
-    std::cout << "Warning : F#" << curr_frame->GetId() << ", difficult to flow matches" << std::endl;
-    matches.clear();
-    best12_threshold = 2.;
-    search_threshold = 5.;
-    search_threshold = 5.;
-#else
-    break;
-#endif
-  } // for iter
+
   return matches;
 } // NEW_SEG::FlowMatch
 
@@ -176,8 +205,8 @@ std::map<int, std::pair<Mappoint*,double> > ProjectionMatch(const Camera* camera
   for(size_t key_mp = 0; key_mp < batch_search.size(); key_mp++){
     Mappoint* query_mp = key_table.at(key_mp);
     //const double& expected_depth = expected_depths.at(key_mp);
-    cv::Mat desc0; cv::KeyPoint kpt0;
-    query_mp->GetFeature(qth, use_latest_desc, desc0, kpt0);
+    cv::Mat desc0 = query_mp->GetDescription();
+    cv::KeyPoint kpt0 = query_mp->GetKeypoint();
     double z0 = std::max(1e-8, query_mp->GetXq(qth).z());
     const std::vector<int>& each_search = batch_search.at(key_mp);
     const std::vector<double>& each_err_square = err_squares.at(key_mp);
