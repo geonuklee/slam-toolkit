@@ -207,7 +207,7 @@ class Evaluator:
 
             nkptTP += nkpt_tp; nkptTN += nkpt_tn; nkptFP += nkpt_fp; nkptFN += nkpt_fn
             TP += tps; TN += tns; FP += fps; FN += fns;
-            if n % 10 == 0:
+            if n % 100 == 0:
                 print( "%d/%d"%(n, N) )
             #if not hasattr(self, 'dataset'):
             #    self.dataset = KittiTrackingDataset(self.dataset_dir,seq)
@@ -291,9 +291,8 @@ class Evaluator:
             ax.axis('equal')
         return table_data, headers 
 
-def batch_evaluation():
+def batch_evaluation(output_dir):
     dataset_path ="./kitti_tracking_dataset"
-    output_dir = './output_batch'
     targets = listdir(output_dir)
     targets = [x for x in targets if osp.isdir( osp.join(output_dir, x) )]
     targets = sorted(targets, key=lambda x: int(x.split('_')[1]) )
@@ -355,9 +354,9 @@ def each_evaluation(target='training_0003'):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('target', help='training_00xx or test_00xx or batch')
+    parser.add_argument('output_dir', help='training_00xx or test_00xx or batch')
     args = parser.parse_args()
-    if args.target == 'batch':
-        batch_evaluation()
+    if hasattr(args, 'output_dir'):
+        batch_evaluation(args.output_dir)
     else:
-        each_evaluation(args.target)
+        each_evaluation('output')

@@ -16,10 +16,12 @@ dataset="kitti"
 seq="0001" # static
 #seq="0003" # dynamic
 #seq="0004" # dynamic
-#seq="0005"
+#seq="0005" # 고속도로 장면.
 #seq="0006" # 정지한 화면에서는 움직이는 instance 에 추가적으로 mappoint 할당이 없어서, 물체 감지는 안된다.
 #seq="0007"
 #seq="0008" # 고속도로장면, 조금 부정확.
+#seq="0014" # 
+#seq="0004" 
 #seq="0019" # Tram
 
 

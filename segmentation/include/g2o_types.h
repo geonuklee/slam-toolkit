@@ -1,6 +1,7 @@
 #ifndef SEG_G2OTYPES_
 #define SEG_G2OTYPES_
 #include <g2o/config.h>
+#include <g2o/core/eigen_types.h>
 #include <g2o/types/sba/types_six_dof_expmap.h>
 #include <g2o/core/base_multi_edge.h>
 
@@ -23,9 +24,14 @@ class EdgeSE3PointXYZDepth
 {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-  EdgeSE3PointXYZDepth(const Param* param,
-                       const double& uv_info,
-                       const double& invd_info);
+  EdgeSE3PointXYZDepth(const Param* param, const double& uv_info, const double& invd_info);
+  EdgeSE3PointXYZDepth(const Param* param, const double& uv_info, const double& invd_info,
+                       g2o::VertexSBAPointXYZ* v_mp, g2o::VertexSE3Expmap* v_pose,
+                       const g2o::Vector3& uvi)
+  : EdgeSE3PointXYZDepth(param, uv_info, invd_info) { setVertex(0, v_mp); setVertex(1,v_pose);
+    setMeasurement(uvi);
+  }
+
   void computeError();
   virtual void linearizeOplus();
   virtual bool read(std::istream& is) { return false; }
@@ -45,40 +51,14 @@ class EdgeProjection
 {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-    EdgeProjection(const Param* param,
-                   const double& uv_info);
+  EdgeProjection(const Param* param, const double& uv_info);
+  EdgeProjection(const Param* param, const double& uv_info,
+                 g2o::VertexSBAPointXYZ* v_mp, g2o::VertexSE3Expmap* v_pose,
+                 const g2o::Vector2& uv)
+  : EdgeProjection(param, uv_info) { setVertex(0, v_mp); setVertex(1,v_pose); setMeasurement(uv); }
+
   void computeError();
   virtual void linearizeOplus();
-  virtual bool read(std::istream& is) { return false; }
-  virtual bool write(std::ostream& os) const { return false; }
-private:
-  const Param*const param_;
-};
-
-class EdgeSwProjection
-  : public g2o::BaseMultiEdge<2, g2o::Vector2>
-{
-public:
-  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-    EdgeSwProjection(const Param* param,
-                     const double& uv_info);
-  void computeError();
-  virtual void linearizeOplus();
-  virtual bool read(std::istream& is) { return false; }
-  virtual bool write(std::ostream& os) const { return false; }
-private:
-  const Param*const param_;
-};
-
-// D=3 : Dimenison
-// E=g2o::Vector3 : Measurement
-class EdgeSwSE3PointXYZDepth : public g2o::BaseMultiEdge<3, g2o::Vector3> {
-public:
-  EdgeSwSE3PointXYZDepth(const Param* param,
-                         const double& uv_info,
-                         const double& invd_info);
-  void computeError();
-  void linearizeOplus();
   virtual bool read(std::istream& is) { return false; }
   virtual bool write(std::ostream& os) const { return false; }
 private:
@@ -111,12 +91,52 @@ private:
   double _x;
 };
 
+class EdgeSwProjection
+  : public g2o::BaseMultiEdge<2, g2o::Vector2>
+{
+public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    EdgeSwProjection(const Param* param, const double& uv_info);
+    EdgeSwProjection(const Param* param, const double& uv_info,
+                     g2o::VertexSBAPointXYZ* v_mp, g2o::VertexSE3Expmap* v_pose, VertexSwitchLinear* v_switch,
+                     const g2o::Vector2& uv)
+    : EdgeSwProjection(param,uv_info) { setVertex(0,v_mp); setVertex(1,v_pose); setVertex(2, v_switch);
+      setMeasurement(uv);
+    }
+
+  void computeError();
+  virtual void linearizeOplus();
+  virtual bool read(std::istream& is) { return false; }
+  virtual bool write(std::ostream& os) const { return false; }
+private:
+  const Param*const param_;
+};
+
+// D=3 : Dimenison
+// E=g2o::Vector3 : Measurement
+class EdgeSwSE3PointXYZDepth : public g2o::BaseMultiEdge<3, g2o::Vector3> {
+public:
+  EdgeSwSE3PointXYZDepth(const Param* param, const double& uv_info, const double& invd_info);
+  EdgeSwSE3PointXYZDepth(const Param* param, const double& uv_info, const double& invd_info,
+                         g2o::VertexSBAPointXYZ* v_mp, g2o::VertexSE3Expmap* v_pose, VertexSwitchLinear* v_switch,
+                         const g2o::Vector3& uvi)
+  : EdgeSwSE3PointXYZDepth(param,uv_info,invd_info) { setVertex(0,v_mp); setVertex(1,v_pose); setVertex(2, v_switch);
+    setMeasurement(uvi);
+  }
+
+  void computeError();
+  void linearizeOplus();
+  virtual bool read(std::istream& is) { return false; }
+  virtual bool write(std::ostream& os) const { return false; }
+private:
+  const Param*const param_;
+};
+
 class EdgeSwitchPrior : public g2o::BaseUnaryEdge<1, double, VertexSwitchLinear> {
 public:
   // Measurement가 double인데 EIGEN_MAKE_ALIGNED_OPERATOR_NEW가 필요한가 의문이지만,..
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-  EdgeSwitchPrior() {
-  };
+  EdgeSwitchPrior() { };
   void SetInfomation(const number_t& info) { information()(0,0) = info; }
   void linearizeOplus();
   void computeError();

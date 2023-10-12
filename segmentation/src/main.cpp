@@ -107,7 +107,7 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
   }
 
   const std::string config_fn = GetPackageDir()+"/config/kitti_tracking.yaml";
-  SegViewer viewer(gt_Tcws, config_fn, dst_size);
+  SegViewer viewer(gt_Tcws, config_fn, dst_size, "KITTI tracking seq "+seq);
   const auto& D = dataset.GetCamera()->GetD();
   const StereoCamera* camera = dynamic_cast<const StereoCamera*>(dataset.GetCamera());
   assert(camera);
@@ -124,6 +124,7 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
 
   std::string output_dir = std::string(PACKAGE_DIR)+std::string("/")+std::string(argv[2]);
   bool stop = std::string(argv[2])!="output_batch";
+  stop = false;
   bool req_exit = true;
 
   if(! std::filesystem::exists(output_dir) )
@@ -160,15 +161,18 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     const std::vector<cv::Mat>& flow = img_tracker->GetFlow();
     cv::Mat synced_marker = img_tracker->GetSyncedMarker();
     const std::map<int,size_t>& marker_areas = img_tracker->GetMarkerAreas();
+    depth.setTo(0., depth > 100.);
     NEW_SEG::Frame* frame = pipeline.Put(gray, depth, flow, synced_marker, marker_areas,
                                          gradx, grady, valid_grad, rgb);
     img_tracker->ChangeSyncedMarker(synced_marker);
     g2o::SE3Quat Tcw = frame->GetTcq(0) * TCw;
+    bool is_kf = frame->IsKeyframe();
     cv::Mat dst; {
       cv::Mat dynamic_mask = dataset.GetDynamicMask(i);
       pipeline.Visualize(rgb, dynamic_mask, dst);
     }
-    viewer.SetCurrCamera(i, Tcw, dst);
+    EigenMap<Jth, g2o::SE3Quat> updated_Tcws = pipeline.GetUpdatedTcqs();
+    viewer.SetCurrCamera(i, updated_Tcws, dst);
     cv::Mat gt_insmask = dataset.GetInstanceMask(i);
     cv::Mat gt_dmask = dataset.GetDynamicMask(i);
     NEW_SEG::RigidGroup* rig = pipeline.GetRigidGroup(0);

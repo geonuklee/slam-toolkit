@@ -198,8 +198,13 @@ void Pipeline::Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask, cv::M
     if(!mp)
       continue;
     const bool& supplied_pt = vinfo_supplied_mappoints_[n];
-    if(supplied_pt)
-      cv::circle(dst_frame, pt, 2, CV_RGB(255,0,255), 1);
+    if(supplied_pt){
+      Instance* ins = instances[n];
+      cv::Scalar color = CV_RGB(0,0,255);
+      if(ins && ins->GetQth() != 0)
+        color = CV_RGB(255,0,0);
+      cv::circle(dst_frame, pt, 2, color, 1);
+    }
   }
   std::list<Mappoint*> sorted_mappoints;
   for(size_t n=0; n<keypoints.size(); n++){
@@ -211,20 +216,25 @@ void Pipeline::Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask, cv::M
     if(supplied_pt)
       continue;
     Instance* ins = instances[n];
-    // Instance* ins = m->GetInstance();
+    //Instance* ins = mp->GetInstance();
     sorted_mappoints.push_back(mp);
-    cv::circle(dst_frame, pt, 3, CV_RGB(0,255,0), -1);
+    bool is_dynamic = ins && ins->GetQth() != 0;
+    cv::Scalar color = is_dynamic? CV_RGB(255,0,0) : CV_RGB(0,0,255);
+    cv::circle(dst_frame, pt, 3, color, -1);
     std::list<Frame*> keyframes;
     for(Frame* kf : mp->GetKeyframes(qth))
       keyframes.push_back(kf);
     keyframes.sort([](Frame* a, Frame* b) { return a->GetId() < b->GetId(); } );
+    int n_pt =0;
     for(auto it = keyframes.rbegin(); it!=keyframes.rend(); it++){
       Frame* kf = *it;
       int index = kf->GetIndex(mp);
       const cv::Point2f& pt_next = kf->GetKeypoint( index ).pt;
-      cv::line(dst_frame, pt, pt_next, CV_RGB(0,0,255), 1);
-      //if(kf != prev_frame_)
-      //  break;
+      cv::line(dst_frame, pt, pt_next, color, 1);
+      //if(++n_pt > 1)
+        break;
+      //if(!is_dynamic)
+      // break;
     }
   }
 
@@ -301,8 +311,12 @@ void Pipeline::Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask, cv::M
 
   {
     int fid = prev_frame_->GetId();
-    int kfid = prev_frame_->GetKfId(qth);
-    std::string msg = "KF#" + std::to_string(kfid) + "/ F#" + std::to_string(fid);
+    Frame* lkf = keyframes_.at(qth).rbegin()->second;
+    //int kfid = prev_frame_->GetKfId(qth);
+    std::string msg;
+    msg += "F#" + std::to_string(fid);
+    msg += prev_frame_->IsKeyframe() ? " is KF, " : " is not KF, ";
+    msg += " / KF# " + std::to_string(lkf->GetKfId(qth));
     int fontFace = cv::FONT_HERSHEY_SIMPLEX; double fontScale = .6; int fontThick = 1; int baseline = 0;
     cv::Size size = cv::getTextSize(msg, fontFace, fontScale, fontThick, &baseline);
     cv::rectangle(dst_marker, cv::Point(0,0), cv::Point(size.width+10,size.height+10), CV_RGB(150,150,150), -1);

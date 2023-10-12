@@ -6,8 +6,11 @@
 #include <pangolin/scene/axis.h>
 
 
-SegViewer::SegViewer(const EigenMap<int, g2o::SE3Quat>& gt_Tcws, std::string config_fn, cv::Size dst_size)
-  : name_ ("SegViewer"),
+SegViewer::SegViewer(const EigenMap<int, g2o::SE3Quat>& gt_Tcws, 
+                     std::string config_fn,
+                     cv::Size dst_size,
+                     std::string viewer_title)
+  : name_ (viewer_title),
   gt_Tcws_(gt_Tcws),
   req_exit_(false)
 {
@@ -32,11 +35,14 @@ SegViewer::SegViewer(const EigenMap<int, g2o::SE3Quat>& gt_Tcws, std::string con
   thread_ = std::thread([&]() { Run(); });
 }
 
-void SegViewer::SetCurrCamera(int k, const g2o::SE3Quat& Tcw, const cv::Mat& dst) {
+void SegViewer::SetCurrCamera(int k,
+                              const EigenMap<int, g2o::SE3Quat>& updated_Tcws,
+                              const cv::Mat& dst) {
   std::unique_lock<std::mutex> lock(mutex_viewer_);
   curr_k_ = k;
-  est_Tcws_[k] = Tcw;
+  est_Tcws_[k] = updated_Tcws.at(k);
   curr_dst_ = dst;
+  updated_Tcws_ = updated_Tcws;
 }
 
 void SegViewer::SetMappoints(const EigenMap<int, Eigen::Vector3d>& mappoints) {
@@ -101,21 +107,31 @@ void SegViewer::Run(){
   pangolin::GlTexture img_texture(dst_size_.width,dst_size_.height,GL_RGB,false,0,GL_RGB,GL_UNSIGNED_BYTE);
 
   //pangolin::RegisterKeyPressCallback(pangolin::PANGO_CTRL + 'b', [&](){
-  pangolin::RegisterKeyPressCallback('q', [&](){
+  /* pangolin::RegisterKeyPressCallback('q', [&](){
                                      std::cout << "Exit!" << std::endl;
                                      req_exit_ = true;
                                      });
+                                     */
 
+  EigenMap<int,g2o::SE3Quat> kf_Tcws; 
   while( !pangolin::ShouldQuit() ) {
     // Sync member variables
     int curr_k;
     bool req_exit;
     cv::Mat curr_dst;
-    EigenMap<int,g2o::SE3Quat> est_Tcws; {
+    EigenMap<int,g2o::SE3Quat> est_Tcws; 
+    std::set<int> updated_kf;
+    {
       std::unique_lock<std::mutex> lock(mutex_viewer_);
       curr_k = curr_k_;
       req_exit = req_exit_;
       est_Tcws = est_Tcws_;
+      for(auto it : updated_Tcws_){
+        if(it.first==curr_k)
+          continue;
+        kf_Tcws[it.first] = it.second;
+        updated_kf.insert(it.first);
+      }
       cv::flip(curr_dst_, curr_dst,0);
     }
     if(req_exit)
@@ -145,7 +161,17 @@ void SegViewer::Run(){
     DrawTrajectories(est_Tcws);
     if(menu_show_points)
       DrawPoints();
-    DrawPose(Twc);
+
+    for(auto it : kf_Tcws){
+      if(updated_kf.count(it.first))
+        glColor3f(0., 0., 1.); // Activated keyframe of LBA
+      else
+        glColor3f(.6, .6, .6);
+      DrawPose(it.second.inverse());
+    }
+    glColor3f(0., 1., 0.);
+    DrawPose(Twc); // Current frame.
+
     d_img1.Activate();
     if(!curr_dst.empty()){
       img_texture.Upload(curr_dst.data,GL_BGR,GL_UNSIGNED_BYTE);
@@ -214,9 +240,7 @@ void SegViewer::DrawPose(const g2o::SE3Quat& _Twc) {
   glEnd();
 
 #else
-  glLineWidth(2);
-  glColor4f(0., 0., 1.,1.);
-
+  glLineWidth(1);
   glBegin(GL_LINES);
   glVertex3f(0,0,0);
   glVertex3f(w,h,z);

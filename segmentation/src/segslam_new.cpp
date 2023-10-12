@@ -429,7 +429,7 @@ std::set<Qth> Pipeline::FrameNeedsToBeKeyframe(Frame* curr_frame) const {
   return need_keyframes;
 }
 
-void Pipeline::NewFilterOutlierMatches(Frame* curr_frame,const EigenMap<Qth, g2o::SE3Quat>& Tcps, bool verbose) {
+std::set<Pth>  Pipeline::FilterOutlierMatches(Frame* curr_frame,const EigenMap<Qth, g2o::SE3Quat>& Tcps, bool verbose) {
   bool use_extrinsic_guess = true;
   double rprj_threshold = 2.;
   double confidence = .99;
@@ -483,6 +483,8 @@ void Pipeline::NewFilterOutlierMatches(Frame* curr_frame,const EigenMap<Qth, g2o
   img_points.reserve(_mappoints.size());
 
   //std::list< std::pair<Pth, std::string> > sorted_msges;
+  std::set<Pth> pnp_failed_instances;
+  std::cout << "====================" << std::endl;
   for(auto it : segmented_points){
     if(it.second.size() < 5)
       continue;
@@ -500,12 +502,14 @@ void Pipeline::NewFilterOutlierMatches(Frame* curr_frame,const EigenMap<Qth, g2o
     cv::Mat R;
     cv::Rodrigues(rvec,R);
     g2o::SE3Quat _Tcp(cvt2Eigen(R), cvt2Eigen(tvec) ); // Transform : {c}urrent camera <- {p}revious camera
-    //if(Tcps.count(qth)){
-    //  double t_max = 1.;
-    //  if(_Tcp.translation().norm() > t_max){
-    //    _Tcp= Tcps.at(qth);
-    //  }
-    //}
+    if(Tcps.count(qth)){
+      double t_max = 10.; // TODO time stamp 추가로 m/sec 으로 변경.
+      if(_Tcp.translation().norm() > t_max){
+        std::cout << "Filter failed to track p#" << it.first->GetId() << ", t = " << _Tcp.translation().transpose() << std::endl;
+        pnp_failed_instances.insert( it.first->GetId() );
+        _Tcp= Tcps.at(qth);
+      }
+    }
 #if 1
     auto it_points = it.second.begin();
     for(int i=0; i < obj_points.size(); i++){
@@ -519,7 +523,8 @@ void Pipeline::NewFilterOutlierMatches(Frame* curr_frame,const EigenMap<Qth, g2o
       }
       cv::Point2f rprj_err = img_points.at(i) - uv;
       bool uv_inlier = std::abs(rprj_err.x)+std::abs(rprj_err.y) < rprj_threshold;
-      bool z_inlier = std::abs(pt.z-Xc[2])/pt.z < .2;
+      float abs_err = std::abs(pt.z-Xc[2]);
+      bool z_inlier = abs_err < 10. || abs_err/pt.z < .1;
       bool inlier = uv_inlier && z_inlier;
       if(verbose){
         cv::circle(dst, img_points.at(i), 3, inlier?CV_RGB(0,255,0):CV_RGB(255,0,0), -1 );
@@ -531,7 +536,6 @@ void Pipeline::NewFilterOutlierMatches(Frame* curr_frame,const EigenMap<Qth, g2o
           pt.mp->RemoveKeyframe(prev_frame_);
         prev_frame_->EraseMappoint(pt.kptid_prev); // keyframe에서..
       }
-
       it_points++;
     }
 #endif
@@ -543,7 +547,7 @@ void Pipeline::NewFilterOutlierMatches(Frame* curr_frame,const EigenMap<Qth, g2o
     //std::cout << "================" << std::endl;
     cv::imshow("filter", dst);
   }
-  return;
+  return pnp_failed_instances;
 }
 
 void SetMatches(std::map<int, std::pair<Mappoint*, double> >& flow_matches,
@@ -730,8 +734,8 @@ Frame* Pipeline::Put(const cv::Mat gray,
     RigidGroup* rig = qth2rig_groups_.at(qth);
     g2o::SE3Quat pred_Tcq = PredictMotion(prev_frame_,qth);
     curr_frame->SetTcq(qth_default, pred_Tcq);
-    //g2o::SE3Quat Tcq = pose_tracker_->GetTcq(camera_, qth, curr_frame, false);
-    //curr_frame->SetTcq(qth, Tcq);
+    g2o::SE3Quat Tcq = pose_tracker_->GetTcq(camera_, qth, curr_frame, false); // dynamic instance에도 안정적으로 initial pose를 구하기위한 RANSAC
+    curr_frame->SetTcq(qth, Tcq);
 
     Frame* latest_kf = keyframes_.at(qth).rbegin()->second;
     std::set<Mappoint*>     & neighbor_mappoints = vinfo_neighbor_mappoints_[qth];
@@ -744,13 +748,11 @@ Frame* Pipeline::Put(const cv::Mat gray,
     // ProjectionMatch는 flow로부터 motion update와 pth(k_0)!= pth(k) 인 경우에 예외처리가 팔요해보인다.
     std::map<int, std::pair<Mappoint*, double> > proj_matches = ProjectionMatch(camera_, extractor_, neighbor_mappoints, curr_frame, qth);
     SetMatches(flow_matches, proj_matches, curr_frame);
-    bool verbose_track = false;
-    g2o::SE3Quat Tcq = pose_tracker_->GetTcq(camera_, qth, curr_frame, verbose_track);
-    curr_frame->SetTcq(qth, Tcq);
-    Tcps[qth] = Tcq * prev_frame_->GetTcq(qth).inverse();
+
+    Tcps[qth] = curr_frame->GetTcq(qth) * prev_frame_->GetTcq(qth).inverse();
   } // For qth \ Do pose_track, projection matches
   bool verbose_filter = false;
-  NewFilterOutlierMatches(curr_frame, Tcps, verbose_filter);
+  std::set<Pth> pnp_failed_instances = FilterOutlierMatches(curr_frame, Tcps, verbose_filter);
 
   std::map<Instance*, std::set<Mappoint*> > ins2mappoints;
   CountMappoints(curr_frame, ins2mappoints);
@@ -809,42 +811,41 @@ Frame* Pipeline::Put(const cv::Mat gray,
     density_scores[pth] = dense / density_threshold;
   }
 
+  std::set<Pth> fixed_instances;
+  for(auto it_density : density_scores)
+    if(it_density.second < 1.)
+      fixed_instances.insert(it_density.first); // seq05 고속도로 바닥같은데서 FP 방지에 필요. TODO - 더 나은 대안이 필요하긴함.
+  fixed_instances.insert(pnp_failed_instances.begin(), pnp_failed_instances.end());
+
   { // while !segmented_instances.empty()
     const Qth qth = 0;
     RigidGroup* rig = qth2rig_groups_.at(qth);
     std::set<Mappoint*>     & neighbor_mappoints = vinfo_neighbor_mappoints_[qth];
     std::map<Jth, Frame* >  & neighbor_frames    = vinfo_neighbor_frames_[qth];
-    std::set<Pth> fixed_instances;
-    if(qth == 0) // TDDO dominant_qth
-      for(auto it_density : density_scores)
-        if(it_density.second < 1.)
-          fixed_instances.insert(it_density.first);
 
     bool vis_verbose = false;
     std::map<Pth,float>& switch_states = vinfo_switch_states_[qth];
     switch_states\
       = mapper_->ComputeLBA(camera_,qth, neighbor_mappoints, neighbor_frames, curr_frame, prev_frame_, fixed_instances, gradx, grady, valid_grad, vis_verbose);
+     // = mapper_->ComputeLBA(camera_,qth, neighbor_mappoints, neighbor_frames, curr_frame, prev_frame_, fixed_instances, gradx, grady, valid_grad, vis_verbose);
 
     std::set<Pth> instances4next_rig;
-    std::set<Pth> switchoff_instances;
     if(!n_consecutiv_switchoff.count(qth))
       n_consecutiv_switchoff[qth]; // empty map 생성.
     for(auto it_switch : switch_states){
       const Pth& pth = it_switch.first;
-      if(it_switch.second > switch_threshold_)
+      if(it_switch.second > switch_threshold_){
+        if(n_consecutiv_switchoff[qth].count(pth) )
+          n_consecutiv_switchoff[qth].erase(pth);
         continue;
-      size_t& n_consec = n_consecutiv_switchoff[qth][pth];
-      n_consec++;
-      if(n_consec > 2){ // N 번 연속 switch off 판정을 받은경우,
+      }
+      if(++n_consecutiv_switchoff[qth][pth] > 2){ // N 번 연속 switch off 판정을 받은경우,
         Instance* ins = pth2instances_.at( pth );
         rig->ExcludeInstance(ins);
         instances4next_rig.insert(pth);
         ins->SetQth(-1);
       }
-      else
-        switchoff_instances.insert(pth); // 현재 프레임에서 switchoff가 발생하지 않은 pthqth를 삭제하기위해.
     }
-
     size_t n_mappoints4next_rig = 0;
     /* for(Pth pth : instances4next_rig)
       if(ins2mappoints.count(pth))// mp 없는 instance도 있으니까.
@@ -852,6 +853,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
   }
 
   std::set<Qth> need_keyframe = FrameNeedsToBeKeyframe(curr_frame);
+  //need_keyframe.insert(0); // TODO seq 03 물체인식 확인후 제거 또는 개선.
   for(const Qth& qth : need_keyframe){
     if(curr_frame->GetKfId(qth) > -1)
       continue;
@@ -870,6 +872,16 @@ Frame* Pipeline::Put(const cv::Mat gray,
     delete prev_frame_;
   prev_frame_ = curr_frame;
   return curr_frame;
+}
+
+EigenMap<Jth, g2o::SE3Quat> Pipeline::GetUpdatedTcqs() const {
+  EigenMap<Jth, g2o::SE3Quat> output;
+  Qth qth = 0;
+  const auto& keyframes = vinfo_neighbor_frames_.at(qth);
+  for(auto it : keyframes)
+    output[it.first] = it.second->GetTcq(qth);
+  output[prev_frame_->GetId()] = prev_frame_->GetTcq(qth);
+  return output;
 }
 
 } // namespace NEW_SEG

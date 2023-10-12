@@ -11,11 +11,11 @@ Viewer.height: 600
 Viewer.z_near: 0.1
 Viewer.z_far: 2000.
 Viewer.ex: 0.
-Viewer.ey: -100.
+Viewer.ey: -120.
 Viewer.ez: 0.
 Viewer.lx: 0
 Viewer.ly: 0
-Viewer.lz: 80.
+Viewer.lz: 40.
 Viewer.ux: 0.
 Viewer.uy: 0.
 Viewer.uz: 1.

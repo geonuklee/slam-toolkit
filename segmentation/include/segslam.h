@@ -255,12 +255,13 @@ public:
   RigidGroup* GetRigidGroup(Qth qth) const { return qth2rig_groups_.count(qth) ? qth2rig_groups_.at(qth) : nullptr; }
   const std::map<Pth, Instance*>& GetInstances()  const { return pth2instances_; }
   const std::map<Pth, Pth>& GetPthRemoved2Replacing() const { return pth_removed2replacing_; }
+  EigenMap<Jth, g2o::SE3Quat> GetUpdatedTcqs() const;
 private:
   std::map<Instance*,Instance*> MergeEquivalentInstances(const std::map<Instance*, std::set<Mappoint*> >& ins2mappoints,
                                                          const std::map<Pth,float>& density_scores);
   std::set<Qth> FrameNeedsToBeKeyframe(Frame* frame) const;
   void SupplyMappoints(Frame* frame);
-  void NewFilterOutlierMatches(Frame* curr_frame, const EigenMap<Qth, g2o::SE3Quat>& Tcps, bool verbose);
+  std::set<Pth> FilterOutlierMatches(Frame* curr_frame, const EigenMap<Qth, g2o::SE3Quat>& Tcps, bool verbose);
 
   SEG::FeatureDescriptor* extractor_;
   const Camera*const camera_;
