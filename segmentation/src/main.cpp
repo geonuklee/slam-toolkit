@@ -145,6 +145,7 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     //}
     const cv::Mat rgb   = dataset.GetImage(i, cv::IMREAD_COLOR);
     const cv::Mat rgb_r = dataset.GetRightImage(i, cv::IMREAD_COLOR);
+    double frame_second = dataset.GetSecond(i);
     cv::Mat gray, gray_r;
     cv::cvtColor(rgb, gray, cv::COLOR_BGR2GRAY);
     cv::cvtColor(rgb_r, gray_r, cv::COLOR_BGR2GRAY);
@@ -163,7 +164,7 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     const std::map<int,size_t>& marker_areas = img_tracker->GetMarkerAreas();
     depth.setTo(0., depth > 100.);
     NEW_SEG::Frame* frame = pipeline.Put(gray, depth, flow, synced_marker, marker_areas,
-                                         gradx, grady, valid_grad, rgb);
+                                         gradx, grady, valid_grad, frame_second, rgb);
     img_tracker->ChangeSyncedMarker(synced_marker);
     g2o::SE3Quat Tcw = frame->GetTcq(0) * TCw;
     bool is_kf = frame->IsKeyframe();

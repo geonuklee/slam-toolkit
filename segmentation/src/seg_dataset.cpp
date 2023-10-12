@@ -318,6 +318,13 @@ cv::Mat KittiTrackingDataset::GetInstanceMask(int i) const {
   return readRawImage(fn, CV_32SC1);
 }
 
+double KittiTrackingDataset::GetSecond(int i) const {
+/*
+  https://www.cvlibs.net/datasets/kitti/setup.php
+  10 frames per second (10Hz)
+*/
+  return .1 * double(i);
+}
 
 int KittiTrackingDataset::Size() const{
   return im0_filenames_.size();

@@ -18,6 +18,7 @@ public:
   cv::Mat GetDepthImage(int i) const;
   cv::Mat GetDynamicMask(int i) const;
   cv::Mat GetInstanceMask(int i) const;
+  double GetSecond(int i) const;
 
   bool EixstCachedDepthImages() const;
   void ComputeCacheImages(); // depth image, dynamic instance mask.

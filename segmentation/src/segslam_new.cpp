@@ -36,8 +36,9 @@ void Mappoint::RemoveKeyframe(Frame* frame) {
 
 
 Frame::Frame(const Jth id,
+             double sec,
              const cv::Mat vis_rgb)
-  : id_(id), rgb_(vis_rgb), is_kf_(false)
+  : id_(id), sec_(sec), rgb_(vis_rgb), is_kf_(false)
 {
 
 }
@@ -346,7 +347,7 @@ void GetMappoints4Qth(Frame* frame,
     Mappoint* mpt = mappoints[n];
     if(!mpt)
       continue;
-    Instance* ins = mpt->GetInstance();
+    Instance* ins = mpt->GetLatestInstance();
     if(!ins)
       continue;
     if(ins->GetQth() != qth)
@@ -667,6 +668,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
                      const cv::Mat gradx,
                      const cv::Mat grady,
                      const cv::Mat valid_grad,
+                     double sec,
                      const cv::Mat vis_rgb
                     ) {
   switch_threshold_ = .3;
@@ -697,7 +699,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
     throw -1;
 
   static Jth nFrames = 0;
-  Frame* curr_frame = new Frame(nFrames++, vis_rgb);
+  Frame* curr_frame = new Frame(nFrames++, sec, vis_rgb);
   curr_frame->ExtractAndNormalizeKeypoints(gray, camera_, extractor_, outline_mask);
   curr_frame->SetMeasuredDepths(depth);
   curr_frame->SetInstances(synced_marker, pth2instances_);
@@ -740,7 +742,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
     Frame* latest_kf = keyframes_.at(qth).rbegin()->second;
     std::set<Mappoint*>     & neighbor_mappoints = vinfo_neighbor_mappoints_[qth];
     std::map<Jth, Frame* >  & neighbor_frames    = vinfo_neighbor_frames_[qth];
-    GetNeighbors(latest_kf, qth_default, neighbor_mappoints, neighbor_frames);
+    GetNeighbors(latest_kf, qth, neighbor_mappoints, neighbor_frames);
     if(neighbor_mappoints.empty()) {
       std::cerr << "qth = " << qth << ", failure to get mappoints" << std::endl;
       throw -1;
@@ -827,7 +829,6 @@ Frame* Pipeline::Put(const cv::Mat gray,
     std::map<Pth,float>& switch_states = vinfo_switch_states_[qth];
     switch_states\
       = mapper_->ComputeLBA(camera_,qth, neighbor_mappoints, neighbor_frames, curr_frame, prev_frame_, fixed_instances, gradx, grady, valid_grad, vis_verbose);
-     // = mapper_->ComputeLBA(camera_,qth, neighbor_mappoints, neighbor_frames, curr_frame, prev_frame_, fixed_instances, gradx, grady, valid_grad, vis_verbose);
 
     std::set<Pth> instances4next_rig;
     if(!n_consecutiv_switchoff.count(qth))

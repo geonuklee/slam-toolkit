@@ -103,7 +103,7 @@ private:
 class Frame {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-  Frame(const Jth id, const cv::Mat vis_rgb=cv::Mat());
+  Frame(const Jth id, double sec, const cv::Mat vis_rgb=cv::Mat());
   ~Frame();
   bool IsInFrame(const Camera* camera, const Eigen::Vector2d& uv) const;
   int GetIndex(const Mappoint* mp) const { return mappoints_index_.count(mp) ? mappoints_index_.at(mp) : -1; }
@@ -155,7 +155,9 @@ public:
 
   EigenMap<Ith, Eigen::Vector3d> Get3dMappoints(Qth qth=0) const;
 
+  double GetSec() const { return sec_; }
 private:
+  const double sec_;
   std::vector<cv::KeyPoint>    keypoints_;
   EigenVector<Eigen::Vector3d> normalized_;
   std::vector<Mappoint*>       mappoints_;
@@ -249,6 +251,7 @@ public:
              const cv::Mat gradx,
              const cv::Mat grady,
              const cv::Mat valid_grad,
+             double sec,
              const cv::Mat vis_rgb
             );
   void Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask, cv::Mat& dst); // visualize.cpp
