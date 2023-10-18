@@ -78,6 +78,60 @@ void TestKittiTrackingDataset(){
   return;
 }
 
+void DrawFigureForPaper(cv::Mat rgb, cv::Mat depth, cv::Mat outline_edges, cv::Mat synced_marker,
+                        const NEW_SEG::Frame* frame,
+                        std::string output_dir){
+  cv::imshow("rgb", rgb);
+  cv::Mat ndepth; {
+    double minDepth, maxDepth;
+    cv::minMaxIdx(depth, &minDepth, &maxDepth);
+    depth.convertTo(ndepth, CV_8UC1, 255.0 / (maxDepth - minDepth), -minDepth * 255.0 / (maxDepth - minDepth));
+  }
+
+  cv::imshow("outline", outline_edges*255);
+  cv::Mat vis_marker = GetColoredLabel(synced_marker);
+  //vis_marker.setTo(CV_RGB(0,0,0), GetBoundary(synced_marker));
+  cv::imshow("segmentation", vis_marker );
+  cv::Mat vis_points = cv::Mat::zeros(rgb.rows, rgb.cols, rgb.type());
+  const auto& keypoints = frame->GetKeypoints();
+  const auto& mappoints = frame->GetMappoints();
+  std::map<Qth, std::set<NEW_SEG::Instance*> > instances;
+  for(int i = 0; i < keypoints.size(); i++){
+    NEW_SEG::Mappoint* mp = mappoints.at(i);
+    if(!mp)
+      continue;
+    NEW_SEG::Instance* ins = mp->GetLatestInstance();
+    const auto& color = colors.at(ins->GetId() % colors.size() );
+    const auto& kpt = keypoints.at(i);
+    cv::circle(vis_points, kpt.pt, 3, color, -1);
+    if(ins->GetQth() != 0)
+      instances[ins->GetQth()].insert(ins);
+  }
+  cv::Mat vis_dynamics; {
+    vis_dynamics = rgb.clone();
+    for(auto it : instances){
+      if(it.first == 0)
+        continue;
+      for(NEW_SEG::Instance* ins : it.second)
+        vis_dynamics.setTo(CV_RGB(255,0,0),synced_marker==ins->GetId());
+    }
+    cv::addWeighted(vis_dynamics, 0.7, rgb, 0.3, 1., vis_dynamics);
+  }
+  cv::Mat boundary = GetBoundary(synced_marker);
+  vis_points.setTo(CV_RGB(255,255,255),boundary);
+  cv::imshow("labeled mappoints", vis_points);
+  cv::imshow("dynamics", vis_dynamics);
+  cv::imwrite(output_dir+"/ex_rgb.png", rgb);
+  cv::imwrite(output_dir+"/ex_outline.png", outline_edges*255);
+  cv::imwrite(output_dir+"/ex_segment.png", vis_marker);
+  cv::imwrite(output_dir+"/ex_labeledpoints.png", vis_points);
+  cv::imwrite(output_dir+"/ex_dynamics.png", vis_dynamics);
+  cv::imshow("ndepth", ndepth);
+  cv::imwrite(output_dir+"/ex_depth.png", ndepth);
+
+  return;
+}
+
 #include "seg_viewer.h"
 int TestKittiTrackingNewSLAM(int argc, char** argv) {
   if(argc < 3){
@@ -123,8 +177,7 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
   NEW_SEG::Pipeline pipeline(camera);                                                     // After   ~50 [milli sec]
 
   std::string output_dir = std::string(PACKAGE_DIR)+std::string("/")+std::string(argv[2]);
-  bool stop = std::string(argv[2])!="output_batch";
-  stop = false;
+  bool stop = std::string(argv[2]).find("output_batch") > 0;
   bool req_exit = true;
 
   if(! std::filesystem::exists(output_dir) )
@@ -138,7 +191,7 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
   cv::Mat empty_dst = cv::Mat::zeros(dst_size.height, dst_size.width, CV_8UC3);
   g2o::SE3Quat TCw;
   for(int i=0; i<dataset.Size(); i+=1){
-    //if(i < 900){
+    //if(i < 10){
     //  TCw = gt_Tcws.at(i);
     //  viewer.SetCurrCamera(i, TCw, empty_dst);
     //  continue;
@@ -156,6 +209,8 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     cv::Mat outline_edges = edge_detector->GetOutline();
     cv::Mat valid_mask = edge_detector->GetValidMask();
     cv::Mat valid_grad = valid_mask;
+    //outline_edges.setTo(1, depth > 80.);
+    //valid_mask.setTo(1, depth > 50.);
     segmentor->Put(outline_edges, valid_mask);
     cv::Mat unsync_marker = segmentor->GetMarker();
     img_tracker->Put(gray, unsync_marker, snyc_min_iou);
@@ -178,6 +233,7 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     cv::Mat gt_dmask = dataset.GetDynamicMask(i);
     NEW_SEG::RigidGroup* rig = pipeline.GetRigidGroup(0);
     eval_writer.Write(frame, rig, synced_marker, gt_insmask, gt_dmask);
+    //DrawFigureForPaper(rgb, depth, outline_edges, synced_marker, frame, output_dir);
     if(viewer.IsShutDowned())
       break;
     char c = cv::waitKey(stop?0:1);

@@ -180,6 +180,7 @@ void Pipeline::Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask, cv::M
     }
   }
   cv::addWeighted(rgb, .5, dst_frame, .5, 1., dst_frame);
+  dst_frame.setTo(CV_RGB(0,0,0), outline>0);
 
   const auto& keypoints = prev_frame_->GetKeypoints();
   const auto& mappoints = prev_frame_->GetMappoints();
@@ -323,7 +324,11 @@ void Pipeline::Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask, cv::M
     cv::putText(dst_marker, msg, cv::Point(5,size.height+5),fontFace, fontScale, CV_RGB(255,0,0), fontThick);
   }
 
-  cv::vconcat(dst_marker,dst_frame,dst);
+  //cv::vconcat(dst_marker,dst_frame,dst);
+  if(vinfo_match_filter_.empty())
+    vinfo_match_filter_ = cv::Mat::zeros(dst_frame.rows, dst_frame.cols, CV_8UC3);
+  cv::vconcat(vinfo_match_filter_, dst_frame, dst);
+
   //cv::imshow("switchstates", dst_switchstates);
   //cv::imshow("dst", dst);
   cv::imshow("dpatches", dst_patches);

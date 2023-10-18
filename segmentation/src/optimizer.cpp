@@ -14,7 +14,21 @@
 #include <opencv2/core/types.hpp>
 #include <opencv2/imgproc.hpp>
 
+#include <boost/math/distributions/chi_squared.hpp>
+
+double ChiSquaredThreshold(double p, double dof){
+  boost::math::chi_squared_distribution<> chi2dist( dof );
+  double t = boost::math::quantile(chi2dist, p);
+  return t;
+}
+
 namespace NEW_SEG {
+
+inline Instance* GetIns(Mappoint* mp){
+  //return mp->GetInstance();
+  return mp->GetLatestInstance();
+}
+
 PoseTracker::PoseTracker() {
 }
 PoseTracker::~PoseTracker() {
@@ -37,8 +51,7 @@ g2o::SE3Quat PoseTracker::GetTcq(const Camera* camera,
     Mappoint* mp = _mappoints.at(n);
     if(!mp)
       continue;
-    //Instance* ins = mp->GetInstance();
-    Instance* ins = mp->GetLatestInstance();
+    Instance* ins = GetIns(mp);
     if(!ins)
       continue;
     if(ins->GetQth() != qth)
@@ -93,7 +106,7 @@ void GetEdges(g2o::VertexSBAPointXYZ* v_mp, g2o::VertexSE3Expmap* v_pose, Vertex
   h.head<2>() *= h_invd; // [Xc, Yc] /Zc
   h[2] = h_invd;
   double greater_invd = std::max(measure_invd,h_invd);
-  bool valid_depth = z > 1e-5; // 너무 가까운데서 stereo disparity가 부정확.
+  bool valid_depth = z > 1e-5 && z < 80.; // ex) seq00 너무 먼, 건물에서 depth residual이 과하게 증가. HITNET의 오인식으로 의심.
   edge_switchable = nullptr;
   edge_filtered = nullptr;
   g2o::Vector2 rprj_err(h.head<2>() - uvi.head<2>() );
@@ -118,11 +131,6 @@ void GetEdges(g2o::VertexSBAPointXYZ* v_mp, g2o::VertexSE3Expmap* v_pose, Vertex
   return;
 }
 
-inline Instance* GetIns(Mappoint* mp){
-  //return mp->GetInstance();
-  return mp->GetLatestInstance();
-}
-
 std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
                                   Qth qth,
                                   const std::set<Mappoint*>& neighbor_mappoints,
@@ -137,7 +145,8 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
                                  ) {
   const StereoCamera* scam = dynamic_cast<const StereoCamera*>(camera);
   const double focal = scam->GetK()(0,0);
-  const double uv_info = 1.;
+  double uv_std = 1. / focal; // normalized standard deviation
+  const double uv_info = 1./uv_std/uv_std;
   const auto Trl_ = scam->GetTrl();
   const float base_line = -Trl_.translation().x();
   const double invd_info = uv_info * base_line * base_line;  // focal legnth 1.인 normalized image ponint임을 고려.
@@ -156,8 +165,11 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
   // Dynamic block size due to 6dim SE3, 1dim prior vertex.
   typedef g2o::BlockSolverPL<-1,-1> BlockSolver;
   std::unique_ptr<BlockSolver::LinearSolverType> linear_solver = g2o::make_unique<g2o::LinearSolverEigen<BlockSolver::PoseMatrixType>>();
-  g2o::OptimizationAlgorithm* solver \
-    =  new g2o::OptimizationAlgorithmLevenberg(g2o::make_unique<BlockSolver>(std::move(linear_solver)));
+#if 1
+  g2o::OptimizationAlgorithm* solver =  new g2o::OptimizationAlgorithmLevenberg(g2o::make_unique<BlockSolver>(std::move(linear_solver)));
+#else
+  g2o::OptimizationAlgorithm* solver =  new g2o::OptimizationAlgorithmGaussNewton(g2o::make_unique<BlockSolver>(std::move(linear_solver)));
+#endif
   optimizer.setAlgorithm(solver);
 
   std::map<Jth, std::pair<g2o::VertexSE3Expmap*,size_t> > v_poses; // with n_filtered_edges
@@ -194,10 +206,10 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
       continue;
     auto v_switch = new VertexSwitchLinear();
     v_switch->setId(optimizer.vertices().size() );
-    v_switch->setEstimate(1.);
     optimizer.addVertex(v_switch);
     auto sw_prior_edge = new EdgeSwitchPrior();
     sw_prior_edge->setMeasurement(1.);
+    v_switch->setEstimate(.4);
     sw_prior_edge->setVertex(0, v_switch);
     sw_prior_edge->setLevel(0);
     optimizer.addEdge(sw_prior_edge);
@@ -236,8 +248,10 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
         v_switch = nullptr;
       GetEdges(v_mp, v_pose, v_switch, param, uv_info, invd_info, delta, rprj_threshold, invd_threshold,
                frame, n, edge_switchable, edge_filtered);
-      if(v_switch) // 샘플링 범위라면.
-        n_pth_measurements[ins] += 1.;
+      if(v_switch){
+        //n_pth_measurements[ins] += edge_switchable? edge_switchable->dimension() : 2;
+        n_pth_measurements[ins] += 1;
+      }
       if( edge_switchable ){
         edge_switchable->setLevel(0);
         optimizer.addEdge(edge_switchable);
@@ -275,9 +289,10 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
     } // for int n < jth_mappoints.size();
   } // for auto it_frame : frames
   for(auto it_v_sw : prior_edges){
-    const int n =n_pth_measurements.count(it_v_sw.first)?  n_pth_measurements.at(it_v_sw.first) : 1;
-    double info = 1e-4 * n; // TODO 유도
-    it_v_sw.second->SetInfomation(info);
+    int n = std::max<int>(n_pth_measurements[it_v_sw.first], 1);
+    double info = ChiSquaredThreshold(.9, (double) n);
+    //double info = 1e-4 * n; // 유도
+    it_v_sw.second->SetInfomation(.1*info); // TODO switchable이 아닌 값을 직접비교하는 접근.
   }
   optimizer.setVerbose(false);
 

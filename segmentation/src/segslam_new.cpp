@@ -79,8 +79,8 @@ void Frame::SetInstances(const cv::Mat synced_marker,
 bool Frame::IsInFrame(const Camera* camera, const Eigen::Vector2d& uv) const {
   double width = camera->GetWidth();
   double height = camera->GetHeight();
-  const double ulr_boundary = 20.; // TODO fsettings 로 옮기기
-  const double b_boundary = 50.;
+  const double ulr_boundary = 10.; // TODO fsettings 로 옮기기
+  const double b_boundary = 20.;
   if( uv.y() <  ulr_boundary )
     return false;
   if( uv.x() < ulr_boundary )
@@ -102,8 +102,10 @@ void Frame::SetMappoint(Mappoint* mp, int index) {
   mappoints_[index] = mp;
   mappoints_index_[mp] = index;
   Instance* ins = instances_[index];
-  if(ins)
+  if(ins){
     ins->AddMappoint(mp);
+    mp->SetLatestInstance(ins);
+  }
   return;
 }
 
@@ -432,11 +434,10 @@ std::set<Qth> Pipeline::FrameNeedsToBeKeyframe(Frame* curr_frame) const {
 
 std::set<Pth>  Pipeline::FilterOutlierMatches(Frame* curr_frame,const EigenMap<Qth, g2o::SE3Quat>& Tcps, bool verbose) {
   bool use_extrinsic_guess = true;
-  double rprj_threshold = 2.;
+  double rprj_threshold = 3.;
   double confidence = .99;
-  cv::Mat dst;
+  cv::Mat& dst = vinfo_match_filter_;
   if(verbose){
-    //dst = curr_frame->GetRgb().clone();
     dst = GetColoredLabel(vinfo_synced_marker_);
     cv::addWeighted(cv::Mat::zeros(dst.rows,dst.cols,CV_8UC3), .5, dst, .5, 1., dst);
   }
@@ -448,8 +449,9 @@ std::set<Pth>  Pipeline::FilterOutlierMatches(Frame* curr_frame,const EigenMap<Q
   const std::vector<Instance*>&    _instances = curr_frame->GetInstances();
   const std::vector<float>&        _depths    = curr_frame->GetMeasuredDepths();
   struct Points {
-    cv::Point2f pt2d;
-    cv::Point3f pt3d;
+    cv::Point2f pt2d_curr;
+    cv::Point3f pt3d_prev;
+    cv::Point3f pt3d_curr;
     double z;
     int kptid_curr;
     int kptid_prev;
@@ -470,10 +472,10 @@ std::set<Pth>  Pipeline::FilterOutlierMatches(Frame* curr_frame,const EigenMap<Q
     if(!ins)
       continue;
     const Eigen::Vector3d Xp = prev_frame_->GetDepth(pt.kptid_prev) * prev_frame_->GetNormalizedPoint(pt.kptid_prev);
-    pt.pt2d = _keypoints.at(n).pt;
-    pt.pt3d.x = Xp.x();
-    pt.pt3d.y = Xp.y();
-    pt.pt3d.z = Xp.z();
+    pt.pt2d_curr = _keypoints.at(n).pt;
+    pt.pt3d_prev.x = Xp.x();
+    pt.pt3d_prev.y = Xp.y();
+    pt.pt3d_prev.z = Xp.z();
     pt.z = _depths[n];
     segmented_points[ins].push_back(pt);
   }
@@ -483,7 +485,6 @@ std::set<Pth>  Pipeline::FilterOutlierMatches(Frame* curr_frame,const EigenMap<Q
   obj_points.reserve(_mappoints.size());
   img_points.reserve(_mappoints.size());
 
-  //std::list< std::pair<Pth, std::string> > sorted_msges;
   std::set<Pth> pnp_failed_instances;
   std::cout << "====================" << std::endl;
   for(auto it : segmented_points){
@@ -493,8 +494,8 @@ std::set<Pth>  Pipeline::FilterOutlierMatches(Frame* curr_frame,const EigenMap<Q
     obj_points.clear();
     img_points.clear();
     for(const auto& it_pt : it.second){
-      obj_points.push_back(it_pt.pt3d);
-      img_points.push_back(it_pt.pt2d);
+      obj_points.push_back(it_pt.pt3d_prev);
+      img_points.push_back(it_pt.pt2d_curr);
     }
     Qth qth = it.first->GetQth();
     int iteration = std::max<int>(5,it.second.size() * .2);
@@ -503,14 +504,34 @@ std::set<Pth>  Pipeline::FilterOutlierMatches(Frame* curr_frame,const EigenMap<Q
     cv::Mat R;
     cv::Rodrigues(rvec,R);
     g2o::SE3Quat _Tcp(cvt2Eigen(R), cvt2Eigen(tvec) ); // Transform : {c}urrent camera <- {p}revious camera
+    bool pnp_failure = false;
     if(Tcps.count(qth)){
       double t_max = 10.; // TODO time stamp 추가로 m/sec 으로 변경.
       if(_Tcp.translation().norm() > t_max){
-        std::cout << "Filter failed to track p#" << it.first->GetId() << ", t = " << _Tcp.translation().transpose() << std::endl;
-        pnp_failed_instances.insert( it.first->GetId() );
+        /*
+        ICP가 아니라 rprj error에 대한 PnP 알고리즘이라 translation 제한 필요.
+        TODO) ICP RANSAC 으로 대체.
+        ex) seq14, 맞은편 차량
+        */
+        //std::cout << "Filter failed to track p#" << it.first->GetId() << ", t = " << _Tcp.translation().transpose() << std::endl;
+        //pnp_failure = true;
         _Tcp= Tcps.at(qth);
       }
     }
+    if(inliers.rows < .5 * obj_points.size() )
+      pnp_failure = true;
+    if(pnp_failure){
+      std::cout << "PnP failure Pth#" << it.first->GetId() << std::endl;
+      pnp_failed_instances.insert( it.first->GetId() );
+      for(const Points& pt : it.second){
+        curr_frame->EraseMappoint(pt.kptid_curr); // keyframe이 아니라서 mp->RemoveKeyframe 등을 호출하지 
+        if(prev_frame_->IsKeyframe())
+          pt.mp->RemoveKeyframe(prev_frame_);
+        prev_frame_->EraseMappoint(pt.kptid_prev); // keyframe에서..
+      }
+      continue;
+    }
+
 #if 1
     auto it_points = it.second.begin();
     for(int i=0; i < obj_points.size(); i++){
@@ -523,9 +544,10 @@ std::set<Pth>  Pipeline::FilterOutlierMatches(Frame* curr_frame,const EigenMap<Q
         uv.y = eig_uv[1];
       }
       cv::Point2f rprj_err = img_points.at(i) - uv;
-      bool uv_inlier = std::abs(rprj_err.x)+std::abs(rprj_err.y) < rprj_threshold;
+      //bool uv_inlier = std::abs(rprj_err.x)+std::abs(rprj_err.y) < rprj_threshold;
+      bool uv_inlier = cv::norm(rprj_err) < rprj_threshold;
       float abs_err = std::abs(pt.z-Xc[2]);
-      bool z_inlier = abs_err < 10. || abs_err/pt.z < .1;
+      bool z_inlier = abs_err/pt.z < .05; // TODO 유도. disparity 상에서.
       bool inlier = uv_inlier && z_inlier;
       if(verbose){
         cv::circle(dst, img_points.at(i), 3, inlier?CV_RGB(0,255,0):CV_RGB(255,0,0), -1 );
@@ -546,7 +568,7 @@ std::set<Pth>  Pipeline::FilterOutlierMatches(Frame* curr_frame,const EigenMap<Q
     //for(auto it : sorted_msges)
     //  std::cout << it.second << std::endl;
     //std::cout << "================" << std::endl;
-    cv::imshow("filter", dst);
+    //cv::imshow("filter", dst);
   }
   return pnp_failed_instances;
 }
@@ -737,7 +759,8 @@ Frame* Pipeline::Put(const cv::Mat gray,
     g2o::SE3Quat pred_Tcq = PredictMotion(prev_frame_,qth);
     curr_frame->SetTcq(qth_default, pred_Tcq);
     g2o::SE3Quat Tcq = pose_tracker_->GetTcq(camera_, qth, curr_frame, false); // dynamic instance에도 안정적으로 initial pose를 구하기위한 RANSAC
-    curr_frame->SetTcq(qth, Tcq);
+    if( (Tcq * pred_Tcq.inverse()).translation().norm() < 5.) // 고속도로 seq, feature가 희박한상황
+      curr_frame->SetTcq(qth, Tcq);
 
     Frame* latest_kf = keyframes_.at(qth).rbegin()->second;
     std::set<Mappoint*>     & neighbor_mappoints = vinfo_neighbor_mappoints_[qth];
@@ -753,8 +776,18 @@ Frame* Pipeline::Put(const cv::Mat gray,
 
     Tcps[qth] = curr_frame->GetTcq(qth) * prev_frame_->GetTcq(qth).inverse();
   } // For qth \ Do pose_track, projection matches
-  bool verbose_filter = false;
+  bool verbose_filter = true;
   std::set<Pth> pnp_failed_instances = FilterOutlierMatches(curr_frame, Tcps, verbose_filter);
+  {
+    RigidGroup* rig = qth2rig_groups_.at(0); // 일단은 하드코딩해버려서 처리한거 정정해야함.
+    const auto& excluded = rig->GetExcludedInstances();
+    for(Pth pth : pnp_failed_instances){
+      Instance* ins = pth2instances_.at(pth);
+      if(ins->GetQth() < 0 && excluded.count(pth))
+        rig->RemoveExcludedInstance(ins);
+      ins->SetQth(rig->GetId());
+    }
+  }
 
   std::map<Instance*, std::set<Mappoint*> > ins2mappoints;
   CountMappoints(curr_frame, ins2mappoints);

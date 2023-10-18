@@ -180,8 +180,9 @@ public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   Mappoint(Ith id, Instance* ins, const cv::KeyPoint& kpt, cv::Mat desc) : id_(id), ins_(ins), latest_ins_(ins), kpt_(kpt), desc_(desc) {}
   Instance* GetInstance() const { return ins_; }
-  Instance* GetLatestInstance() const { return ins_; }
+  Instance* GetLatestInstance() const { return latest_ins_; }
   void ChangeInstance(Instance* ins) { ins_ = ins; if(latest_ins_==ins) latest_ins_=ins;}
+  void SetLatestInstance(Instance* ins) { latest_ins_ = ins; }
   const Ith& GetId() const { return id_; }
   void GetFeature(const Qth& qth, bool latest, cv::Mat& description, cv::KeyPoint& kpt) const;
 
@@ -284,8 +285,14 @@ private:
   std::map<Qth, std::map<Jth, Frame*> > vinfo_neighbor_frames_;
   std::map<Qth, std::set<Mappoint*> >   vinfo_neighbor_mappoints_;
   cv::Mat                               vinfo_synced_marker_;
+  cv::Mat                               vinfo_match_filter_;
   std::map<Pth,float>                   vinfo_density_socres_;
 }; // class Pipeline
+
+Eigen::Matrix4f Estimate3D3DRANSAC( const std::vector<cv::Point3f>& src, 
+    const std::vector<cv::Point3f>& dst, 
+    int iterations, 
+    float threshold); // ransac.cpp
 
 std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
                                                        SEG::FeatureDescriptor* extractor,

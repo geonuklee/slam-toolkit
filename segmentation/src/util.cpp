@@ -1,21 +1,27 @@
 #include "../include/util.h"
 
 std::vector<cv::Scalar> colors = {
-  CV_RGB(0,180,0),
-  CV_RGB(0,100,0),
-  CV_RGB(255,0,255),
-  CV_RGB(100,0,255),
-  CV_RGB(100,0,100),
-  CV_RGB(0,0,180),
-  CV_RGB(0,0,100),
-  CV_RGB(255,255,0),
-  CV_RGB(100,255,0),
-  CV_RGB(100,100,0),
-  CV_RGB(100,0,0),
-  CV_RGB(0,255,255),
-  CV_RGB(0,100,255),
-  CV_RGB(0,255,100),
-  CV_RGB(0,100,100)
+  cv::Scalar(0, 0, 255),       // Red
+  cv::Scalar(0, 64, 255),      // Red-Orange
+  cv::Scalar(0, 128, 255),     // Orange
+  cv::Scalar(0, 192, 255),     // Orange-Yellow
+  cv::Scalar(0, 255, 255),     // Yellow
+  cv::Scalar(64, 255, 128),    // Yellow-Green
+  cv::Scalar(0, 255, 0),       // Green
+  cv::Scalar(128, 255, 0),     // Green-Cyan
+  cv::Scalar(255, 255, 0),     // Cyan
+  cv::Scalar(255, 192, 0),     // Cyan-Blue
+  cv::Scalar(255, 128, 0),     // Blue
+  cv::Scalar(255, 64, 0),      // Blue-Magenta
+  cv::Scalar(255, 0, 0),       // Magenta
+  cv::Scalar(192, 0, 64),      // Magenta-Purple
+  cv::Scalar(128, 0, 128),     // Purple
+  cv::Scalar(128, 0, 192),     // Purple-Pink
+  cv::Scalar(192, 0, 255),     // Pink
+  cv::Scalar(128, 64, 255),    // Pink-Red
+  cv::Scalar(192, 128, 255),   // Lavender
+  cv::Scalar(192, 192, 255),   // Light Blue
+  cv::Scalar(128, 255, 192)    // Aquamarine
 };
 
 cv::Mat VisualizeFlow(const std::vector<cv::Mat>& flows, cv::Mat bgr) {
