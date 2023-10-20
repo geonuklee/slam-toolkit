@@ -266,6 +266,7 @@ private:
   std::set<Qth> FrameNeedsToBeKeyframe(Frame* frame) const;
   void SupplyMappoints(Frame* frame);
   std::set<Pth> FilterOutlierMatches(Frame* curr_frame, const EigenMap<Qth, g2o::SE3Quat>& Tcps, bool verbose);
+  std::set<Pth> NewFilterOutlierMatches(Frame* curr_frame, const EigenMap<Qth, g2o::SE3Quat>& Tcps, bool verbose);
 
   SEG::FeatureDescriptor* extractor_;
   const Camera*const camera_;
@@ -288,11 +289,6 @@ private:
   cv::Mat                               vinfo_match_filter_;
   std::map<Pth,float>                   vinfo_density_socres_;
 }; // class Pipeline
-
-Eigen::Matrix4f Estimate3D3DRANSAC( const std::vector<cv::Point3f>& src, 
-    const std::vector<cv::Point3f>& dst, 
-    int iterations, 
-    float threshold); // ransac.cpp
 
 std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,
                                                        SEG::FeatureDescriptor* extractor,

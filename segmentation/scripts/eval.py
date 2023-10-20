@@ -231,8 +231,8 @@ class Evaluator:
             #cv2.imshow("dst", dst)
             #if ord('q') == cv2.waitKey():
             #    break
-        table_data = (int(self.seq), "%d/%d"%(nkptTP+nkptTN,nkptFP+nkptFN), nkptTP, nkptTN, nkptFP, nkptFN)
-        headers = ["Seq", "T/F", "TP", "TN", "FP", "FN"]
+        table_data = (int(self.seq), "%d/%d"%(nkptTP+nkptTN,nkptFP+nkptFN), nkptTP, nkptFP, nkptFN, nkptTN)
+        headers = ["Seq", "T/F", "TP", "FN", "FP", "TN"]
         return table_data, headers
 
     def eval_trj(self, ax=None):

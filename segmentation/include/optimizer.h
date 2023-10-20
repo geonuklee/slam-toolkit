@@ -29,6 +29,14 @@ public:
 
 };
 
+double ChiSquaredThreshold(double p, double dof);
+
+// ICP method
+g2o::SE3Quat EstimateTcp(const std::vector<cv::Point3f>& Xp,
+                         const std::vector<cv::Point3f>& vec_uvz_curr,
+                         const Camera* camera, double uv_info, double invd_info, double delta,
+                         std::vector<double>& vec_chi2);
+
 class Mapper {
 public:
   Mapper() { }

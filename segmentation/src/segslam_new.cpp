@@ -451,7 +451,6 @@ std::set<Pth>  Pipeline::FilterOutlierMatches(Frame* curr_frame,const EigenMap<Q
   struct Points {
     cv::Point2f pt2d_curr;
     cv::Point3f pt3d_prev;
-    cv::Point3f pt3d_curr;
     double z;
     int kptid_curr;
     int kptid_prev;
@@ -524,7 +523,7 @@ std::set<Pth>  Pipeline::FilterOutlierMatches(Frame* curr_frame,const EigenMap<Q
       std::cout << "PnP failure Pth#" << it.first->GetId() << std::endl;
       pnp_failed_instances.insert( it.first->GetId() );
       for(const Points& pt : it.second){
-        curr_frame->EraseMappoint(pt.kptid_curr); // keyframe이 아니라서 mp->RemoveKeyframe 등을 호출하지 
+        curr_frame->EraseMappoint(pt.kptid_curr); // keyframe이 아니라서 mp->RemoveKeyframe 등을 호출하지 않는다.
         if(prev_frame_->IsKeyframe())
           pt.mp->RemoveKeyframe(prev_frame_);
         prev_frame_->EraseMappoint(pt.kptid_prev); // keyframe에서..
@@ -777,8 +776,9 @@ Frame* Pipeline::Put(const cv::Mat gray,
     Tcps[qth] = curr_frame->GetTcq(qth) * prev_frame_->GetTcq(qth).inverse();
   } // For qth \ Do pose_track, projection matches
   bool verbose_filter = true;
-  std::set<Pth> pnp_failed_instances = FilterOutlierMatches(curr_frame, Tcps, verbose_filter);
-  {
+  //std::set<Pth> pnp_failed_instances = FilterOutlierMatches(curr_frame, Tcps, verbose_filter);
+  std::set<Pth> pnp_fixed_instances = NewFilterOutlierMatches(curr_frame, Tcps, verbose_filter);
+  /*{
     RigidGroup* rig = qth2rig_groups_.at(0); // 일단은 하드코딩해버려서 처리한거 정정해야함.
     const auto& excluded = rig->GetExcludedInstances();
     for(Pth pth : pnp_failed_instances){
@@ -788,6 +788,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
       ins->SetQth(rig->GetId());
     }
   }
+  */
 
   std::map<Instance*, std::set<Mappoint*> > ins2mappoints;
   CountMappoints(curr_frame, ins2mappoints);
@@ -850,7 +851,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
   for(auto it_density : density_scores)
     if(it_density.second < 1.)
       fixed_instances.insert(it_density.first); // seq05 고속도로 바닥같은데서 FP 방지에 필요. TODO - 더 나은 대안이 필요하긴함.
-  fixed_instances.insert(pnp_failed_instances.begin(), pnp_failed_instances.end());
+  fixed_instances.insert(pnp_fixed_instances.begin(), pnp_fixed_instances.end());
 
   { // while !segmented_instances.empty()
     const Qth qth = 0;

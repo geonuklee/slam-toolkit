@@ -16,17 +16,71 @@
 
 #include <boost/math/distributions/chi_squared.hpp>
 
+namespace NEW_SEG {
+
 double ChiSquaredThreshold(double p, double dof){
   boost::math::chi_squared_distribution<> chi2dist( dof );
   double t = boost::math::quantile(chi2dist, p);
   return t;
 }
 
-namespace NEW_SEG {
-
 inline Instance* GetIns(Mappoint* mp){
   //return mp->GetInstance();
   return mp->GetLatestInstance();
+}
+
+g2o::SE3Quat EstimateTcp(const std::vector<cv::Point3f>& Xp,
+                         const std::vector<cv::Point3f>& vec_uvz_curr,
+                         const Camera* camera, double uv_info, double invd_info, double delta,
+                         std::vector<double>&vec_chi2
+                         ) {
+  const int n_iter = 5;
+  g2o::SparseOptimizer optimizer;
+  // Dynamic block size due to 6dim SE3, 1dim prior vertex.
+  typedef g2o::BlockSolverPL<-1,-1> BlockSolver;
+  std::unique_ptr<BlockSolver::LinearSolverType> linear_solver = g2o::make_unique<g2o::LinearSolverEigen<BlockSolver::PoseMatrixType>>();
+  g2o::OptimizationAlgorithm* solver =  new g2o::OptimizationAlgorithmGaussNewton(g2o::make_unique<BlockSolver>(std::move(linear_solver)));
+  optimizer.setAlgorithm(solver);
+  Param param(camera);
+
+  g2o::VertexSE3Expmap* v_pose = new g2o::VertexSE3Expmap();
+  v_pose->setId(optimizer.vertices().size() );
+  v_pose->setMarginalized(false);
+  optimizer.addVertex(v_pose);
+
+  std::vector<g2o::OptimizableGraph::Edge*> edges;
+  edges.reserve(Xp.size());
+  for(size_t i = 0; i < Xp.size(); i++){
+    const auto& xp = Xp.at(i);
+    g2o::VertexSBAPointXYZ* v_mp = new g2o::VertexSBAPointXYZ();
+    v_mp->setId(optimizer.vertices().size() );
+    v_mp->setEstimate(Eigen::Vector3d(xp.x, xp.y, xp.z) );
+    v_mp->setMarginalized(true);
+    v_mp->setFixed(true);
+    optimizer.addVertex(v_mp);
+    const auto& uvz = vec_uvz_curr.at(i);
+    bool valid_depth = uvz.z > 1e-5 && uvz.z < 80.; // ex) seq00 너무 먼, 건물에서 depth residual이 과하게 증가. HITNET의 오인식으로 의심.
+    Eigen::Vector3d uvi(uvz.x, uvz.y, valid_depth?1./uvz.z:0.);
+    g2o::OptimizableGraph::Edge* edge;
+    if(valid_depth)
+      edge = new EdgeSE3PointXYZDepth(&param, uv_info, invd_info, v_mp, v_pose, uvi);
+    else
+      edge = new EdgeProjection(&param, uv_info, v_mp, v_pose, uvi.head<2>() );
+    g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
+    rk->setDelta(delta);
+    edge->setRobustKernel(rk);
+    edges.push_back(edge);
+    optimizer.addEdge(edge);
+  }
+
+  optimizer.setVerbose(false);
+  optimizer.initializeOptimization(0); // Optimize switchable edges only
+  optimizer.optimize(n_iter);
+
+  vec_chi2.reserve(Xp.size());
+  for(auto edge : edges)
+    vec_chi2.push_back(edge->chi2());
+  return v_pose->estimate();
 }
 
 PoseTracker::PoseTracker() {
