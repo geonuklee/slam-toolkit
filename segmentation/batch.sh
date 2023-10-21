@@ -9,13 +9,16 @@ make -j4
 retval=$?
 
 
+PID_FIRST=0
+
+#source test example_segmentation
 if [ $retval -eq 0 ]; then
   cp example_segmentation example_segmentation_batch$DISPLAY
   cd $cwd
   output_dir="output_batch_"$DISPLAY
   rm -rf $output_dir
   mkdir $output_dir
-  ffmpeg -video_size 1792x850 -framerate 5 -f x11grab -i $DISPLAY -c:v libxvid -qscale:v 3 $output_dir/batch_output.avi < /dev/null &
+  ffmpeg -video_size 1420x970 -framerate 5 -f x11grab -i $DISPLAY -c:v libxvid -qscale:v 3 $output_dir/output.avi < /dev/null &
   PID=$!
   git log -1 > $output_dir/batch_commit.txt
   git diff HEAD src/*.cpp >> $output_dir/batch_commit.txt
@@ -26,7 +29,7 @@ if [ $retval -eq 0 ]; then
       #if [ "$seq" = "0004" ]; then
       #  continue  # Pose tracker issue
       #fi
-      msg "Start seq $seq"
+      #msg "Start seq $seq"
       ./build/example_segmentation_batch$DISPLAY $seq $output_dir
     fi
   done

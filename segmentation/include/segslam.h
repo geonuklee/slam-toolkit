@@ -265,8 +265,8 @@ private:
                                                          const std::map<Pth,float>& density_scores);
   std::set<Qth> FrameNeedsToBeKeyframe(Frame* frame) const;
   void SupplyMappoints(Frame* frame);
-  std::set<Pth> FilterOutlierMatches(Frame* curr_frame, const EigenMap<Qth, g2o::SE3Quat>& Tcps, bool verbose);
   std::set<Pth> NewFilterOutlierMatches(Frame* curr_frame, const EigenMap<Qth, g2o::SE3Quat>& Tcps, bool verbose);
+  std::set<Pth> NewDynamicDetect(Frame* curr_frame, Qth qth);
 
   SEG::FeatureDescriptor* extractor_;
   const Camera*const camera_;
@@ -281,13 +281,12 @@ private:
 
   std::map<Pth, Pth> pth_removed2replacing_; // log for evaluation
   std::vector<bool> vinfo_supplied_mappoints_;
-  float switch_threshold_;
-  std::map<Qth, std::map<Pth, float> >  vinfo_switch_states_;
+  std::set<Pth>                         vinfo_outlier_detected_;
   std::map<Qth, std::map<Jth, Frame*> > vinfo_neighbor_frames_;
   std::map<Qth, std::set<Mappoint*> >   vinfo_neighbor_mappoints_;
   cv::Mat                               vinfo_synced_marker_;
   cv::Mat                               vinfo_match_filter_;
-  std::map<Pth,float>                   vinfo_density_socres_;
+  cv::Mat                               vinfo_dynamic_detects_;
 }; // class Pipeline
 
 std::map<int, std::pair<Mappoint*, double> > FlowMatch(const Camera* camera,

@@ -8,67 +8,7 @@
 
 namespace NEW_SEG {
 
-cv::Mat VisualizeSwitchStates(RigidGroup* rig,
-                              const std::map<Jth,Frame*>& keyframes,
-                              const std::map<Pth, float>& switch_states,
-                              const std::map<Pth, std::pair<cv::Point2f, float> >& pth2center,
-                              cv::Size dst_size) {
-  Qth qth = rig->GetId();
-  cv::Mat dst_texts = cv::Mat(dst_size.height, dst_size.width, CV_8UC3); 
-  int fontFace = cv::FONT_HERSHEY_SIMPLEX;
-  double fontScale = .4;
-  int thickness = 1;
-  int baseline=0;
-  int y = 0;
-  cv::rectangle(dst_texts,cv::Rect(0,0,dst_texts.cols, dst_texts.rows),CV_RGB(255,255,255),-1);
-  for(auto it_kf : keyframes){
-    const Jth& jth = it_kf.first;
-    Frame* kf = it_kf.second;
-    char text[100];
-    sprintf(text,"F#%2d, KF#%2d ", kf->GetId(), kf->GetKfId(qth) ); // translation 등의 정보는 Pangolin viewer로 충분.
-    y += 2;
-  }
-  y+= 3;
-  std::ostringstream buffer;
-  buffer << "Exclude> ";
-  for(auto it : rig->GetExcludedInstances()){
-    const Pth& pth = it.first;
-    if(!pth2center.count(pth)) // TODO 현재 화면 보이는 exclude만 표시할까?
-      continue;
-    buffer << pth << ", ";
-    auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
-    if(size.width < dst_texts.cols - 10)
-      continue;
-    y += size.height+2;
-    cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
-    buffer.str("");
-  }
-  if(!buffer.str().empty()){
-    auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
-    y += size.height+2;
-    cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
-  }
-
-  y+= 10;
-  buffer.str("");
-  for(auto it : switch_states){
-    buffer << "(" << it.first <<  ":" << std::fixed << std::setprecision(3) << it.second << "), ";
-    auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
-    if(size.width < dst_texts.cols - 100)
-      continue;
-    y += size.height+2;
-    cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
-    buffer.str("");
-  }
-  if(!buffer.str().empty()){
-    auto size = cv::getTextSize(buffer.str(), fontFace, fontScale, thickness, &baseline);
-    y += size.height+2;
-    cv::putText(dst_texts, buffer.str(), cv::Point(5, y), fontFace, fontScale, CV_RGB(0,0,0), thickness);
-  }
-
-  return dst_texts;
-}
-
+/*
 void PutInstanceInfoBox(const float& switch_threshold,
                         const std::map<Pth, float>& switch_states,
                         const std::map<Pth,float>& density_scores,
@@ -82,16 +22,6 @@ void PutInstanceInfoBox(const float& switch_threshold,
     msg[0] = "#" + std::to_string(pth);
     for(int k=0; k<3;k++)
       txt_colors[k] = CV_RGB(0,0,0);
-    msg[1] = "d: "; msg[2] = "s: ";
-    if(density_scores.count(pth) ){
-      std::ostringstream oss; oss << std::fixed << std::setprecision(2);
-      oss<< density_scores.at(pth);
-      msg[1] += oss.str();
-      if(density_scores.at(pth) < 1.)
-        txt_colors[1] = CV_RGB(255,0,0);
-    }
-    else
-      msg[1] += "-";
     if(switch_states.count(pth) ){
       std::ostringstream oss; oss << std::fixed << std::setprecision(2);
       oss<< switch_states.at(pth);
@@ -122,6 +52,7 @@ void PutInstanceInfoBox(const float& switch_threshold,
   }
   return;
 }
+*/
 
 
 void Pipeline::Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask, cv::Mat& dst) {
@@ -131,8 +62,7 @@ void Pipeline::Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask, cv::M
   std::map<Pth, std::pair<cv::Point2f, float> > pth2center;
 
   cv::Mat outline = vinfo_synced_marker_ < 1;
-  cv::Mat dist_from_outline;
-  {
+  cv::Mat dist_from_outline; {
     cv::Mat bb = ~outline;
     for (int i = 0; i < bb.cols; i++) {
       bb.at<uchar>(0, i) = bb.at<uchar>(bb.rows - 1, i) = 0;
@@ -144,41 +74,17 @@ void Pipeline::Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask, cv::M
   }
 
   std::set<Pth> excluded;
-  if(vinfo_switch_states_.count(qth)){
-    RigidGroup* rig = qth2rig_groups_.at(qth);
-    const auto& switch_states = vinfo_switch_states_.at(qth);
-    for(auto it : rig->GetExcludedInstances())
-      excluded.insert(it.first);
-    //for(auto it : switch_states){
-    //  if(it.second > switch_threshold_)
-    //    continue;
-    //  excluded.insert(it.first);
-    //}
-  }
-  for(size_t i = 0; i < dst_frame.rows; i++){
-    for(size_t j = 0; j < dst_frame.cols; j++){
-      cv::Vec3b& pixel = dst_frame.at<cv::Vec3b>(i,j);
-      if(outline.at<uchar>(i,j))
-        continue;
-      const Pth& pth = vinfo_synced_marker_.at<int32_t>(i,j);
-      const float& r = dist_from_outline.at<float>(i,j);
-      std::pair<cv::Point2f, float>& cp = pth2center[pth];
-      if(r > cp.second){
-        cp.first = cv::Point2f(j,i);
-        cp.second = r;
-      }
-    }
-  }
- dst_frame.setTo(CV_RGB(0,0,0), outline);
+  for(auto it : rig->GetExcludedInstances())
+    excluded.insert(it.first);
+  dst_frame.setTo(CV_RGB(0,0,0), outline);
   for(Pth pth : excluded)
     dst_frame.setTo(CV_RGB(255,0,0), vinfo_synced_marker_==pth);
-  if(vinfo_switch_states_.count(qth)){
-    for(auto it : vinfo_switch_states_.at(qth)){
-      if(it.second > switch_threshold_)
-        continue;
-      dst_frame.setTo(CV_RGB(255,255,0), vinfo_synced_marker_==it.first);
-    }
+  for(Pth pth : vinfo_outlier_detected_){
+    if(excluded.count(pth))
+      continue;
+    dst_frame.setTo(CV_RGB(255,255,0), vinfo_synced_marker_==pth);
   }
+
   cv::addWeighted(rgb, .5, dst_frame, .5, 1., dst_frame);
   dst_frame.setTo(CV_RGB(0,0,0), outline>0);
 
@@ -301,38 +207,47 @@ void Pipeline::Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask, cv::M
     }
   }
   
-  const auto& switch_states = vinfo_switch_states_[qth];
-  const auto& density_scores = vinfo_density_socres_;
-  cv::Mat dst_marker = GetColoredLabel(vinfo_synced_marker_);
-  PutInstanceInfoBox(switch_threshold_, switch_states, density_scores, pth2center, dst_marker);
-
   std::map<Jth, Frame*> keyframes = vinfo_neighbor_frames_[qth];
   keyframes[prev_frame_->GetId()] = prev_frame_;
-  cv::Mat dst_switchstates = VisualizeSwitchStates(rig, keyframes, switch_states, pth2center, cv::Size(100,600) );
+
+  if(vinfo_match_filter_.empty())
+    vinfo_match_filter_ = cv::Mat::zeros(dst_frame.rows, dst_frame.cols, CV_8UC3);
+  if(vinfo_dynamic_detects_.empty())
+    vinfo_dynamic_detects_ = cv::Mat::zeros(dst_frame.rows, dst_frame.cols, CV_8UC3);
 
   {
     int fid = prev_frame_->GetId();
     Frame* lkf = keyframes_.at(qth).rbegin()->second;
-    //int kfid = prev_frame_->GetKfId(qth);
     std::string msg;
-    msg += "F#" + std::to_string(fid);
+    msg += "Outlier matches F#" + std::to_string(fid);
     msg += prev_frame_->IsKeyframe() ? " is KF, " : " is not KF, ";
     msg += " / KF# " + std::to_string(lkf->GetKfId(qth));
     int fontFace = cv::FONT_HERSHEY_SIMPLEX; double fontScale = .6; int fontThick = 1; int baseline = 0;
     cv::Size size = cv::getTextSize(msg, fontFace, fontScale, fontThick, &baseline);
-    cv::rectangle(dst_marker, cv::Point(0,0), cv::Point(size.width+10,size.height+10), CV_RGB(150,150,150), -1);
-    cv::putText(dst_marker, msg, cv::Point(5,size.height+5),fontFace, fontScale, CV_RGB(255,0,0), fontThick);
+    cv::rectangle(vinfo_match_filter_, cv::Point(0,0), cv::Point(size.width+10,size.height+10), CV_RGB(150,150,150), -1);
+    cv::putText(vinfo_match_filter_, msg, cv::Point(5,size.height+5),fontFace, fontScale, CV_RGB(255,0,0), fontThick);
   }
 
-  //cv::vconcat(dst_marker,dst_frame,dst);
-  if(vinfo_match_filter_.empty())
-    vinfo_match_filter_ = cv::Mat::zeros(dst_frame.rows, dst_frame.cols, CV_8UC3);
-  cv::vconcat(vinfo_match_filter_, dst_frame, dst);
+  {
+    int fid = prev_frame_->GetId();
+    Frame* lkf = keyframes_.at(qth).rbegin()->second;
+    std::string msg;
+    msg += "Dynamic detection F#" + std::to_string(fid);
+    msg += prev_frame_->IsKeyframe() ? " is KF, " : " is not KF, ";
+    msg += " / KF# " + std::to_string(lkf->GetKfId(qth));
+    int fontFace = cv::FONT_HERSHEY_SIMPLEX; double fontScale = .6; int fontThick = 1; int baseline = 0;
+    cv::Size size = cv::getTextSize(msg, fontFace, fontScale, fontThick, &baseline);
+    cv::rectangle(vinfo_dynamic_detects_, cv::Point(0,0), cv::Point(size.width+10,size.height+10), CV_RGB(150,150,150), -1);
+    cv::putText(vinfo_dynamic_detects_, msg, cv::Point(5,size.height+5),fontFace, fontScale, CV_RGB(255,0,0), fontThick);
+  }
 
-  //cv::imshow("switchstates", dst_switchstates);
+  cv::vconcat(vinfo_match_filter_, vinfo_dynamic_detects_, dst);
+  cv::vconcat(dst, dst_frame, dst);
+  cv::resize(dst, dst, cv::Size(900,900) );
+
   //cv::imshow("dst", dst);
   cv::imshow("dpatches", dst_patches);
-  cv::moveWindow("dpatches", 10, 900);
+  cv::moveWindow("dpatches", 1500, 100);
   return;
 } // Pipeline::Visualize
 

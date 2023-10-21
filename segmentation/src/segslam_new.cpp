@@ -79,8 +79,8 @@ void Frame::SetInstances(const cv::Mat synced_marker,
 bool Frame::IsInFrame(const Camera* camera, const Eigen::Vector2d& uv) const {
   double width = camera->GetWidth();
   double height = camera->GetHeight();
-  const double ulr_boundary = 10.; // TODO fsettings 로 옮기기
-  const double b_boundary = 20.;
+  const double ulr_boundary = 100.; // TODO fsettings 로 옮기기
+  const double b_boundary = 40.;
   if( uv.y() <  ulr_boundary )
     return false;
   if( uv.x() < ulr_boundary )
@@ -304,6 +304,8 @@ void Pipeline::SupplyMappoints(Frame* frame) {
     Instance* ins = instances[n];
     if(!ins)
       continue;
+    //if(depths[n] > 1e-5 && depths[n] < 10.) // 너무 가까운점은 motion detection이 엉터리가 됨.
+    //  continue;
     size_t& n_pt = n_per_ins[ins];
     if(Mappoint* mp = frame->GetMappoint(n)){
       mp->AddKeyframe(qth, frame); // TODO 모든 qth에 keyframe추가하는건 좋은생각이 아니다.
@@ -312,7 +314,7 @@ void Pipeline::SupplyMappoints(Frame* frame) {
     }
     const cv::KeyPoint& kpt = keypoints[n];
     static Ith nMappoints = 0;
-    if(n_pt > 15){
+    if(n_pt > 10) {
       std::list< std::pair<int,double> > neighbors = frame->SearchRadius(Eigen::Vector2d(kpt.pt.x, kpt.pt.y), min_mpt_distance);
       bool too_close_mp_exist = false;
       for(const auto& nn : neighbors){
@@ -430,146 +432,6 @@ std::set<Qth> Pipeline::FrameNeedsToBeKeyframe(Frame* curr_frame) const {
       need_keyframes.insert(qth);
   }
   return need_keyframes;
-}
-
-std::set<Pth>  Pipeline::FilterOutlierMatches(Frame* curr_frame,const EigenMap<Qth, g2o::SE3Quat>& Tcps, bool verbose) {
-  bool use_extrinsic_guess = true;
-  double rprj_threshold = 3.;
-  double confidence = .99;
-  cv::Mat& dst = vinfo_match_filter_;
-  if(verbose){
-    dst = GetColoredLabel(vinfo_synced_marker_);
-    cv::addWeighted(cv::Mat::zeros(dst.rows,dst.cols,CV_8UC3), .5, dst, .5, 1., dst);
-  }
-  int flag = cv::SOLVEPNP_ITERATIVE;
-  cv::Mat K = cvt2cvMat(camera_->GetK() );
-  cv::Mat D = cvt2cvMat(camera_->GetD() );
-  const std::vector<Mappoint*>&    _mappoints = curr_frame->GetMappoints();
-  const std::vector<cv::KeyPoint>& _keypoints = curr_frame->GetKeypoints();
-  const std::vector<Instance*>&    _instances = curr_frame->GetInstances();
-  const std::vector<float>&        _depths    = curr_frame->GetMeasuredDepths();
-  struct Points {
-    cv::Point2f pt2d_curr;
-    cv::Point3f pt3d_prev;
-    double z;
-    int kptid_curr;
-    int kptid_prev;
-    Mappoint* mp;
-  };
-  std::map<Instance*,std::list<Points> > segmented_points;
-  for(int n =0; n < _mappoints.size(); n++){
-    Points pt;
-    pt.mp = _mappoints.at(n);
-    pt.kptid_curr = n;
-    if(!pt.mp)
-      continue;
-    pt.kptid_prev = prev_frame_->GetIndex(pt.mp);
-    if(pt.kptid_prev < 0)
-      continue;
-    //Instance* ins = mp->GetInstance();
-    Instance* ins = pt.mp->GetLatestInstance();
-    if(!ins)
-      continue;
-    const Eigen::Vector3d Xp = prev_frame_->GetDepth(pt.kptid_prev) * prev_frame_->GetNormalizedPoint(pt.kptid_prev);
-    pt.pt2d_curr = _keypoints.at(n).pt;
-    pt.pt3d_prev.x = Xp.x();
-    pt.pt3d_prev.y = Xp.y();
-    pt.pt3d_prev.z = Xp.z();
-    pt.z = _depths[n];
-    segmented_points[ins].push_back(pt);
-  }
-
-  std::vector<cv::Point3f> obj_points;
-  std::vector<cv::Point2f> img_points;
-  obj_points.reserve(_mappoints.size());
-  img_points.reserve(_mappoints.size());
-
-  std::set<Pth> pnp_failed_instances;
-  std::cout << "====================" << std::endl;
-  for(auto it : segmented_points){
-    if(it.second.size() < 5)
-      continue;
-    cv::Mat tvec, rvec, inliers;
-    obj_points.clear();
-    img_points.clear();
-    for(const auto& it_pt : it.second){
-      obj_points.push_back(it_pt.pt3d_prev);
-      img_points.push_back(it_pt.pt2d_curr);
-    }
-    Qth qth = it.first->GetQth();
-    int iteration = std::max<int>(5,it.second.size() * .2);
-    cv::solvePnPRansac(obj_points, img_points, K, D, rvec, tvec,
-                       use_extrinsic_guess, iteration, rprj_threshold, confidence, inliers, cv::SOLVEPNP_EPNP);
-    cv::Mat R;
-    cv::Rodrigues(rvec,R);
-    g2o::SE3Quat _Tcp(cvt2Eigen(R), cvt2Eigen(tvec) ); // Transform : {c}urrent camera <- {p}revious camera
-    bool pnp_failure = false;
-    if(Tcps.count(qth)){
-      double t_max = 10.; // TODO time stamp 추가로 m/sec 으로 변경.
-      if(_Tcp.translation().norm() > t_max){
-        /*
-        ICP가 아니라 rprj error에 대한 PnP 알고리즘이라 translation 제한 필요.
-        TODO) ICP RANSAC 으로 대체.
-        ex) seq14, 맞은편 차량
-        */
-        //std::cout << "Filter failed to track p#" << it.first->GetId() << ", t = " << _Tcp.translation().transpose() << std::endl;
-        //pnp_failure = true;
-        _Tcp= Tcps.at(qth);
-      }
-    }
-    if(inliers.rows < .5 * obj_points.size() )
-      pnp_failure = true;
-    if(pnp_failure){
-      std::cout << "PnP failure Pth#" << it.first->GetId() << std::endl;
-      pnp_failed_instances.insert( it.first->GetId() );
-      for(const Points& pt : it.second){
-        curr_frame->EraseMappoint(pt.kptid_curr); // keyframe이 아니라서 mp->RemoveKeyframe 등을 호출하지 않는다.
-        if(prev_frame_->IsKeyframe())
-          pt.mp->RemoveKeyframe(prev_frame_);
-        prev_frame_->EraseMappoint(pt.kptid_prev); // keyframe에서..
-      }
-      continue;
-    }
-
-#if 1
-    auto it_points = it.second.begin();
-    for(int i=0; i < obj_points.size(); i++){
-      const Points& pt = *it_points;
-      const auto& _obj = obj_points[i];
-      Eigen::Vector3d Xc = _Tcp*Eigen::Vector3d(_obj.x,_obj.y,_obj.z);
-      cv::Point2f uv;{
-        Eigen::Vector2d eig_uv = camera_->Project(Xc);
-        uv.x = eig_uv[0];
-        uv.y = eig_uv[1];
-      }
-      cv::Point2f rprj_err = img_points.at(i) - uv;
-      //bool uv_inlier = std::abs(rprj_err.x)+std::abs(rprj_err.y) < rprj_threshold;
-      bool uv_inlier = cv::norm(rprj_err) < rprj_threshold;
-      float abs_err = std::abs(pt.z-Xc[2]);
-      bool z_inlier = abs_err/pt.z < .05; // TODO 유도. disparity 상에서.
-      bool inlier = uv_inlier && z_inlier;
-      if(verbose){
-        cv::circle(dst, img_points.at(i), 3, inlier?CV_RGB(0,255,0):CV_RGB(255,0,0), -1 );
-        cv::line(dst, img_points.at(i), uv, CV_RGB(255,255,0),1);
-      }
-      if(!inlier){
-        curr_frame->EraseMappoint(pt.kptid_curr); // keyframe이 아니라서 mp->RemoveKeyframe 등을 호출하지 않는다.
-        if(prev_frame_->IsKeyframe())
-          pt.mp->RemoveKeyframe(prev_frame_);
-        prev_frame_->EraseMappoint(pt.kptid_prev); // keyframe에서..
-      }
-      it_points++;
-    }
-#endif
-  }
-  if(verbose){
-    //sorted_msges.sort([](const std::pair<Pth,std::string>& a, const std::pair<Pth,std::string>& b) { return a.first < b.first; } );
-    //for(auto it : sorted_msges)
-    //  std::cout << it.second << std::endl;
-    //std::cout << "================" << std::endl;
-    //cv::imshow("filter", dst);
-  }
-  return pnp_failed_instances;
 }
 
 void SetMatches(std::map<int, std::pair<Mappoint*, double> >& flow_matches,
@@ -692,10 +554,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
                      double sec,
                      const cv::Mat vis_rgb
                     ) {
-  switch_threshold_ = .3;
   float density_threshold = 1. / 40. / 40.; // NxN pixel에 한개 이상의 mappoint가 존재해야 dense instance
-
-  vinfo_switch_states_.clear();
   vinfo_neighbor_frames_.clear();
   vinfo_neighbor_mappoints_.clear();
   vinfo_synced_marker_ = synced_marker;
@@ -776,7 +635,6 @@ Frame* Pipeline::Put(const cv::Mat gray,
     Tcps[qth] = curr_frame->GetTcq(qth) * prev_frame_->GetTcq(qth).inverse();
   } // For qth \ Do pose_track, projection matches
   bool verbose_filter = true;
-  //std::set<Pth> pnp_failed_instances = FilterOutlierMatches(curr_frame, Tcps, verbose_filter);
   std::set<Pth> pnp_fixed_instances = NewFilterOutlierMatches(curr_frame, Tcps, verbose_filter);
   /*{
     RigidGroup* rig = qth2rig_groups_.at(0); // 일단은 하드코딩해버려서 처리한거 정정해야함.
@@ -792,18 +650,25 @@ Frame* Pipeline::Put(const cv::Mat gray,
 
   std::map<Instance*, std::set<Mappoint*> > ins2mappoints;
   CountMappoints(curr_frame, ins2mappoints);
-  std::map<Instance*, Instance*> equivalent_instances; {
-    std::map<Pth,float> density_scores0;
+  std::map<Pth,float> density_scores; {
+    const Qth qth = 0;
+    RigidGroup* rig = qth2rig_groups_.at(qth);
     for(const auto& it : marker_areas){
       const Pth& pth = it.first;
       const size_t& area = it.second;
       Instance* ins = pth2instances_.at(pth);
       float npoints = ins2mappoints.count(ins) ? ins2mappoints.at(ins).size() : 0.;
       float dense = npoints > 0 ? float(npoints) / float(area) : 0.;
-      density_scores0[pth] = dense / density_threshold;
+      float score = dense / density_threshold;
+      density_scores[pth] = score;
+      if(score < 1. && ins->GetQth() < 0 ){
+        ins->SetQth(qth);
+        rig->RemoveExcludedInstance(ins);
+      }
     }
-    equivalent_instances = MergeEquivalentInstances(ins2mappoints, density_scores0);
   }
+  /*
+  std::map<Instance*, Instance*> equivalent_instances = MergeEquivalentInstances(ins2mappoints, density_scores0);
   if(!equivalent_instances.empty()){
     for(auto it : segmented_instances){
       std::set<Instance*> copied = it.second;
@@ -836,51 +701,39 @@ Frame* Pipeline::Put(const cv::Mat gray,
     }
     curr_frame->SetInstances(synced_marker, pth2instances_);
   }
-
-  std::map<Pth,float>& density_scores = vinfo_density_socres_;
-  for(const auto& it : marker_areas){
-    const Pth& pth = it.first;
-    const size_t& area = it.second;
-    Instance* ins = pth2instances_.at(pth);
-    float npoints = ins2mappoints.count(ins) ? ins2mappoints.at(ins).size() : 0.;
-    float dense = npoints > 0 ? float(npoints) / float(area) : 0.;
-    density_scores[pth] = dense / density_threshold;
-  }
+  */
 
   std::set<Pth> fixed_instances;
-  for(auto it_density : density_scores)
-    if(it_density.second < 1.)
-      fixed_instances.insert(it_density.first); // seq05 고속도로 바닥같은데서 FP 방지에 필요. TODO - 더 나은 대안이 필요하긴함.
-  fixed_instances.insert(pnp_fixed_instances.begin(), pnp_fixed_instances.end());
+  //fixed_instances.insert(pnp_fixed_instances.begin(), pnp_fixed_instances.end());
 
   { // while !segmented_instances.empty()
     const Qth qth = 0;
     RigidGroup* rig = qth2rig_groups_.at(qth);
-    std::set<Mappoint*>     & neighbor_mappoints = vinfo_neighbor_mappoints_[qth];
-    std::map<Jth, Frame* >  & neighbor_frames    = vinfo_neighbor_frames_[qth];
-
-    bool vis_verbose = false;
-    std::map<Pth,float>& switch_states = vinfo_switch_states_[qth];
-    switch_states\
-      = mapper_->ComputeLBA(camera_,qth, neighbor_mappoints, neighbor_frames, curr_frame, prev_frame_, fixed_instances, gradx, grady, valid_grad, vis_verbose);
+    std::set<Pth> outlier_detected =  NewDynamicDetect(curr_frame, qth); // TODO dynamic instance 처리.
+    vinfo_outlier_detected_.clear();
+    for(Pth pth : outlier_detected)
+      if(density_scores[pth] > 1.)
+        vinfo_outlier_detected_.insert(pth);
 
     std::set<Pth> instances4next_rig;
     if(!n_consecutiv_switchoff.count(qth))
       n_consecutiv_switchoff[qth]; // empty map 생성.
-    for(auto it_switch : switch_states){
-      const Pth& pth = it_switch.first;
-      if(it_switch.second > switch_threshold_){
-        if(n_consecutiv_switchoff[qth].count(pth) )
-          n_consecutiv_switchoff[qth].erase(pth);
+    for(Pth pth : vinfo_outlier_detected_ ){
+      if(density_scores[pth] < 1.)
         continue;
-      }
-      if(++n_consecutiv_switchoff[qth][pth] > 2){ // N 번 연속 switch off 판정을 받은경우,
+      if(++n_consecutiv_switchoff[qth][pth] > 1){ // N 번 연속 switch off 판정을 받은경우,
         Instance* ins = pth2instances_.at( pth );
         rig->ExcludeInstance(ins);
         instances4next_rig.insert(pth);
         ins->SetQth(-1);
       }
     }
+
+    std::set<Mappoint*>     & neighbor_mappoints = vinfo_neighbor_mappoints_[qth];
+    std::map<Jth, Frame* >  & neighbor_frames    = vinfo_neighbor_frames_[qth];
+
+    bool vis_verbose = false;
+    mapper_->ComputeLBA(camera_,qth, neighbor_mappoints, neighbor_frames, curr_frame, prev_frame_, gradx, grady, valid_grad, vis_verbose);
     size_t n_mappoints4next_rig = 0;
     /* for(Pth pth : instances4next_rig)
       if(ins2mappoints.count(pth))// mp 없는 instance도 있으니까.

@@ -296,7 +296,7 @@ CvFeatureDescriptor::CvFeatureDescriptor()
   : FeatureDescriptor() {
   nfeatures = 4000;
   scaleFactor = 1.4f;
-  nlevels = 3;
+  nlevels = 2;
   iniThFAST = 20;
   min_kpt_distance = 0.; // For each level
   // ---------------------------------------------

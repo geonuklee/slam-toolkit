@@ -11,12 +11,13 @@ public:
   cv::Mat GetGrady() const { return grady_; }
   cv::Mat GetOutline() const { return outline_edges_; }
   cv::Mat GetValidMask() const { return valid_mask_; }
-  
 
 protected:
   cv::Mat gradx_, grady_, outline_edges_, valid_mask_;
-
 };
+
+cv::Mat GetInvalidDepthMask(const cv::Mat gray, double pixmargin4verticaledge// [pixel]
+                            );
 
 class OutlineEdgeDetectorWithoutSIMD : public OutlineEdgeDetector {
 public:
