@@ -322,17 +322,21 @@ void Pipeline::Visualize(const cv::Mat rgb, const cv::Mat gt_dynamic_mask, cv::M
     cv::Size size = cv::getTextSize(msg, fontFace, fontScale, fontThick, &baseline);
     cv::rectangle(dst_marker, cv::Point(0,0), cv::Point(size.width+10,size.height+10), CV_RGB(150,150,150), -1);
     cv::putText(dst_marker, msg, cv::Point(5,size.height+5),fontFace, fontScale, CV_RGB(255,0,0), fontThick);
+
+    cv::rectangle(vinfo_match_filter_, cv::Point(0,0), cv::Point(size.width+10,size.height+10), CV_RGB(150,150,150), -1);
+    cv::putText(vinfo_match_filter_, msg, cv::Point(5,size.height+5),fontFace, fontScale, CV_RGB(255,0,0), fontThick);
   }
 
-  //cv::vconcat(dst_marker,dst_frame,dst);
   if(vinfo_match_filter_.empty())
     vinfo_match_filter_ = cv::Mat::zeros(dst_frame.rows, dst_frame.cols, CV_8UC3);
   cv::vconcat(vinfo_match_filter_, dst_frame, dst);
+  cv::vconcat(dst_marker, dst, dst);
+  cv::resize(dst, dst, cv::Size(900,900) );
 
   //cv::imshow("switchstates", dst_switchstates);
   //cv::imshow("dst", dst);
   cv::imshow("dpatches", dst_patches);
-  cv::moveWindow("dpatches", 10, 900);
+  cv::moveWindow("dpatches", 1400, 100);
   return;
 } // Pipeline::Visualize
 

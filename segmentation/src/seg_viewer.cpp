@@ -304,9 +304,14 @@ void SegViewer::DrawTrajectories(const EigenMap<int,g2o::SE3Quat>& est_Tcws) {
     glLineWidth(1);
     glPointSize(3.);
     glBegin(GL_LINES);
-    for(size_t i=0; i+1 < est_Tcws.size(); i++){
-      const g2o::SE3Quat Twc0 = est_Tcws.at(i).inverse();
-      const g2o::SE3Quat Twc1 = est_Tcws.at(i+1).inverse();
+    auto it = est_Tcws.begin();
+    for(; ;it++) {
+      auto it_next = it;
+      it_next++;
+      if(it_next == est_Tcws.end())
+        break;
+      const g2o::SE3Quat Twc0 = it->second.inverse();
+      const g2o::SE3Quat Twc1 = it_next->second.inverse();
       const auto& t0 = Twc0.translation();
       const auto& t1 = Twc1.translation();
       glVertex3f(t0.x(), t0.y(), t0.z());

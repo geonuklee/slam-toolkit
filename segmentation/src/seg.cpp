@@ -16,6 +16,28 @@ void SegmentorNew::Put(cv::Mat outline_edges, cv::Mat valid_mask) {
   NEW::Segment(outline_edges, n_octave, n_downsample, keep_boundary, marker_);
 }
 
+cv::Mat GetInvalidDepthMask(const cv::Mat gray, double range) {
+  // Apply Sobel operator in the x-direction to highlight vertical edges
+  cv::Mat grad_x;
+  cv::Sobel(gray, grad_x, CV_16S, 1, 0, 3);
+  // Convert the result to CV_8U
+  cv::Mat abs_grad_x;
+  cv::convertScaleAbs(grad_x, abs_grad_x);
+  // Threshold the result to get edges with value 1 and non-edges with value 0
+  cv::Mat v_edges;
+  cv::threshold(abs_grad_x, v_edges, 150, 1, cv::THRESH_BINARY);
+  // Convert the thresholded image to CV_8UC1
+  v_edges.convertTo(v_edges, CV_8UC1);
+
+  // Compute the distance transform
+  cv::Mat dist;
+  cv::distanceTransform(v_edges < 1, dist, cv::DIST_L2, cv::DIST_MASK_3);
+  // Create a mask where pixels with distance greater than max_distance have a value of 1
+  cv::Mat invalid_depthmask;
+  invalid_depthmask = dist > range;
+  return invalid_depthmask;
+}
+
 ImageTrackerNew::ImageTrackerNew() {
   n_instance_ = 0;
   dof_ = cv::optflow::createOptFlow_DIS(cv::optflow::DISOpticalFlow::PRESET_ULTRAFAST);

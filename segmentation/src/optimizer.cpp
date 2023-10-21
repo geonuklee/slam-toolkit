@@ -134,15 +134,6 @@ g2o::SE3Quat PoseTracker::GetTcq(const Camera* camera,
   return Tcq;
 }
 
-inline bool IsDepthOutlier(const double& invd1, const double& invd2){
-  const double near_invd =  1 / 20.; // [m]^-1
-  if(invd1 < near_invd)
-    return false;
-  if(invd2 < near_invd)
-    return false;
-  return std::abs( (1./invd1) - (1./invd2) ) > 1.;
-}
-
 void GetEdges(g2o::VertexSBAPointXYZ* v_mp, g2o::VertexSE3Expmap* v_pose, VertexSwitchLinear* v_switch,
               const Param& param, double uv_info, double invd_info, double delta,
               double rprj_threshold, double invd_threshold,

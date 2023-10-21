@@ -132,6 +132,71 @@ void DrawFigureForPaper(cv::Mat rgb, cv::Mat depth, cv::Mat outline_edges, cv::M
   return;
 }
 
+int TestColorSeg(int argc, char** argv) {
+  if(argc < 3){
+    std::cout << "Need 3 argc" << std::endl;
+    std::cout << argc << std::endl;
+    std::cout << argv[2] << std::endl;
+    return -1;
+  }
+  const std::string dataset_path = GetPackageDir()+ "/kitti_tracking_dataset/";
+  const std::string dataset_type = "training";
+  const std::string seq(argv[1]);
+  KittiTrackingDataset dataset(dataset_type, seq, dataset_path);
+  std::shared_ptr<OutlineEdgeDetector> edge_detector( new OutlineEdgeDetectorWithSIMD );  // After   2.5 [milli sec]
+  std::shared_ptr<Segmentor> segmentor( new SegmentorNew );                               // After  5~10 [milli sec] , with octave 2
+  std::shared_ptr<ImageTrackerNew> img_tracker( new ImageTrackerNew);                     // Afte  10~11 [milli sec]
+
+  const auto& D = dataset.GetCamera()->GetD();
+  const StereoCamera* camera = dynamic_cast<const StereoCamera*>(dataset.GetCamera());
+  assert(camera);
+  const auto Trl_ = camera->GetTrl();
+  const float base_line = -Trl_.translation().x();
+  const float fx = camera->GetK()(0,0);
+  const float fy = camera->GetK()(1,1);
+  const float min_disp = 1.;
+  bool stop = true;
+
+  double max_concave_depth = 30.;
+  for(int i=0; i<dataset.Size(); i+=1){
+    cv::Mat rgb   = dataset.GetImage(i, cv::IMREAD_COLOR);
+    const cv::Mat rgb_r = dataset.GetRightImage(i, cv::IMREAD_COLOR);
+    double frame_second = dataset.GetSecond(i);
+    cv::Mat gray, gray_r;
+    cv::cvtColor(rgb, gray, cv::COLOR_BGR2GRAY);
+    cv::cvtColor(rgb_r, gray_r, cv::COLOR_BGR2GRAY);
+
+    cv::Mat depth = dataset.GetDepthImage(i);
+    cv::Mat invalid_depthmask = GetInvalidDepthMask(gray,20.);
+
+    edge_detector->PutDepth(depth, fx, fy);
+    cv::Mat outline_edges = edge_detector->GetOutline(); //cv::dilate(diff_outline, diff_outline, cv::Mat(), cv::Point(-1, -1), 3);
+    outline_edges.setTo(1, invalid_depthmask);
+
+    segmentor->Put(outline_edges, invalid_depthmask<1); // TODO validmask가 의도대로 안됨.
+    cv::Mat unsync_marker = segmentor->GetMarker();
+
+    cv::Mat dst_outline = rgb.clone();
+    dst_outline.setTo(CV_RGB(255,0,0), outline_edges);
+    cv::imshow("rgb", rgb);
+    cv::imshow("dst", dst_outline);
+
+    cv::Mat dst_marker = GetColoredLabel(unsync_marker);
+    dst_marker.setTo(CV_RGB(0,0,0), GetBoundary(unsync_marker,2));
+
+    cv::imshow("maker", dst_marker);
+    //cv::imshow("depth", .01*depth);
+    //cv::imshow("dist", .02*dist);
+    char c = cv::waitKey(stop?0:1);
+    if(c == 'q')
+      break;
+    else if (c == 's')
+      stop = !stop;
+  }
+
+  return 1;
+}
+
 #include "seg_viewer.h"
 int TestKittiTrackingNewSLAM(int argc, char** argv) {
   if(argc < 3){
@@ -140,6 +205,9 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     std::cout << argv[2] << std::endl;
     return -1;
   }
+  int offset = 0;
+  if(argc == 4)
+    offset = std::stoi(std::string(argv[3]));
   const std::string dataset_path = GetPackageDir()+ "/kitti_tracking_dataset/";
   const std::string dataset_type = "training";
   const std::string seq(argv[1]);
@@ -155,9 +223,10 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     }
   }
   cv::Size dst_size;{
-    const auto& rgb = dataset.GetImage(0);
-    dst_size.width = rgb.cols;
-    dst_size.height = 2*rgb.rows;
+    //const auto& rgb = dataset.GetImage(0);
+    //dst_size.width = rgb.cols;
+    //dst_size.height = 2*rgb.rows;
+    dst_size = cv::Size(900,900);
   }
 
   const std::string config_fn = GetPackageDir()+"/config/kitti_tracking.yaml";
@@ -190,12 +259,16 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
 
   cv::Mat empty_dst = cv::Mat::zeros(dst_size.height, dst_size.width, CV_8UC3);
   g2o::SE3Quat TCw;
-  for(int i=0; i<dataset.Size(); i+=1){
-    //if(i < 10){
-    //  TCw = gt_Tcws.at(i);
-    //  viewer.SetCurrCamera(i, TCw, empty_dst);
-    //  continue;
-    //}
+  int i = 0; {
+    EigenMap<Jth, g2o::SE3Quat> updated_Tcws;
+    for(i=0; i<offset; i+=1){
+      TCw = gt_Tcws.at(i);
+      updated_Tcws[i] = TCw;
+    }
+    if(!updated_Tcws.empty())
+      viewer.SetCurrCamera(i-1, updated_Tcws, empty_dst);
+  }
+  for(; i<dataset.Size(); i+=1){
     const cv::Mat rgb   = dataset.GetImage(i, cv::IMREAD_COLOR);
     const cv::Mat rgb_r = dataset.GetRightImage(i, cv::IMREAD_COLOR);
     double frame_second = dataset.GetSecond(i);
@@ -209,15 +282,21 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     cv::Mat outline_edges = edge_detector->GetOutline();
     cv::Mat valid_mask = edge_detector->GetValidMask();
     cv::Mat valid_grad = valid_mask;
-    //outline_edges.setTo(1, depth > 80.);
-    //valid_mask.setTo(1, depth > 50.);
+
+    cv::Mat invalid_depthmask = GetInvalidDepthMask(gray,30.); {
+      //cv::Mat far_invalid_depth;
+      //cv::bitwise_and(invalid_depthmask, depth > 50., far_invalid_depth);
+      //outline_edges.setTo(1, far_invalid_depth);
+      outline_edges.setTo(1, invalid_depthmask);
+    }
+
     segmentor->Put(outline_edges, valid_mask);
     cv::Mat unsync_marker = segmentor->GetMarker();
     img_tracker->Put(gray, unsync_marker, snyc_min_iou);
     const std::vector<cv::Mat>& flow = img_tracker->GetFlow();
     cv::Mat synced_marker = img_tracker->GetSyncedMarker();
     const std::map<int,size_t>& marker_areas = img_tracker->GetMarkerAreas();
-    depth.setTo(0., depth > 100.);
+    depth.setTo(0., invalid_depthmask);
     NEW_SEG::Frame* frame = pipeline.Put(gray, depth, flow, synced_marker, marker_areas,
                                          gradx, grady, valid_grad, frame_second, rgb);
     img_tracker->ChangeSyncedMarker(synced_marker);
@@ -227,7 +306,10 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
       cv::Mat dynamic_mask = dataset.GetDynamicMask(i);
       pipeline.Visualize(rgb, dynamic_mask, dst);
     }
-    EigenMap<Jth, g2o::SE3Quat> updated_Tcws = pipeline.GetUpdatedTcqs();
+    EigenMap<Jth, g2o::SE3Quat> updated_Tcws;
+    for(auto it : pipeline.GetUpdatedTcqs()){
+      updated_Tcws[it.first+offset] = it.second*TCw;
+    }
     viewer.SetCurrCamera(i, updated_Tcws, dst);
     cv::Mat gt_insmask = dataset.GetInstanceMask(i);
     cv::Mat gt_dmask = dataset.GetDynamicMask(i);
@@ -253,7 +335,7 @@ int main(int argc, char** argv){
   //ComputeCacheOfKittiTrackingDataset();
   //TestKittiTrackingDataset();
   //TestPangolin(argc, argv);
-  TestKittiTrackingNewSLAM(argc, argv);
-  return 1;
+  return TestKittiTrackingNewSLAM(argc, argv);
+  //return TestColorSeg(argc, argv);
 }
 

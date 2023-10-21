@@ -792,6 +792,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
 
   std::map<Instance*, std::set<Mappoint*> > ins2mappoints;
   CountMappoints(curr_frame, ins2mappoints);
+  /*
   std::map<Instance*, Instance*> equivalent_instances; {
     std::map<Pth,float> density_scores0;
     for(const auto& it : marker_areas){
@@ -836,6 +837,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
     }
     curr_frame->SetInstances(synced_marker, pth2instances_);
   }
+  */
 
   std::map<Pth,float>& density_scores = vinfo_density_socres_;
   for(const auto& it : marker_areas){
