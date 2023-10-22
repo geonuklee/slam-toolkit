@@ -3,6 +3,7 @@
 #include "common.h"
 #include "g2o_types.h"
 #include "segslam.h"
+#include "util.h"
 #include <g2o/core/block_solver.h>
 #include <g2o/core/optimizable_graph.h>
 #include <g2o/core/optimization_algorithm_gauss_newton.h>
@@ -28,6 +29,175 @@ inline Instance* GetIns(Mappoint* mp){
   //return mp->GetInstance();
   return mp->GetLatestInstance();
 }
+
+std::set<Pth> Pipeline::NewDynamicDetect(Frame* curr_frame, Qth qth) {
+  bool verbose = true; // TODO parameterize
+  const int n_iter = 10;
+  const double dynamic_eval_duration = .81; // [sec]
+  const double th2d = 1.5*ChiSquaredThreshold(.9, 2);
+  const double th3d = 1.5*ChiSquaredThreshold(.9, 3);
+
+  const double sec_final = curr_frame->GetSec();
+  const std::vector<Mappoint*>& _mappoints = curr_frame->GetMappoints();
+
+  g2o::SparseOptimizer optimizer;
+  typedef g2o::BlockSolverPL<6,3> BlockSolver;
+  std::unique_ptr<BlockSolver::LinearSolverType> linear_solver = g2o::make_unique<g2o::LinearSolverEigen<BlockSolver::PoseMatrixType>>();
+  g2o::OptimizationAlgorithm* solver =  new g2o::OptimizationAlgorithmLevenberg(g2o::make_unique<BlockSolver>(std::move(linear_solver)));
+  //g2o::OptimizationAlgorithm* solver =  new g2o::OptimizationAlgorithmGaussNewton(g2o::make_unique<BlockSolver>(std::move(linear_solver)));
+  optimizer.setAlgorithm(solver);
+
+  Param param(camera_);
+  const StereoCamera* scam = dynamic_cast<const StereoCamera*>(camera_);
+  const double focal = scam->GetK()(0,0);
+  double uv_std = 1. / focal; // normalized standard deviation
+  const double uv_info = 1./uv_std/uv_std;
+  const auto Trl_ = scam->GetTrl();
+  const float base_line = -Trl_.translation().x();
+  const double invd_info = uv_info * base_line * base_line;  // focal legnth 1.인 normalized image ponint임을 고려.
+  const double delta = 5./focal;
+
+  auto sort_frame = [](Frame* a, Frame* b) { return a->GetId() > b->GetId(); };
+
+  std::map<Frame*, g2o::VertexSE3Expmap*>      v_poses;
+  std::map<Mappoint*, g2o::VertexSBAPointXYZ*> v_mappoints;
+  std::set<g2o::OptimizableGraph::Edge*> all_edges;
+  int n_vertex = 0;
+  for(int n =0; n < _mappoints.size(); n++){
+    Mappoint* mp = _mappoints.at(n);
+    if(!mp)
+      continue;
+    Instance* ins = GetIns(mp);
+    if(!ins)
+      continue;
+    if(ins->GetQth() != qth)
+      continue;
+    const Eigen::Vector3d Xq = mp->GetXq(qth);
+    std::set<Frame*> frames; {
+      std::set<Frame*, decltype(sort_frame) > _frames(sort_frame);
+      for(Frame* f : mp->GetKeyframes(qth) )
+        _frames.insert(f);
+      for(Frame* f : _frames){
+        if(!frames.empty() && (sec_final - f->GetSec() > dynamic_eval_duration) )
+          continue;
+        frames.insert(f);
+      }
+    }
+    frames.insert(curr_frame);
+    std::list<std::pair<Frame*, int> > dedges, pedges;
+    for(Frame* f : frames ){
+      int kpt_id = f->GetIndex(mp);
+      double z   = f->GetDepth(kpt_id);
+      bool valid_depth = z > 1e-5 && z < 40.; // ex) seq00 너무 먼, 건물에서 depth residual이 과하게 증가. HITNET의 오인식으로 의심.
+      if(valid_depth)
+        dedges.push_back( std::pair(f, kpt_id) );
+      else
+        pedges.push_back( std::pair(f, kpt_id) );
+    } // for frames
+    //if(pedges.size() < 2 && dedges.size() < 1) // nan
+    if(dedges.size() < 1)
+      continue;
+    g2o::VertexSBAPointXYZ* v_mp = new g2o::VertexSBAPointXYZ();
+    v_mp->setId(n_vertex++);
+    v_mp->setEstimate(mp->GetXq(qth));
+    v_mp->setMarginalized(true);
+    v_mp->setFixed(false);
+    optimizer.addVertex(v_mp);
+    v_mappoints[mp] = v_mp;
+    for(auto it_pedge : pedges){
+      Frame* f = it_pedge.first;
+      int kpt_id = it_pedge.second;
+      if(! v_poses.count(f) ){
+        g2o::VertexSE3Expmap* v_pose = new g2o::VertexSE3Expmap(); 
+        v_pose->setId(n_vertex++);
+        v_pose->setEstimate(f->GetTcq(qth));
+        v_pose->setMarginalized(false);
+        optimizer.addVertex(v_pose);
+        v_poses[f] = v_pose;
+      }
+      g2o::VertexSE3Expmap* v_pose = v_poses[f];
+      double z   = f->GetDepth(kpt_id);
+      Eigen::Vector2d uv = f->GetNormalizedPoint(kpt_id).head<2>();
+      g2o::OptimizableGraph::Edge* edge = new EdgeProjection(&param, uv_info, v_mp, v_pose, uv.head<2>() );
+      g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
+      rk->setDelta(delta);
+      edge->setRobustKernel(rk);
+      optimizer.addEdge(edge);
+    }
+    for(auto it_dedge : dedges){
+      Frame* f = it_dedge.first;
+      int kpt_id = it_dedge.second;
+      if(! v_poses.count(f) ){
+        g2o::VertexSE3Expmap* v_pose = new g2o::VertexSE3Expmap(); 
+        v_pose->setId(n_vertex++);
+        v_pose->setEstimate(f->GetTcq(qth));
+        v_pose->setMarginalized(false);
+        optimizer.addVertex(v_pose);
+        v_poses[f] = v_pose;
+      }
+      g2o::VertexSE3Expmap* v_pose = v_poses[f];
+      double z   = f->GetDepth(kpt_id);
+      Eigen::Vector3d uvi = f->GetNormalizedPoint(kpt_id);
+      uvi[2] = 1./z;
+      g2o::OptimizableGraph::Edge* edge = new EdgeSE3PointXYZDepth(&param, uv_info, invd_info, v_mp, v_pose, uvi);
+      g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
+      rk->setDelta(delta);
+      edge->setRobustKernel(rk);
+      optimizer.addEdge(edge);
+    }
+  } // for _mappoints
+  for(auto it : v_poses)
+    it.second->setFixed(true); // 고정을 안하면 FP가 너무 늘어난다.
+  //it.second->setFixed(it.first==curr_frame); // 그런데 이렇게 안하면 원경에서 FP가 생김. instance별로 분리해서 판정해야하나..
+  optimizer.setVerbose(false);
+  optimizer.initializeOptimization(0); // Optimize switchable edges only
+  optimizer.optimize(n_iter);
+
+  cv::Mat& dst = vinfo_dynamic_detects_;
+  if(verbose){
+    dst = GetColoredLabel(vinfo_synced_marker_);
+    dst.setTo(CV_RGB(255,0,0), GetBoundary(vinfo_synced_marker_,2));
+    cv::addWeighted(cv::Mat::zeros(dst.rows,dst.cols,CV_8UC3), .5, dst, .5, 1., dst);
+  }
+
+  std::map<Instance*, std::pair<int,int> > counts;
+  for(auto it : v_mappoints){
+    Mappoint* mp = it.first;
+    g2o::VertexSBAPointXYZ* v_mp = it.second;
+    std::set<g2o::HyperGraph::Edge*> edges = v_mp->edges();
+    bool is_outlier = false;
+    for(g2o::HyperGraph::Edge* _edge : edges){
+      g2o::OptimizableGraph::Edge* edge = static_cast<g2o::OptimizableGraph::Edge*>(_edge);
+      is_outlier = edge->chi2() > (edge->dimension() > 2 ? th3d : th2d );
+      if(is_outlier)
+        break;
+    }
+    // instance별 분류.
+    Instance* ins = GetIns(mp);
+    counts[ins].second++;
+    if(is_outlier)
+      counts[ins].first++;
+
+    if(verbose){
+      int kptidx = curr_frame->GetIndex(mp);
+      const cv::Point2f& pt = curr_frame->GetKeypoint(kptidx).pt;
+      cv::circle(dst, pt, 3, is_outlier?CV_RGB(255,0,0):CV_RGB(0,255,0),-1);
+    }
+  } // for it : v_mappoints
+
+  std::set<Pth> outliers;
+  for(auto it : counts){
+    const int& n_mp = it.second.second;
+    const int& n_outlier = it.second.first;
+    if(n_mp < 10)
+      continue;
+    if(n_outlier < .7*n_mp)
+      continue;
+    outliers.insert(it.first->GetId());
+  } 
+  return outliers;
+}
+
 
 g2o::SE3Quat EstimateTcp(const std::vector<cv::Point3f>& Xp,
                          const std::vector<cv::Point3f>& vec_uvz_curr,
@@ -134,11 +304,10 @@ g2o::SE3Quat PoseTracker::GetTcq(const Camera* camera,
   return Tcq;
 }
 
-void GetEdges(g2o::VertexSBAPointXYZ* v_mp, g2o::VertexSE3Expmap* v_pose, VertexSwitchLinear* v_switch,
+void GetEdges(g2o::VertexSBAPointXYZ* v_mp, g2o::VertexSE3Expmap* v_pose,
               const Param& param, double uv_info, double invd_info, double delta,
               double rprj_threshold, double invd_threshold,
               Frame* frame, int kpt_idx,
-              g2o::OptimizableGraph::Edge*& edge_switchable,
               g2o::OptimizableGraph::Edge*& edge_filtered
               ) {
   const cv::KeyPoint& kpt = frame->GetKeypoint(kpt_idx);
@@ -152,7 +321,6 @@ void GetEdges(g2o::VertexSBAPointXYZ* v_mp, g2o::VertexSE3Expmap* v_pose, Vertex
   h[2] = h_invd;
   double greater_invd = std::max(measure_invd,h_invd);
   bool valid_depth = z > 1e-5 && z < 80.; // ex) seq00 너무 먼, 건물에서 depth residual이 과하게 증가. HITNET의 오인식으로 의심.
-  edge_switchable = nullptr;
   edge_filtered = nullptr;
   g2o::Vector2 rprj_err(h.head<2>() - uvi.head<2>() );
   if( (std::abs(rprj_err[0]) < rprj_threshold) && (std::abs(rprj_err[1]) < rprj_threshold) && std::abs(h_invd-measure_invd) < invd_threshold ){
@@ -164,30 +332,20 @@ void GetEdges(g2o::VertexSBAPointXYZ* v_mp, g2o::VertexSE3Expmap* v_pose, Vertex
     rk->setDelta(delta);
     edge_filtered->setRobustKernel(rk);
   }
-  else if (v_switch){
-    if(valid_depth)
-      edge_switchable = new EdgeSwSE3PointXYZDepth(&param, uv_info, invd_info, v_mp, v_pose, v_switch, uvi);
-    else
-      edge_switchable = new EdgeSwProjection(&param, uv_info, v_mp, v_pose, v_switch, uvi.head<2>() );;
-    g2o::RobustKernelHuber* rk = new g2o::RobustKernelHuber;
-    rk->setDelta(delta);
-    edge_switchable->setRobustKernel(rk);
-  }
   return;
 }
 
-std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
-                                  Qth qth,
-                                  const std::set<Mappoint*>& neighbor_mappoints,
-                                  const std::map<Jth, Frame*>& neighbor_keyframes,
-                                  Frame* curr_frame,
-                                  Frame* prev_frame,
-                                  const std::set<Pth>& fixed_instances,
-                                  const cv::Mat& gradx,
-                                  const cv::Mat& grady,
-                                  const cv::Mat& valid_grad,
-                                  bool vis_verbose
-                                 ) {
+void Mapper::ComputeLBA(const Camera* camera,
+                        Qth qth,
+                        const std::set<Mappoint*>& neighbor_mappoints,
+                        const std::map<Jth, Frame*>& neighbor_keyframes,
+                        Frame* curr_frame,
+                        Frame* prev_frame,
+                        const cv::Mat& gradx,
+                        const cv::Mat& grady,
+                        const cv::Mat& valid_grad,
+                        bool vis_verbose
+                       ) {
   const StereoCamera* scam = dynamic_cast<const StereoCamera*>(camera);
   const double focal = scam->GetK()(0,0);
   double uv_std = 1. / focal; // normalized standard deviation
@@ -195,11 +353,10 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
   const auto Trl_ = scam->GetTrl();
   const float base_line = -Trl_.translation().x();
   const double invd_info = uv_info * base_line * base_line;  // focal legnth 1.인 normalized image ponint임을 고려.
-  const double rprj_threshold = 10./focal; // rprj error threshold on normalized inmage plane
+  const double rprj_threshold = 5./focal; // rprj error threshold on normalized inmage plane
   const double delta = 5./focal;
   const double invd_threshold = rprj_threshold * base_line;
   const int n_iter = 10;
-  const double dynamic_eval_duration = .5; // [sec]
   const double sec_final = curr_frame->GetSec();
 
   std::map<Jth, Frame*> frames = neighbor_keyframes;
@@ -221,9 +378,6 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
 
   std::map<Mappoint*, g2o::VertexSBAPointXYZ*> v_mappoints;
   std::map<Instance*, size_t> mp_counts;
-  std::map<Instance*, VertexSwitchLinear*>  v_switches;
-  std::map<Instance*, EdgeSwitchPrior*>     prior_edges;
-  std::map<Instance*, double>               n_pth_measurements;
   Frame*const kf_latest = neighbor_keyframes.rbegin()->second;
   const int kf_id_latest = kf_latest->GetKfId(qth);
   Frame*const kf_oldest = neighbor_keyframes.begin()->second;
@@ -243,23 +397,6 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
     optimizer.addVertex(v_mp);
     v_mappoints[mp] = v_mp;
     mp_counts[ins]++;
-  }
-  for(auto it : mp_counts){
-    //if(it_pth.second < 5) // Tracked mappoints가 너무 적은 instance는 생략.
-    //  continue;
-    if(fixed_instances.count( it.first->GetId() ))
-      continue;
-    auto v_switch = new VertexSwitchLinear();
-    v_switch->setId(optimizer.vertices().size() );
-    optimizer.addVertex(v_switch);
-    auto sw_prior_edge = new EdgeSwitchPrior();
-    sw_prior_edge->setMeasurement(1.);
-    v_switch->setEstimate(.4);
-    sw_prior_edge->setVertex(0, v_switch);
-    sw_prior_edge->setLevel(0);
-    optimizer.addEdge(sw_prior_edge);
-    v_switches[it.first] = v_switch;
-    prior_edges[it.first] = sw_prior_edge;
   }
 
   for(auto it_frame : frames){
@@ -286,77 +423,15 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
         continue;
       auto v_mp = v_mappoints.at(mp);
       Instance* ins = GetIns(mp);
-      VertexSwitchLinear* v_switch = v_switches.count(ins) ? v_switches.at(ins) : nullptr;
-      g2o::OptimizableGraph::Edge *edge_switchable, *edge_filtered;
-
-      if(sec_final - frame->GetSec() > dynamic_eval_duration)
-        v_switch = nullptr;
-      GetEdges(v_mp, v_pose, v_switch, param, uv_info, invd_info, delta, rprj_threshold, invd_threshold,
-               frame, n, edge_switchable, edge_filtered);
-      if(v_switch){
-        //n_pth_measurements[ins] += edge_switchable? edge_switchable->dimension() : 2;
-        n_pth_measurements[ins] += 1;
-      }
-      if( edge_switchable ){
-        edge_switchable->setLevel(0);
-        optimizer.addEdge(edge_switchable);
-      }
+      g2o::OptimizableGraph::Edge *edge_filtered;
+      GetEdges(v_mp, v_pose, param, uv_info, invd_info, delta, rprj_threshold, invd_threshold, frame, n, edge_filtered);
       if(edge_filtered){
         edge_filtered->setLevel(1);
         optimizer.addEdge(edge_filtered);
-        n_filtered_edges++;
-        if(v_switch)
-          filtered_edges[ins].push_back(edge_filtered);
       }
-#if 0
-      // 너무 느리다. Marginalization 준비 안한탓에..
-      for(Frame* kf : mp->GetKeyframes(qth) ) {
-        Jth kf_jth = kf->GetId();
-        if(frames.count(kf_jth))
-          continue; // optmizable poses
-        if(!v_poses.count(kf_jth) ) {
-          g2o::VertexSE3Expmap* v_kf = new g2o::VertexSE3Expmap();
-          v_kf->setId(optimizer.vertices().size() );
-          v_kf->setEstimate(kf->GetTcq(qth));
-          v_kf->setMarginalized(false);
-          v_kf->setFixed(true); // out of neighbors
-          optimizer.addVertex(v_kf);
-          v_poses[kf_jth].first = v_kf;
-        }
-        g2o::VertexSE3Expmap* v_kf = v_poses.at(kf_jth).first;
-        int kpt_idx = kf->GetIndex(mp);
-        GetEdges(v_mp, v_kf, nullptr, param, uv_info, delta, invd_info, rprj_threshold, kf, kpt_idx,
-                 edge_switchable, edge_filtered); // no edge_switchable because of nullptr v_switch
-        if(edge_filtered)
-          optimizer.addEdge(edge_filtered);
-      }
-#endif
     } // for int n < jth_mappoints.size();
   } // for auto it_frame : frames
-  for(auto it_v_sw : prior_edges){
-    int n = std::max<int>(n_pth_measurements[it_v_sw.first], 1);
-    double info = ChiSquaredThreshold(.9, (double) n);
-    //double info = 1e-4 * n; // 유도
-    it_v_sw.second->SetInfomation(.1*info); // TODO switchable이 아닌 값을 직접비교하는 접근.
-  }
   optimizer.setVerbose(false);
-
-  if(!v_switches.empty()){
-    for(auto it_mp : v_mappoints)
-      it_mp.second->setFixed(true);
-    for(auto it_pose : v_poses)
-      it_pose.second.first->setFixed(true);
-    optimizer.initializeOptimization(0); // Optimize switchable edges only
-    optimizer.optimize(n_iter);
-    for(auto it : v_switches)
-      it.second->setFixed(true);
-    for(auto it : filtered_edges){
-      VertexSwitchLinear* v_switch  = v_switches.at(it.first);
-      if(v_switch->estimate() < .3)
-        for(auto edge : it.second)
-          edge->setLevel(0);
-    }
-  }
 
   for(auto it_mp : v_mappoints)
     it_mp.second->setFixed(false);
@@ -381,11 +456,7 @@ std::map<Pth,float> Mapper::ComputeLBA(const Camera* camera,
     Mappoint* mp = it_v_mp.first;
     mp->SetXq(qth,vertex->estimate());
   }
-  //<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-  std::map<Pth, float> switch_state; // posterior for inlier.
-  for(auto it : v_switches)
-    switch_state[it.first->GetId()] = it.second->estimate();
-  return switch_state;
+  return;
 }
 
 } // namespace NEW_SEG

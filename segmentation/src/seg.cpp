@@ -25,7 +25,7 @@ cv::Mat GetInvalidDepthMask(const cv::Mat gray, double range) {
   cv::convertScaleAbs(grad_x, abs_grad_x);
   // Threshold the result to get edges with value 1 and non-edges with value 0
   cv::Mat v_edges;
-  cv::threshold(abs_grad_x, v_edges, 150, 1, cv::THRESH_BINARY);
+  cv::threshold(abs_grad_x, v_edges, 100, 1, cv::THRESH_BINARY);
   // Convert the thresholded image to CV_8UC1
   v_edges.convertTo(v_edges, CV_8UC1);
 

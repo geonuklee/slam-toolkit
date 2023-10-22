@@ -132,71 +132,6 @@ void DrawFigureForPaper(cv::Mat rgb, cv::Mat depth, cv::Mat outline_edges, cv::M
   return;
 }
 
-int TestColorSeg(int argc, char** argv) {
-  if(argc < 3){
-    std::cout << "Need 3 argc" << std::endl;
-    std::cout << argc << std::endl;
-    std::cout << argv[2] << std::endl;
-    return -1;
-  }
-  const std::string dataset_path = GetPackageDir()+ "/kitti_tracking_dataset/";
-  const std::string dataset_type = "training";
-  const std::string seq(argv[1]);
-  KittiTrackingDataset dataset(dataset_type, seq, dataset_path);
-  std::shared_ptr<OutlineEdgeDetector> edge_detector( new OutlineEdgeDetectorWithSIMD );  // After   2.5 [milli sec]
-  std::shared_ptr<Segmentor> segmentor( new SegmentorNew );                               // After  5~10 [milli sec] , with octave 2
-  std::shared_ptr<ImageTrackerNew> img_tracker( new ImageTrackerNew);                     // Afte  10~11 [milli sec]
-
-  const auto& D = dataset.GetCamera()->GetD();
-  const StereoCamera* camera = dynamic_cast<const StereoCamera*>(dataset.GetCamera());
-  assert(camera);
-  const auto Trl_ = camera->GetTrl();
-  const float base_line = -Trl_.translation().x();
-  const float fx = camera->GetK()(0,0);
-  const float fy = camera->GetK()(1,1);
-  const float min_disp = 1.;
-  bool stop = true;
-
-  double max_concave_depth = 30.;
-  for(int i=0; i<dataset.Size(); i+=1){
-    cv::Mat rgb   = dataset.GetImage(i, cv::IMREAD_COLOR);
-    const cv::Mat rgb_r = dataset.GetRightImage(i, cv::IMREAD_COLOR);
-    double frame_second = dataset.GetSecond(i);
-    cv::Mat gray, gray_r;
-    cv::cvtColor(rgb, gray, cv::COLOR_BGR2GRAY);
-    cv::cvtColor(rgb_r, gray_r, cv::COLOR_BGR2GRAY);
-
-    cv::Mat depth = dataset.GetDepthImage(i);
-    cv::Mat invalid_depthmask = GetInvalidDepthMask(gray,20.);
-
-    edge_detector->PutDepth(depth, fx, fy);
-    cv::Mat outline_edges = edge_detector->GetOutline(); //cv::dilate(diff_outline, diff_outline, cv::Mat(), cv::Point(-1, -1), 3);
-    outline_edges.setTo(1, invalid_depthmask);
-
-    segmentor->Put(outline_edges, invalid_depthmask<1); // TODO validmask가 의도대로 안됨.
-    cv::Mat unsync_marker = segmentor->GetMarker();
-
-    cv::Mat dst_outline = rgb.clone();
-    dst_outline.setTo(CV_RGB(255,0,0), outline_edges);
-    cv::imshow("rgb", rgb);
-    cv::imshow("dst", dst_outline);
-
-    cv::Mat dst_marker = GetColoredLabel(unsync_marker);
-    dst_marker.setTo(CV_RGB(0,0,0), GetBoundary(unsync_marker,2));
-
-    cv::imshow("maker", dst_marker);
-    //cv::imshow("depth", .01*depth);
-    //cv::imshow("dist", .02*dist);
-    char c = cv::waitKey(stop?0:1);
-    if(c == 'q')
-      break;
-    else if (c == 's')
-      stop = !stop;
-  }
-
-  return 1;
-}
-
 #include "seg_viewer.h"
 int TestKittiTrackingNewSLAM(int argc, char** argv) {
   if(argc < 3){
@@ -284,10 +219,10 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     cv::Mat valid_grad = valid_mask;
 
     cv::Mat invalid_depthmask = GetInvalidDepthMask(gray,30.); {
-      //cv::Mat far_invalid_depth;
-      //cv::bitwise_and(invalid_depthmask, depth > 50., far_invalid_depth);
-      //outline_edges.setTo(1, far_invalid_depth);
-      outline_edges.setTo(1, invalid_depthmask);
+      cv::Mat far_invalid_depth;
+      cv::bitwise_and(invalid_depthmask, depth > 50., far_invalid_depth);
+      outline_edges.setTo(1, far_invalid_depth);
+      //outline_edges.setTo(1, invalid_depthmask);
     }
 
     segmentor->Put(outline_edges, valid_mask);
@@ -296,7 +231,9 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     const std::vector<cv::Mat>& flow = img_tracker->GetFlow();
     cv::Mat synced_marker = img_tracker->GetSyncedMarker();
     const std::map<int,size_t>& marker_areas = img_tracker->GetMarkerAreas();
-    depth.setTo(0., invalid_depthmask);
+    //depth.setTo(0., invalid_depthmask); // SLAM pose tracking을 망친다.
+    //cv::imshow("depth", .01*depth);
+    //cv::imshow("gradaxy", .1* (cv::abs(gradx)+cv::abs(grady)) );
     NEW_SEG::Frame* frame = pipeline.Put(gray, depth, flow, synced_marker, marker_areas,
                                          gradx, grady, valid_grad, frame_second, rgb);
     img_tracker->ChangeSyncedMarker(synced_marker);

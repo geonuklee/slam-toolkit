@@ -10,8 +10,8 @@
 
 namespace NEW_SEG {
 std::set<Pth> Pipeline::NewFilterOutlierMatches(Frame* curr_frame,const EigenMap<Qth, g2o::SE3Quat>& Tcps, bool verbose) {
+  const double focal = camera_->GetK()(0,0);
   bool use_extrinsic_guess = true;
-  double rprj_threshold = 3.;
   double confidence = .99;
   cv::Mat& dst = vinfo_match_filter_;
   if(verbose){
@@ -58,7 +58,6 @@ std::set<Pth> Pipeline::NewFilterOutlierMatches(Frame* curr_frame,const EigenMap
   std::set<Pth> pnp_fixed_instances;
 
   const StereoCamera* scam = dynamic_cast<const StereoCamera*>(camera_);
-  const double focal = scam->GetK()(0,0);
   double uv_std = 1. / focal; // normalized standard deviation
   const double uv_info = 1./uv_std/uv_std;
   const auto Trl_ = scam->GetTrl();
@@ -69,6 +68,9 @@ std::set<Pth> Pipeline::NewFilterOutlierMatches(Frame* curr_frame,const EigenMap
   // TODO Fisher information에 의해 nomralized된 3D 3D를 비교해야 한다. translation의 scale은 필요 없음.
   const double th2d = ChiSquaredThreshold(.7, 2); // seq 05, frame 180 작고 빠른, 맞은편 instance에 트래킹 유지정도 되려면.., uvz
   const double th3d = ChiSquaredThreshold(.7, 3);
+  //double rprj_threshold = 3./focal;
+  //const double th2d = 2.*rprj_threshold*rprj_threshold*uv_info;
+  //const double th3d = th2d + .5*th2d*base_line*base_line;
 
   for(auto it : segmented_points){
     if(it.second.size() < 10){ // TODO set min num points
