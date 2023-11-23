@@ -34,8 +34,8 @@ std::set<Pth> Pipeline::NewDynamicDetect(Frame* curr_frame, Qth qth) {
   bool verbose = true; // TODO parameterize
   const int n_iter = 10;
   const double dynamic_eval_duration = .81; // [sec]
-  const double th2d = 1.5*ChiSquaredThreshold(.9, 2);
-  const double th3d = 1.5*ChiSquaredThreshold(.9, 3);
+  const double th2d = 3.*ChiSquaredThreshold(.9, 2);
+  const double th3d = 3.*ChiSquaredThreshold(.9, 3);
 
   const double sec_final = curr_frame->GetSec();
   const std::vector<Mappoint*>& _mappoints = curr_frame->GetMappoints();

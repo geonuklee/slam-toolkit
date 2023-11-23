@@ -1,4 +1,6 @@
 #include "../include/seg.h"
+#include <opencv2/core/hal/interface.h>
+#include <opencv2/imgproc.hpp>
 
 static bool SameSign(const float& v1, const float& v2){
   if(v1 > 0.)
@@ -527,4 +529,152 @@ void OutlineEdgeDetectorWithoutSIMD::PutDepth(cv::Mat depth, float fx, float fy)
     outline_edges_ = WithoutSIMD::FilterThinNoise(outline_edges_);
   }
   return;
+}
+
+cv::Mat GetNweDDEdges(const cv::Mat depth) {
+  // 원경에서는 FP가 안생기게, invd(disparity)를 기준으로 찾아냄.
+  cv::Mat edge = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
+  float l = 2;
+  std::vector<cv::Point2i> samples = {
+    cv::Point2i(l,0),
+    cv::Point2i(0,l),
+  };
+
+  for(int r0 = 0; r0 < depth.rows; r0++) {
+    for(int c0 = 0; c0 < depth.cols; c0++) {
+      const cv::Point2i pt(c0,r0);
+      unsigned char& e = edge.at<unsigned char>(pt);
+
+      for(const auto& dpt : samples){
+        const cv::Point2i pt0 = pt-dpt;
+        if(pt0.x < 0 || pt0.x >= depth.cols || pt0.y < 0 || pt0.y >= depth.rows)
+          continue;
+        const float invz0 = 1. / depth.at<float>(pt0);
+
+        const cv::Point2i pt1 = pt0+dpt;
+        if(pt1.x < 0 || pt1.x >= depth.cols || pt1.y < 0 || pt1.y >= depth.rows)
+          continue;
+        const float invz1 = 1. / depth.at<float>(pt1);
+
+        float th = invz0 * 0.1;
+        if(std::abs(invz1-invz0) < th)
+          continue;
+        e = true;
+        break;
+      } // samples
+    }
+  }
+
+  return edge;
+}
+
+cv::Mat GetNewConcaveedges(const cv::Mat depth, const cv::Mat dd_edges, float fx) {
+  cv::Mat edge = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
+  float hw = 50.; // half width TODO disparity에 비례하게 바꿔서, 눈앞의 자동차 overseg방지.
+  float hh = 10.; // half height
+
+  for(int r0 = hh; r0 < depth.rows-hh; r0++) {
+    for(int c0 = hw; c0 < depth.cols-hw; c0++) {
+      const cv::Point2i pt(c0,r0);
+      unsigned char& e = edge.at<unsigned char>(pt);
+      if( dd_edges.at<uchar>(pt) )
+        continue;
+
+      bool left_dd = false;
+      for(int l = 1; l < hw; l++) {
+        const cv::Point2i pt_l(pt.x-l, pt.y);
+        if(dd_edges.at<uchar>(pt_l) < 1)
+          continue;
+        left_dd = true;
+        break;
+      }
+      bool right_dd = false;
+      for(int l = 1; l < hw; l++) {
+        const cv::Point2i pt_r(pt.x + l, pt.y);
+        if(dd_edges.at<uchar>(pt_r) < 1)
+          continue;
+        right_dd = true;
+        break;
+      }
+      if(left_dd || right_dd)
+        continue;
+
+      // Convexity 계산
+#if 0
+      /*
+      원경에서는  ㄴ자 인식할거 없이..
+      */
+#else
+      /*
+        시야각에 따라, <는 인식하지만 ㄴ 자는 놓치는거 대응하느라,.. +.5th 조건 추가.
+      */
+      const float invz = 1. / depth.at<float>(pt);
+      const float th = .05 * invz;
+      //const float th = .2/fx;
+
+      {
+        const cv::Point2i pt_y0(pt.x, pt.y-hh);
+        const cv::Point2i pt_y1(pt.x, pt.y+hh);
+        if( pt_y0.y > 0 && pt_y1.y < depth.rows){
+          const float invz0 = 1. / depth.at<float>(pt_y0);
+          const float invz1 = 1. / depth.at<float>(pt_y1);
+          if(invz < invz0-th && invz < invz1+.5*th)
+            e = true;
+          else if(invz < invz1-th && invz < invz0+.5*th)
+            e = true;
+        }
+      }
+     if(!e){
+        const cv::Point2i pt_x0(pt.x-hh, pt.y);
+        const cv::Point2i pt_x1(pt.x+hh, pt.y);
+        if( pt_x0.x > 0 && pt_x1.x < depth.rows){
+          const float invz0 = 1. / depth.at<float>(pt_x0);
+          const float invz1 = 1. / depth.at<float>(pt_x1);
+          if(invz < invz0-th && invz < invz1+.5*th)
+            e = true;
+          else if(invz < invz1-th && invz < invz0+.5*th)
+            e = true;
+        }
+      }
+#endif
+    } // cols
+  } // rows
+
+
+  return edge;
+}
+
+cv::Mat GetConvexities(const cv::Mat depth, float fx, float fy, const cv::Mat rgb) {
+  /*
+    * convexity 정확하게 계산하는거 먼저. 최적화는 나중에.
+  */
+  cv::Mat dd_edges = GetNweDDEdges(depth); // concave_edge를 보완해주는 positive detection이 없음.
+  cv::Mat concave_edges = GetNewConcaveedges(depth, dd_edges, fx);
+
+  cv::Mat dist;
+  cv::distanceTransform(dd_edges<1, dist, cv::DIST_L2, cv::DIST_MASK_3);
+  cv::imshow("dist", .01*dist);
+
+
+  cv::Mat expanded_ddedges, expanded_concavedges;
+  cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5,5));
+  cv::dilate(dd_edges, expanded_ddedges, kernel, cv::Point(-1, -1), 1);
+  cv::dilate(concave_edges, expanded_concavedges, kernel, cv::Point(-1, -1), 1);
+  cv::Mat dst;
+  cv::cvtColor(rgb, dst, cv::COLOR_BGR2GRAY);
+  cv::cvtColor(dst, dst, cv::COLOR_GRAY2BGR);
+  dst.setTo(CV_RGB(255,0,0), expanded_concavedges);
+  dst.setTo(CV_RGB(0,0,255), expanded_ddedges);
+  cv::imshow("dst", dst);
+
+  /*
+  cv::Mat normals = cv::Mat::zeros(depth.rows, depth.cols, CV_32FC3);
+  cv::Mat concave_edges = hessian < -3.;
+  cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5,5));
+  cv::dilate(concave_edges, concave_edges, kernel, cv::Point(-1, -1), 1);
+  //cv::imshow("convexedges", 255*(hessian>3.));
+  //cv::imshow("hessian", .01*hessian);
+  return hessian;
+  */
+  return cv::Mat();
 }

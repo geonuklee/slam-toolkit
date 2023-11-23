@@ -128,9 +128,48 @@ void DrawFigureForPaper(cv::Mat rgb, cv::Mat depth, cv::Mat outline_edges, cv::M
   cv::imwrite(output_dir+"/ex_dynamics.png", vis_dynamics);
   cv::imshow("ndepth", ndepth);
   cv::imwrite(output_dir+"/ex_depth.png", ndepth);
-
   return;
 }
+
+int TestConcaveEdges(int argc, char** argv){
+  if(argc < 3){
+    std::cout << "Need 3 argc" << std::endl;
+    std::cout << argc << std::endl;
+    std::cout << argv[2] << std::endl;
+    return -1;
+  }
+  int offset = 0;
+  if(argc == 4)
+    offset = std::stoi(std::string(argv[3]));
+  const std::string dataset_path = GetPackageDir()+ "/kitti_tracking_dataset/";
+  const std::string dataset_type = "training";
+  const std::string seq(argv[1]);
+  KittiTrackingDataset dataset(dataset_type, seq, dataset_path);
+  const StereoCamera* camera = dynamic_cast<const StereoCamera*>(dataset.GetCamera());
+  assert(camera);
+  const float fx = camera->GetK()(0,0);
+  const float fy = camera->GetK()(1,1);
+
+  bool stop = true;
+  for(int i =0; i < dataset.Size(); i++){
+    cv::Mat rgb = dataset.GetImage(i);
+    cv::Mat depth = dataset.GetDepthImage(i);
+    cv::imshow("depth0", .01*depth);
+    cv::imshow("depth1", .05*depth);
+
+    GetConvexities(depth,fx,fy,rgb);
+
+    char c = cv::waitKey(stop?0:1);
+    if(c=='q')
+      break;
+    else if (c == 's')
+      stop = !stop;
+
+  }
+  cv::waitKey();
+  return 0;
+}
+
 
 #include "seg_viewer.h"
 int TestKittiTrackingNewSLAM(int argc, char** argv) {
@@ -272,7 +311,8 @@ int main(int argc, char** argv){
   //ComputeCacheOfKittiTrackingDataset();
   //TestKittiTrackingDataset();
   //TestPangolin(argc, argv);
-  return TestKittiTrackingNewSLAM(argc, argv);
+  //return TestKittiTrackingNewSLAM(argc, argv);
+  return TestConcaveEdges(argc, argv);
   //return TestColorSeg(argc, argv);
 }
 
