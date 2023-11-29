@@ -1,5 +1,9 @@
 #include "../include/seg.h"
+#include "util.h"
+#include <cstdint>
+#include <opencv2/core.hpp>
 #include <opencv2/core/hal/interface.h>
+#include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 
 static bool SameSign(const float& v1, const float& v2){
@@ -531,7 +535,7 @@ void OutlineEdgeDetectorWithoutSIMD::PutDepth(cv::Mat depth, float fx, float fy)
   return;
 }
 
-cv::Mat GetNweDDEdges(const cv::Mat depth) {
+cv::Mat OutlineEdgeDetectorWithSizelimit::ComputeDDEdges(const cv::Mat depth) const {
   // 원경에서는 FP가 안생기게, invd(disparity)를 기준으로 찾아냄.
   cv::Mat edge = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
   float l = 2;
@@ -543,8 +547,6 @@ cv::Mat GetNweDDEdges(const cv::Mat depth) {
   for(int r0 = 0; r0 < depth.rows; r0++) {
     for(int c0 = 0; c0 < depth.cols; c0++) {
       const cv::Point2i pt(c0,r0);
-      unsigned char& e = edge.at<unsigned char>(pt);
-
       for(const auto& dpt : samples){
         const cv::Point2i pt0 = pt-dpt;
         if(pt0.x < 0 || pt0.x >= depth.cols || pt0.y < 0 || pt0.y >= depth.rows)
@@ -555,12 +557,12 @@ cv::Mat GetNweDDEdges(const cv::Mat depth) {
         if(pt1.x < 0 || pt1.x >= depth.cols || pt1.y < 0 || pt1.y >= depth.rows)
           continue;
         const float invz1 = 1. / depth.at<float>(pt1);
-
         float th = invz0 * 0.1;
-        if(std::abs(invz1-invz0) < th)
+        float diff = invz1 - invz0;
+        if(std::abs(diff) < th)
           continue;
-        e = true;
-        break;
+        edge.at<unsigned char>(pt0) = diff < 0 ? DdType::FG : DdType::BG;
+        edge.at<unsigned char>(pt1) = diff > 0 ? DdType::FG : DdType::BG;
       } // samples
     }
   }
@@ -568,21 +570,28 @@ cv::Mat GetNweDDEdges(const cv::Mat depth) {
   return edge;
 }
 
-cv::Mat GetNewConcaveedges(const cv::Mat depth, const cv::Mat dd_edges, float fx) {
-  cv::Mat edge = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
-  float hw = 50.; // half width TODO disparity에 비례하게 바꿔서, 눈앞의 자동차 overseg방지.
-  float hh = 10.; // half height
 
-  for(int r0 = hh; r0 < depth.rows-hh; r0++) {
-    for(int c0 = hw; c0 < depth.cols-hw; c0++) {
+cv::Mat OutlineEdgeDetectorWithSizelimit::ComputeConcaveEdges(const cv::Mat depth, const cv::Mat dd_edges, float fx, float fy) const {
+  cv::Mat edge = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
+  const float sample_pixelwidth = 10.; // half height
+  const float min_obj_width = 1.; // [meter]
+
+  for(int r0 = sample_pixelwidth; r0 < depth.rows-sample_pixelwidth; r0++) {
+    for(int c0 = sample_pixelwidth; c0 < depth.cols-sample_pixelwidth; c0++) {
       const cv::Point2i pt(c0,r0);
-      unsigned char& e = edge.at<unsigned char>(pt);
+      const float& z0 = depth.at<float>(pt);
+      uchar& e = edge.at<uchar>(pt);
       if( dd_edges.at<uchar>(pt) )
         continue;
-
+#if 1
       bool left_dd = false;
+      float hw = fx * min_obj_width / z0;
       for(int l = 1; l < hw; l++) {
         const cv::Point2i pt_l(pt.x-l, pt.y);
+        if(pt_l.x < 0)
+          break;
+        if(z0 - depth.at<float>(pt_l) > min_obj_width)
+          break;
         if(dd_edges.at<uchar>(pt_l) < 1)
           continue;
         left_dd = true;
@@ -591,6 +600,10 @@ cv::Mat GetNewConcaveedges(const cv::Mat depth, const cv::Mat dd_edges, float fx
       bool right_dd = false;
       for(int l = 1; l < hw; l++) {
         const cv::Point2i pt_r(pt.x + l, pt.y);
+        if(pt_r.x >= depth.rows)
+          break;
+        if(z0 - depth.at<float>(pt_r) > min_obj_width)
+          break;
         if(dd_edges.at<uchar>(pt_r) < 1)
           continue;
         right_dd = true;
@@ -598,83 +611,342 @@ cv::Mat GetNewConcaveedges(const cv::Mat depth, const cv::Mat dd_edges, float fx
       }
       if(left_dd || right_dd)
         continue;
-
+#endif
       // Convexity 계산
-#if 0
-      /*
-      원경에서는  ㄴ자 인식할거 없이..
-      */
-#else
-      /*
-        시야각에 따라, <는 인식하지만 ㄴ 자는 놓치는거 대응하느라,.. +.5th 조건 추가.
-      */
-      const float invz = 1. / depth.at<float>(pt);
-      const float th = .05 * invz;
-      //const float th = .2/fx;
-
+#if 1
+      float hessian_th = -20.;
       {
-        const cv::Point2i pt_y0(pt.x, pt.y-hh);
-        const cv::Point2i pt_y1(pt.x, pt.y+hh);
+        const cv::Point2i pt_y0(pt.x, pt.y-sample_pixelwidth);
+        const cv::Point2i pt_y1(pt.x, pt.y+sample_pixelwidth);
         if( pt_y0.y > 0 && pt_y1.y < depth.rows){
-          const float invz0 = 1. / depth.at<float>(pt_y0);
-          const float invz1 = 1. / depth.at<float>(pt_y1);
-          if(invz < invz0-th && invz < invz1+.5*th)
-            e = true;
-          else if(invz < invz1-th && invz < invz0+.5*th)
-            e = true;
+          const float dy = sample_pixelwidth/fy*z0;
+          const float gy0 = (z0 - depth.at<float>(pt_y0)) / dy;
+          const float gy1 = (depth.at<float>(pt_y1) - z0) / dy;
+          // atan2(dz0, dy) , atan2(dz1,dy)으로 내각을 구해야... 하지만..
+          if( (gy1-gy0)/dy < hessian_th)
+            e |= VERTICAL;
         }
       }
-     if(!e){
-        const cv::Point2i pt_x0(pt.x-hh, pt.y);
-        const cv::Point2i pt_x1(pt.x+hh, pt.y);
-        if( pt_x0.x > 0 && pt_x1.x < depth.rows){
-          const float invz0 = 1. / depth.at<float>(pt_x0);
-          const float invz1 = 1. / depth.at<float>(pt_x1);
-          if(invz < invz0-th && invz < invz1+.5*th)
-            e = true;
-          else if(invz < invz1-th && invz < invz0+.5*th)
-            e = true;
+      {
+        const cv::Point2i pt_x0(pt.x-sample_pixelwidth, pt.y);
+        const cv::Point2i pt_x1(pt.x+sample_pixelwidth, pt.y);
+        if( pt_x0.x > 0 && pt_x1.x < depth.cols){
+          const float dx = sample_pixelwidth/fx*z0;
+          const float gx0 = (z0 - depth.at<float>(pt_x0)) / dx;
+          const float gx1 = (depth.at<float>(pt_x1) - z0) / dx;
+          if( (gx1-gx0)/dx < hessian_th)
+            e |= HORIZONTAL;
         }
       }
+#else
 #endif
     } // cols
   } // rows
-
-
   return edge;
 }
 
-cv::Mat GetConvexities(const cv::Mat depth, float fx, float fy, const cv::Mat rgb) {
+
+void OutlineEdgeDetectorWithSizelimit::PutDepth(const cv::Mat depth, float fx, float fy) {
   /*
     * convexity 정확하게 계산하는거 먼저. 최적화는 나중에.
   */
-  cv::Mat dd_edges = GetNweDDEdges(depth); // concave_edge를 보완해주는 positive detection이 없음.
-  cv::Mat concave_edges = GetNewConcaveedges(depth, dd_edges, fx);
+  dd_edges_ = ComputeDDEdges(depth); // concave_edge를 보완해주는 positive detection이 없음.
+  concave_edges_ = ComputeConcaveEdges(depth, dd_edges_, fx, fy);
+  cv::bitwise_or(dd_edges_ > 0, concave_edges_ > 0, outline_edges_);
+  return;
+}
 
-  cv::Mat dist;
-  cv::distanceTransform(dd_edges<1, dist, cv::DIST_L2, cv::DIST_MASK_3);
-  cv::imshow("dist", .01*dist);
 
+cv::Mat MergeOcclusion(const cv::Mat depth,
+                       const cv::Mat dd_edges,
+                       const cv::Mat _marker0) {
+  /*
+  TODO 우선 merge occlusion 제대로 되는거 확인한다음,
+  distanceTransform(GetBoundaryS(marker))를 또하는 대신, instance segmentation 단계에서 가져와, 연산낭비하는거 수정.
+  */
+  cv::Mat boundary = GetBoundary(_marker0);
+  cv::Mat boundary_distance;
+  cv::distanceTransform(boundary<1, boundary_distance, cv::DIST_L2, cv::DIST_MASK_3);
+  std::map<int,float> marker_radius; // TODO dist_boundary, marker_radius를 Segmentor 에서 수집.
 
-  cv::Mat expanded_ddedges, expanded_concavedges;
-  cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5,5));
-  cv::dilate(dd_edges, expanded_ddedges, kernel, cv::Point(-1, -1), 1);
-  cv::dilate(concave_edges, expanded_concavedges, kernel, cv::Point(-1, -1), 1);
-  cv::Mat dst;
-  cv::cvtColor(rgb, dst, cv::COLOR_BGR2GRAY);
-  cv::cvtColor(dst, dst, cv::COLOR_GRAY2BGR);
-  dst.setTo(CV_RGB(255,0,0), expanded_concavedges);
-  dst.setTo(CV_RGB(0,0,255), expanded_ddedges);
-  cv::imshow("dst", dst);
+  const float sqrt2 = std::sqrt(2.);
+  const cv::Size size = _marker0.size();
+  int w1 = size.width-1;
+  int h1 = size.height-1;
+
+  struct Node {
+    float cost;
+    int x,y; // 아직 marker가 정해지지 않은 grid의 x,y
+    int32_t m;   // 부모 marker.
+    float z; // latest z
+    uchar e; // expanding 과정에서 만난 edge type
+    Node(int _x, int _y, float _cost, int32_t _m, float _z, uchar _e) : x(_x), y(_y), cost(_cost), m(_m), z(_z), e(_e) {
+    }
+    bool operator < (const Node& other) const {
+      return cost > other.cost;
+    }
+  };
+
+  std::priority_queue<Node> q1, q2;
+  cv::Mat _marker = _marker0.clone();
+  cv::Mat costs   = 999.*cv::Mat::ones(_marker0.rows, _marker0.cols, CV_32FC1);
+  cv::Mat exptype = cv::Mat::zeros(_marker0.rows, _marker0.cols, CV_8UC1); // 확장도중 만난 edge type?
+
+  for( int y = 0; y < size.height; y++ ) {
+    for(int  x = 0; x < size.width; x++ ) {
+      const int32_t& m0 = _marker0.at<int32_t>(y,x);
+      if(m0<1)
+        continue;
+      marker_radius[m0] = std::max(marker_radius[m0], boundary_distance.at<float>(y,x) );
+    }
+  }
+
+  for( int y = 0; y < size.height; y++ ) {
+    for(int  x = 0; x < size.width; x++ ) {
+      if(_marker.at<int32_t>(y,x)>0)
+        continue;
+      // 근처에 valid marker가 있으면 현재위치를 추가해야함.
+      if(x > 0){
+        const int32_t& m = _marker.at<int32_t>(y,x-1);
+        const uchar& e   =   dd_edges.at<uchar>(y,x-1);
+        const float& z   =      depth.at<float>(y,x-1);
+        if(m > 0)
+          q1.push( Node(x,y, 1., m, z, e) );
+      }
+      if(x < w1){
+        const int32_t& m = _marker.at<int32_t>(y,x+1);
+        const uchar& e   =   dd_edges.at<uchar>(y,x+1);
+        const float& z   =      depth.at<float>(y,x+1);
+        if(m > 0)
+          q1.push( Node(x,y, 1., m, z, e) );
+      }
+      if(y > 0){
+        const int32_t& m = _marker.at<int32_t>(y-1,x);
+        const uchar& e   =   dd_edges.at<uchar>(y-1,x);
+        const float& z   =      depth.at<float>(y-1,x);
+        if(m > 0)
+          q1.push( Node(x,y, 1., m, z, e) );
+      }
+      if(y < h1){
+        const int32_t& m = _marker.at<int32_t>(y+1,x);
+        const uchar& e   =   dd_edges.at<uchar>(y+1,x);
+        const float& z   =      depth.at<float>(y+1,x);
+        if(m > 0)
+          q1.push( Node(x,y, 1., m, z, e) );
+      }
+    } // for y
+  } // for x
+
+  const uchar FG = OutlineEdgeDetectorWithSizelimit::DdType::FG;
+  const uchar BG = OutlineEdgeDetectorWithSizelimit::DdType::BG;
 
   /*
-  cv::Mat normals = cv::Mat::zeros(depth.rows, depth.cols, CV_32FC3);
-  cv::Mat concave_edges = hessian < -3.;
-  cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5,5));
-  cv::dilate(concave_edges, concave_edges, kernel, cv::Point(-1, -1), 1);
-  //cv::imshow("convexedges", 255*(hessian>3.));
-  //cv::imshow("hessian", .01*hessian);
-  return hessian;
+    * exptype에서 서로 다른 marker이 bg edge node끼리 많이 만나는 경우 -> merge pair.
+    * exptype에서 fg-bg edge가 만나는 경우..
+      - (가느다란 fg)를 지운 상태에서, 인접한 bg edge node들을 확장한 결과, (latest bg depth차가 작은것끼리)많이 만나는 경우 -> merge pair.
   */
-  return cv::Mat();
+  std::map<std::pair<int,int>, size_t> bgbg_contacts; // key : min(bg_m),max(bg_m)
+  std::map<std::pair<int,int>, size_t> fgbg_contacts; // key : thin fg_m, bg_m
+  float thin_th = 10.;
+
+  while(!q1.empty()){
+    Node k = q1.top(); q1.pop();
+    const int& x = k.x;
+    const int& y = k.y;
+    float& cost = costs.at<float>(k.y,k.x);
+    int32_t& m = _marker.at<int32_t>(k.y,k.x);
+    uchar& e = exptype.at<uchar>(k.y,k.x);
+    if(cost <= k.cost) // less 'eq' : 같은 cost에서 무한루프 발생하지 않게.
+      continue;
+    e = k.e;
+    cost = k.cost;
+    m = k.m; // 주변 노드중, marker가 정해지지 않은 노드를 candidate에 추가
+    if(k.e == FG) // contact counting을 위해 fg pixel에 marker만 맵핑하고 확장은 중단.
+      continue;
+    if(x > 0){
+      const int32_t& m2 = _marker.at<int32_t>(y,x-1);
+      const uchar& e2   =  dd_edges.at<uchar>(y,x-1);
+      const float z = e > 0 ? k.e : depth.at<float>(y,x-1); // edge를 넘어서부턴 z update를 중단.
+      const uchar e = k.e > 0 ? k.e : e2;
+      Node next(x-1,y, k.cost+1., k.m, z, e);
+      if(m2 < 1)
+        q1.push( next );
+      else if(m2 != k.m){
+        if(e2==FG && k.e==BG && marker_radius[m2] < thin_th){
+          //if(m2==56 && k.m==45) throw -1;
+          q2.push(next); // m2 지우고 나서 확장을 다시시도.
+          fgbg_contacts[std::pair<int,int>(m2, k.m)]++;
+        }
+        else if(e2==BG && k.e==BG)
+          bgbg_contacts[std::pair<int,int>(std::min(m2,k.m), std::max(m2,k.m))]++;
+      }
+    }
+    if(x < w1 ){
+      const int32_t& m2 = _marker.at<int32_t>(y,x+1);
+      const uchar& e2   =  dd_edges.at<uchar>(y,x+1);
+      const float z = e > 0 ? k.e : depth.at<float>(y,x+1); 
+      const uchar e = k.e > 0 ? k.e : e2;
+      Node next(x+1,y, k.cost+1., k.m, z, e);
+      if(m2 < 1)
+        q1.push( next );
+      else if(m2 != k.m){
+        if(e2==FG && k.e==BG && marker_radius[m2] < thin_th){
+          //if(m2==56 && k.m==45) throw -1;
+          q2.push(next);
+          fgbg_contacts[std::pair<int,int>(m2, k.m)]++;
+        }
+        else if(e2==BG && k.e==BG)
+          bgbg_contacts[std::pair<int,int>(std::min(m2,k.m), std::max(m2,k.m))]++;
+      }
+    }
+    if(y > 0 && _marker.at<int32_t>(y-1,x)<1 ){
+      const int32_t& m2 = _marker.at<int32_t>(y-1,x);
+      const uchar& e2   =  dd_edges.at<uchar>(y-1,x);
+      const float z = e > 0 ? k.e : depth.at<float>(y-1,x); 
+      const uchar e = k.e > 0 ? k.e : e2;
+      Node next(x,y-1, k.cost+1., k.m, z, e);
+      if(m2 < 1)
+        q1.push( next );
+      else if(m2 != k.m){
+        if(e2==FG && k.e==BG && marker_radius[m2] < thin_th){
+          q2.push(next);
+          fgbg_contacts[std::pair<int,int>(m2, k.m)]++;
+        }
+        else if(e2==BG && k.e==BG)
+          bgbg_contacts[std::pair<int,int>(std::min(m2,k.m), std::max(m2,k.m))]++;
+      }
+    }
+    if(y < h1){
+      const int32_t& m2 = _marker.at<int32_t>(y+1,x);
+      const uchar& e2   =  dd_edges.at<uchar>(y+1,x);
+      const float z = e > 0 ? k.e : depth.at<float>(y+1,x); 
+      const uchar e = k.e > 0 ? k.e : e2;
+      Node next(x,y+1, k.cost+1., k.m, z, e);
+      if(m2 < 1)
+        q1.push( next );
+      else if(m2 != k.m){
+        if(e2==FG && k.e==BG && marker_radius[m2] < thin_th){
+          q2.push(next);
+          fgbg_contacts[std::pair<int,int>(m2, k.m)]++;
+        }
+        else if(e2==BG && k.e==BG)
+          bgbg_contacts[std::pair<int,int>(std::min(m2,k.m), std::max(m2,k.m))]++;
+      }
+    }
+  } // while(!q1.empty())
+
+  bgbg_contacts.clear(); // TODO remove
+  std::map<int, std::set<int> > bg_neighbors; {
+    std::map<int, std::list<int> > _bg_neighbors;
+    for(auto it : fgbg_contacts){
+      if(it.second > 20){
+        printf("fgbg %d, %d - %ld\n", it.first.first, it.first.second, it.second);
+        _bg_neighbors[it.first.first].push_back(it.first.second);
+      }
+    }
+    for(auto it : _bg_neighbors){
+      if(it.second.size()< 1)
+        continue;
+      for(auto it_key : it.second){
+        for(auto it_n : it.second){
+          if(it_key==it_n)
+            continue;
+          bg_neighbors[it_key].insert(it_n);
+        }
+      }
+    }
+  }
+
+
+  {
+    cv::Mat dst = GetColoredLabel(_marker,true);
+    cv::imshow("marker1", dst);
+  }
+  for(auto it : marker_radius){
+    if(it.second < 10.){
+      cv::Mat mask = _marker==it.first;
+      _marker.setTo(0, mask);
+      costs.setTo(999., mask);
+    }
+  }
+
+  const float max_zerr = 100.; // TODO remove
+  while(!q2.empty()){
+    Node k = q2.top(); q2.pop();
+    const int& x = k.x;
+    const int& y = k.y;
+    float& cost = costs.at<float>(k.y,k.x);
+    int32_t& m = _marker.at<int32_t>(k.y,k.x);
+    uchar& e = exptype.at<uchar>(k.y,k.x);
+    if(cost <= k.cost) // less 'eq' : 같은 cost에서 무한루프 발생하지 않게.
+      continue;
+    //e = k.e;
+    cost = k.cost;
+    m = k.m; // 주변 노드중, marker가 정해지지 않은 노드를 candidate에 추가
+
+    if(x > 0){
+      const int32_t& m2 = _marker.at<int32_t>(y,x-1);
+      const uchar& e2   =  dd_edges.at<uchar>(y,x-1);
+      const float z = e > 0 ? k.e : depth.at<float>(y,x-1);
+      Node next(x-1,y, k.cost+1., k.m, k.z, e); // 더이상 update 중단.
+      if(m2 <1)
+        q2.push( next );
+      else if(m2 != k.m && bg_neighbors[k.m].count(m2) )
+        if( std::abs(z-k.z) < max_zerr)
+          bgbg_contacts[std::pair<int,int>(std::min(m2,k.m), std::max(m2,k.m))]++;
+    }
+    if(x < w1){
+      const int32_t& m2 = _marker.at<int32_t>(y,x+1);
+      const uchar& e2   =  dd_edges.at<uchar>(y,x+1);
+      const float z = e > 0 ? k.e : depth.at<float>(y,x+1);
+      Node next(x+1,y, k.cost+1., k.m, k.z, e);
+
+      if(m2 <1)
+        q2.push( next );
+      else if(m2 != k.m && bg_neighbors[k.m].count(m2) )
+        if( std::abs(z-k.z) < max_zerr)
+          bgbg_contacts[std::pair<int,int>(std::min(m2,k.m), std::max(m2,k.m))]++;
+    }
+    if(y > 0){
+      const int32_t& m2 = _marker.at<int32_t>(y-1,x);
+      const uchar& e2   =  dd_edges.at<uchar>(y-1,x);
+      const float z = e > 0 ? k.e : depth.at<float>(y-1,x);
+      Node next(x,y-1, k.cost+1., k.m, k.z, e); // 더이상 update 중단.
+
+      if(m2 <1)
+        q2.push( next );
+      else if(m2 != k.m && bg_neighbors[k.m].count(m2) )
+        if( std::abs(z-k.z) < max_zerr)
+          bgbg_contacts[std::pair<int,int>(std::min(m2,k.m), std::max(m2,k.m))]++;
+    }
+    if(y < h1){
+      const int32_t& m2 = _marker.at<int32_t>(y+1,x);
+      const uchar& e2   =  dd_edges.at<uchar>(y+1,x);
+      const float z = e > 0 ? k.e : depth.at<float>(y+1,x);
+      Node next(x,y+1, k.cost+1., k.m, k.z, e);
+
+      if(m2 <1)
+        q2.push( next );
+      else if(m2 != k.m && bg_neighbors[k.m].count(m2) )
+        if( std::abs(z-k.z) < max_zerr)
+          bgbg_contacts[std::pair<int,int>(std::min(m2,k.m), std::max(m2,k.m))]++;
+    }
+  }
+
+  for(auto it : bgbg_contacts)
+    if(it.second > 20)
+      printf("bgbg %d, %d - %ld\n", it.first.first, it.first.second, it.second);
+
+  std::cout << "-------------" << std::endl;
+
+
+
+  {
+    cv::Mat dst = GetColoredLabel(_marker,true);
+    dst.setTo(CV_RGB(0,0,0), GetBoundary(_marker));
+    cv::imshow("marker2", dst);
+  }
+  //cv::imshow("dist_boundary", 0.01*boundary_distance);
+
+  return _marker0;
 }

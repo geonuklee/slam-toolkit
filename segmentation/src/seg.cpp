@@ -9,7 +9,7 @@
 SegmentorNew::SegmentorNew() {
 }
 
-void SegmentorNew::Put(cv::Mat outline_edges, cv::Mat valid_mask) {
+void SegmentorNew::Put(cv::Mat outline_edges) {
   int n_octave = 6;
   int n_downsample = 1;
   bool keep_boundary = true;

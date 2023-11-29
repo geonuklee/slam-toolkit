@@ -34,23 +34,39 @@ private:
   cv::Mat concave_edges_;
 };
 
+class OutlineEdgeDetectorWithSizelimit {
+public:
+  enum Direction { VERTICAL=1, HORIZONTAL=2, BOTH=VERTICAL|HORIZONTAL };
+  enum DdType    { FG=1, BG=2 };
+
+  OutlineEdgeDetectorWithSizelimit() { }
+  void PutDepth(const cv::Mat depth, float fx, float fy);
+  cv::Mat GetOutline() const { return outline_edges_; }
+  cv::Mat GetDDEdges() const { return dd_edges_; }
+  cv::Mat GetConcaveEdges() const { return concave_edges_; }
+private:
+  cv::Mat ComputeDDEdges(const cv::Mat depth) const;
+  cv::Mat ComputeConcaveEdges(const cv::Mat depth, const cv::Mat dd_edges, float fx, float fy) const;
+
+  cv::Mat dd_edges_;
+  cv::Mat concave_edges_;
+  cv::Mat outline_edges_;
+};
+
+cv::Mat MergeOcclusion(const cv::Mat dd_edges, const cv::Mat _marker);
+
 class Segmentor {
 public:
-  virtual void Put(cv::Mat outline_edges, cv::Mat valid_mask) = 0;
+  virtual void Put(cv::Mat outline_edges) = 0;
   cv::Mat GetMarker() const { return marker_; }
 public:
   cv::Mat marker_;
 };
 
-class SegmentorOld : public Segmentor {
-  public:
-  virtual void Put(cv::Mat outline_edges, cv::Mat valid_mask);
-};
-
 class SegmentorNew : public Segmentor {
 public:
   SegmentorNew();
-  virtual void Put(cv::Mat outline_edges, cv::Mat valid_mask);
+  virtual void Put(cv::Mat outline_edges);
 };
 
 class ImageTrackerNew {
