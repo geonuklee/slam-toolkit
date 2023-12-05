@@ -3,8 +3,8 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/optflow.hpp> // DIS optical flow
 
-#include "../include/seg.h"
-#include "../include/util.h"
+#include "seg.h"
+#include "util.h"
 
 SegmentorNew::SegmentorNew() {
 }

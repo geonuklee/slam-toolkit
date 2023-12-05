@@ -1,7 +1,9 @@
-#ifndef sSEGMENT_SEG_H_
-#define sSEGMENT_SEG_H_
+#ifndef SEGMENT_SEG_H_
+#define SEGMENT_SEG_H_
 
 #include "stdafx.h"
+
+cv::Mat FilterThinNoise(cv::Mat edges);
 
 class OutlineEdgeDetector {
 public:
@@ -34,26 +36,6 @@ private:
   cv::Mat concave_edges_;
 };
 
-class OutlineEdgeDetectorWithSizelimit {
-public:
-  enum Direction { VERTICAL=1, HORIZONTAL=2, BOTH=VERTICAL|HORIZONTAL };
-  enum DdType    { FG=1, BG=2 };
-
-  OutlineEdgeDetectorWithSizelimit() { }
-  void PutDepth(const cv::Mat depth, float fx, float fy);
-  cv::Mat GetOutline() const { return outline_edges_; }
-  cv::Mat GetDDEdges() const { return dd_edges_; }
-  cv::Mat GetConcaveEdges() const { return concave_edges_; }
-private:
-  cv::Mat ComputeDDEdges(const cv::Mat depth) const;
-  cv::Mat ComputeConcaveEdges(const cv::Mat depth, const cv::Mat dd_edges, float fx, float fy) const;
-
-  cv::Mat dd_edges_;
-  cv::Mat concave_edges_;
-  cv::Mat outline_edges_;
-};
-
-cv::Mat MergeOcclusion(const cv::Mat dd_edges, const cv::Mat _marker);
 
 class Segmentor {
 public:

@@ -78,9 +78,7 @@ int BreadthFirstSearch(cv::Mat& _marker){
   return l_max;
 }
 
-void Merge(cv::Mat& _marker, float min_direct_contact_ratio_for_merge,
-          bool keep_boundary
-           ){
+void Merge(cv::Mat& _marker, float min_direct_contact_ratio_for_merge, bool keep_boundary){
   #define ws_key(i1, i2){ \
     std::make_pair(std::min(i1,i2),std::max(i1,i2))\
   }

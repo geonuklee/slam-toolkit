@@ -39,6 +39,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include <opencv2/core.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 #include <pybind11/embed.h>
 
 void ComputeCacheOfKittiTrackingDataset(){
@@ -132,6 +133,7 @@ void DrawFigureForPaper(cv::Mat rgb, cv::Mat depth, cv::Mat outline_edges, cv::M
   return;
 }
 
+#include "occlusion_seg.h"
 int TestConcaveEdges(int argc, char** argv){
   if(argc < 3){
     std::cout << "Need 3 argc" << std::endl;
@@ -152,8 +154,8 @@ int TestConcaveEdges(int argc, char** argv){
   const float fy = camera->GetK()(1,1);
   const float snyc_min_iou = .5;
 
-  auto edge_detector = new OutlineEdgeDetectorWithSizelimit();
-  auto segmentor = new SegmentorNew();
+  //auto edge_detector = new OutlineEdgeDetectorWithSizelimit();
+  auto segmentor = new TotalSegmentor(fx,fy);
   auto img_tracker = new ImageTrackerNew();
 
   int i = 0; {
@@ -164,44 +166,21 @@ int TestConcaveEdges(int argc, char** argv){
   for(; i < dataset.Size(); i++){
     cv::Mat rgb = dataset.GetImage(i);
     cv::Mat depth = dataset.GetDepthImage(i);
+
+
+    cv::imshow("rgb", rgb);
+    segmentor->Put(depth);
     cv::Mat gray;
     cv::cvtColor(rgb, gray, cv::COLOR_BGR2GRAY);
 
-    cv::imshow("depth0", .01*depth);
-    cv::imshow("depth1", .05*depth);
-    edge_detector->PutDepth(depth, fx, fy);
-    cv::Mat outline_edges = edge_detector->GetOutline();
-    cv::Mat dd_edges      = edge_detector->GetDDEdges();
-    cv::Mat concave_edgse = edge_detector->GetConcaveEdges();
-
-    segmentor->Put(outline_edges);
-    cv::Mat unsync_marker = segmentor->GetMarker();
-    img_tracker->Put(gray, unsync_marker, snyc_min_iou);
-    cv::Mat synced_marker = img_tracker->GetSyncedMarker();
-
-    cv::Mat merged_marker = MergeOcclusion(depth, dd_edges, synced_marker);
-    //cv::Mat merged_marker = MergeOcclusion(dd_edges, synced_marker);
-
-    {
-      cv::Mat dst = GetColoredLabel(synced_marker);
-      cv::Mat boundary = GetBoundary(synced_marker);
-      dst.setTo(CV_RGB(0,0,0), boundary);
-      cv::addWeighted(rgb,.5, dst,.5, 1., dst);
-      cv::imshow("seg", dst);
-    }
-
-    /*{
-      cv::Mat dst;
-      cv::cvtColor(rgb, dst, cv::COLOR_BGR2GRAY);
-      cv::cvtColor(dst, dst, cv::COLOR_GRAY2BGR);
-
-      dst.setTo(CV_RGB(0,255,0), concave_edgse>0);
-
-      dst.setTo(CV_RGB(255,0,0), dd_edges==OutlineEdgeDetectorWithSizelimit::DdType::FG);
-      dst.setTo(CV_RGB(0,0,255), dd_edges==OutlineEdgeDetectorWithSizelimit::DdType::BG);
-      cv::imshow("edge", dst);
-    }*/
-
+    //edge_detector->PutDepth(depth, fx, fy);
+    //cv::Mat dd_edges      = edge_detector->GetDDEdges();
+    //cv::Mat concave_edgse = edge_detector->GetConcaveEdges();
+    //cv::Mat dst = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC3);
+    //dst.setTo(CV_RGB(255,0,0), dd_edges==1);
+    //dst.setTo(CV_RGB(0,0,255), dd_edges==2);
+    //dst.setTo(CV_RGB(122,122,122), concave_edgse);
+    //cv::imshow("dst", dst);
 
     char c = cv::waitKey(stop?0:1);
     if(c=='q')
@@ -355,6 +334,6 @@ int main(int argc, char** argv){
   //TestKittiTrackingDataset();
   //TestPangolin(argc, argv);
   return TestKittiTrackingNewSLAM(argc, argv);
-  //return TestConcaveEdges(argc, argv);
+  //return TestConcaveEdges(argc, argv); // TotalSegmentor 결과가 더 나쁘다.
 }
 
