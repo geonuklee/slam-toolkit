@@ -40,5 +40,9 @@ private:
 cv::Mat MergeOcclusion(const cv::Mat dd_edges, const cv::Mat _marker);
 cv::Mat MergeOcclusion(const cv::Mat depth, const cv::Mat dd_edges, const cv::Mat _marker);
 
+/*
+  TODO 그냥 바닥면 인식과 euclidean cluster를 설정하자.
+
+*/
 
 #endif

@@ -419,6 +419,11 @@ std::set<Qth> Pipeline::FrameNeedsToBeKeyframe(Frame* curr_frame) const {
       need_keyframes.insert(qth); // ComputLBA 호출하는 while loop에서 qth rig가 생성됨.
       continue;
     }
+    else if(curr_frame->GetId() - lkf->GetId() > 3){
+      need_keyframes.insert(qth);
+      continue;
+    }
+
     std::map<Qth, size_t> lkf_n_mappoints = CountMappoints(lkf);
     const size_t& n_mappoints_curr = it.second;
     if(!lkf_n_mappoints.count(qth) ){

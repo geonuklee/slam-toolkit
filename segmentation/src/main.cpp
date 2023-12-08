@@ -30,6 +30,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include "frame.h"
 #include "camera.h"
 #include "segslam.h"
+#include "floorseg.h"
 #include <exception>
 #include <g2o/types/slam3d/se3quat.h>
 #include <filesystem>
@@ -166,28 +167,15 @@ int TestConcaveEdges(int argc, char** argv){
   for(; i < dataset.Size(); i++){
     cv::Mat rgb = dataset.GetImage(i);
     cv::Mat depth = dataset.GetDepthImage(i);
-
-
     cv::imshow("rgb", rgb);
     segmentor->Put(depth);
     cv::Mat gray;
     cv::cvtColor(rgb, gray, cv::COLOR_BGR2GRAY);
-
-    //edge_detector->PutDepth(depth, fx, fy);
-    //cv::Mat dd_edges      = edge_detector->GetDDEdges();
-    //cv::Mat concave_edgse = edge_detector->GetConcaveEdges();
-    //cv::Mat dst = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC3);
-    //dst.setTo(CV_RGB(255,0,0), dd_edges==1);
-    //dst.setTo(CV_RGB(0,0,255), dd_edges==2);
-    //dst.setTo(CV_RGB(122,122,122), concave_edgse);
-    //cv::imshow("dst", dst);
-
     char c = cv::waitKey(stop?0:1);
     if(c=='q')
       break;
     else if (c == 's')
       stop = !stop;
-
   }
   cv::waitKey();
   return 0;
@@ -235,10 +223,17 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
   const float base_line = -Trl_.translation().x();
   const float fx = camera->GetK()(0,0);
   const float fy = camera->GetK()(1,1);
+  const float cx = camera->GetK()(0,2);
+  const float cy = camera->GetK()(1,2);
   const float min_disp = 1.;
   const float snyc_min_iou = .5;
   std::shared_ptr<OutlineEdgeDetector> edge_detector( new OutlineEdgeDetectorWithSIMD );  // After   2.5 [milli sec]
-  std::shared_ptr<Segmentor> segmentor( new SegmentorNew );                               // After  5~10 [milli sec] , with octave 2
+#if 0
+  SegmentorNew segmentor;                                                                    // After  5~10 [milli sec] , with octave 2
+#else
+  Floorseg segmentor(fx,fy,cx,cy,base_line);
+#endif
+
   std::shared_ptr<ImageTrackerNew> img_tracker( new ImageTrackerNew);                     // Afte  10~11 [milli sec]
   NEW_SEG::Pipeline pipeline(camera);                                                     // After   ~50 [milli sec]
 
@@ -272,6 +267,8 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     cv::Mat gray;
     cv::cvtColor(rgb, gray, cv::COLOR_BGR2GRAY);
     cv::Mat depth = dataset.GetDepthImage(i);
+
+#if 0
     edge_detector->PutDepth(depth, fx, fy);
     cv::Mat gradx = edge_detector->GetGradx();
     cv::Mat grady = edge_detector->GetGrady();
@@ -285,9 +282,12 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
       outline_edges.setTo(1, far_invalid_depth);
       //outline_edges.setTo(1, invalid_depthmask);
     }
-
-    segmentor->Put(outline_edges);
-    cv::Mat unsync_marker = segmentor->GetMarker();
+    segmentor.Put(outline_edges);
+#else
+    segmentor.Put(depth);
+    cv::Mat gradx, grady, valid_grad;
+#endif
+    cv::Mat unsync_marker = segmentor.GetMarker();
     img_tracker->Put(gray, unsync_marker, snyc_min_iou);
     const std::vector<cv::Mat>& flow = img_tracker->GetFlow();
     cv::Mat synced_marker = img_tracker->GetSyncedMarker();
@@ -329,11 +329,78 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
   return 1;
 }
 
+int TestFloorseg(int argc, char** argv){
+  if(argc < 3){
+    std::cout << "Need 3 argc" << std::endl;
+    std::cout << argc << std::endl;
+    std::cout << argv[2] << std::endl;
+    return 1;
+  }
+  int offset = 0;
+  if(argc == 4)
+    offset = std::stoi(std::string(argv[3]));
+  const std::string dataset_path = GetPackageDir()+ "/kitti_tracking_dataset/";
+  const std::string dataset_type = "training";
+  const std::string seq(argv[1]);
+  KittiTrackingDataset dataset(dataset_type, seq, dataset_path);
+  const StereoCamera* camera = dynamic_cast<const StereoCamera*>(dataset.GetCamera());
+  assert(camera);
+  const float fx = camera->GetK()(0,0);
+  const float fy = camera->GetK()(1,1);
+  const float cx = camera->GetK()(0,2);
+  const float cy = camera->GetK()(1,2);
+  const auto Trl_ = camera->GetTrl();
+  const float base_line = -Trl_.translation().x();
+  const float snyc_min_iou = .5;
+  Floorseg floorseg(fx,fy,cx,cy,base_line);
+
+  int i = 0; {
+    for(i=0; i<offset; i+=1){
+    }
+  }
+  bool stop = true;
+  //for(; i < dataset.Size(); i++){
+  while(true) {
+    cv::Mat rgb = dataset.GetImage(i);
+    cv::Mat depth = dataset.GetDepthImage(i);
+    int c;
+    do {
+#if 1
+      floorseg.Put(depth, rgb);
+#else
+      cv::Mat marker = floorseg.Put(depth); {
+        cv::Mat dst = GetColoredLabel(marker,true);
+        dst.setTo(CV_RGB(0,0,0), GetBoundary(marker,4));
+        cv::addWeighted(rgb, .3, dst, .5, 1., dst);
+        cv::imshow("dst", dst);
+      }
+#endif
+      c = cv::waitKey(1);
+      if(c < 0)
+        continue;
+      else if(c=='q')
+        break;
+      else if (c == 's')
+        stop = !stop;
+      else{
+        i++;
+        break;
+      }
+    }
+    while(stop);
+    i++;
+    if(c == 'q')
+      break;
+  }
+  return 0;
+}
+
 int main(int argc, char** argv){
   //ComputeCacheOfKittiTrackingDataset();
   //TestKittiTrackingDataset();
   //TestPangolin(argc, argv);
   return TestKittiTrackingNewSLAM(argc, argv);
   //return TestConcaveEdges(argc, argv); // TotalSegmentor 결과가 더 나쁘다.
+  //return TestFloorseg(argc, argv);
 }
 
