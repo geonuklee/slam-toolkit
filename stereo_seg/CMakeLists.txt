@@ -71,6 +71,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib)
 include_directories("${CMAKE_SOURCE_DIR}/include")
 include_directories("${CMAKE_SOURCE_DIR}/..")
 include_directories("${CMAKE_SOURCE_DIR}/../pipeline/include")
+include_directories("${CMAKE_SOURCE_DIR}/../segmentation/include")
 
 add_library(hitnetstereo SHARED src/hitnet.cpp)
 target_link_libraries(hitnetstereo ${PYTHON_LIBRARIES})
@@ -96,6 +97,13 @@ add_executable(test_fasterseg
 set_source_files_properties(src/simd.cpp PROPERTIES COMPILE_FLAGS "-mavx2")
 set_source_files_properties(src/watershed.cpp PROPERTIES COMPILE_FLAGS "-mavx2")
 
+#add_executable(test_convexity
+#  src/test_convexity_edges.cpp
+#  ../pipeline/src/camera.cpp
+#  ../pipeline/src/common.cpp
+#  ../segmentation/src/seg_dataset.cpp
+#)
+
 #set_target_properties(example_segmentation PROPERTIES UNITY_BUILD_MODE BATCH UNITY_BUILD_BATCH_SIZE 10)
 #set_source_files_properties(src/debug.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
 #set_source_files_properties(src/optimizer.cpp PROPERTIES COMPILE_FLAGS "-O0 -g") # No optmization
@@ -105,5 +113,6 @@ set_source_files_properties(src/watershed.cpp PROPERTIES COMPILE_FLAGS "-mavx2")
 
 target_link_libraries(test_hitnet ${OpenCV_LIBS} ${Boost_LIBRARIES} stdc++fs)
 target_link_libraries(test_fasterseg ${OpenCV_LIBS} ${Boost_LIBRARIES} stdc++fs)
+#target_link_libraries(test_convexity ${OpenCV_LIBS} ${Boost_LIBRARIES} stdc++fs)
 
 

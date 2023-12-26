@@ -243,11 +243,7 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
 
   if(! std::filesystem::exists(output_dir) )
     std::filesystem::create_directories(output_dir);
-  std::string output_seq_dir = output_dir+"/"+dataset_type+"_"+seq;
-  if(std::filesystem::exists(output_seq_dir) )
-    std::filesystem::remove_all(output_seq_dir);
-  std::filesystem::create_directories(output_seq_dir);
-  NEW_SEG::EvalWriter eval_writer(output_seq_dir);
+  NEW_SEG::EvalWriter eval_writer(dataset_type, seq, output_dir);
 
   cv::Mat empty_dst = cv::Mat::zeros(dst_size.height, dst_size.width, CV_8UC3);
   g2o::SE3Quat TCw;
@@ -282,10 +278,12 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
       outline_edges.setTo(1, far_invalid_depth);
       //outline_edges.setTo(1, invalid_depthmask);
     }
-    segmentor.Put(outline_edges);
+    segmentor.Put(outline_edges); // SegmentorNew 는 outline_edge를 기반으로 segmentation.
+    std::list<int> fixed_instances;
 #else
-    segmentor.Put(depth);
+    segmentor.Put(depth);         // Floorseg 는 depth를 기반으로 segmentation.
     cv::Mat gradx, grady, valid_grad;
+    std::list<int> fixed_instances = {1};
 #endif
     cv::Mat unsync_marker = segmentor.GetMarker();
     img_tracker->Put(gray, unsync_marker, snyc_min_iou);
@@ -296,6 +294,7 @@ int TestKittiTrackingNewSLAM(int argc, char** argv) {
     //cv::imshow("depth", .01*depth);
     //cv::imshow("gradaxy", .1* (cv::abs(gradx)+cv::abs(grady)) );
     NEW_SEG::Frame* frame = pipeline.Put(gray, depth, flow, synced_marker, marker_areas,
+                                         fixed_instances,
                                          gradx, grady, valid_grad, frame_second, rgb);
     img_tracker->ChangeSyncedMarker(synced_marker);
     g2o::SE3Quat Tcw = frame->GetTcq(0) * TCw;
@@ -396,7 +395,9 @@ int TestFloorseg(int argc, char** argv){
 }
 
 int main(int argc, char** argv){
-  //ComputeCacheOfKittiTrackingDataset();
+  // TODO 하드코딩 제거.
+  //ComputeCacheOfKittiTrackingDataset(); // TODO 필요한지여부 체크.
+  //return 0;
   //TestKittiTrackingDataset();
   //TestPangolin(argc, argv);
   return TestKittiTrackingNewSLAM(argc, argv);

@@ -249,6 +249,7 @@ public:
              const std::vector<cv::Mat>& flow,
              cv::Mat& synced_marker,
              std::map<int,size_t> marker_areas,
+             const std::list<int>& fixed_instances,
              const cv::Mat gradx,
              const cv::Mat grady,
              const cv::Mat valid_grad,

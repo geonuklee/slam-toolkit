@@ -1,10 +1,3 @@
-/*
-#include "dataset.h"
-#include "orb_extractor.h"
-#include "frame.h"
-#include "camera.h"
-#include <g2o/types/slam3d/se3quat.h>
-*/
 #include <exception>
 #include <opencv2/core.hpp>
 #include <opencv2/highgui.hpp>

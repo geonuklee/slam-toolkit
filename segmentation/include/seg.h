@@ -56,7 +56,8 @@ public:
   ImageTrackerNew();
   virtual void Put(const cv::Mat gray,
                    const cv::Mat unsync_marker,
-                   float sync_min_iou);
+                   float sync_min_iou,
+                   const std::map<int,int> forced_unsynced2synced = std::map<int,int>());
   const std::vector<cv::Mat>& GetFlow() const { return flow_; }  // delta uv {0}<-{1} on coordinate {0}.
   cv::Mat GetSyncedMarker() const { return prev_sync_marker_; }
   const std::map<int, size_t>& GetMarkerAreas () const { return marker_areas_; }

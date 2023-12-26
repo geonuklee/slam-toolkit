@@ -553,6 +553,7 @@ Frame* Pipeline::Put(const cv::Mat gray,
                      const std::vector<cv::Mat>& flow,
                      cv::Mat& synced_marker,
                      std::map<int,size_t> marker_areas,
+                     const std::list<int>& _fixed_instances,
                      const cv::Mat gradx,
                      const cv::Mat grady,
                      const cv::Mat valid_grad,
@@ -666,10 +667,10 @@ Frame* Pipeline::Put(const cv::Mat gray,
       float dense = npoints > 0 ? float(npoints) / float(area) : 0.;
       float score = dense / density_threshold;
       density_scores[pth] = score;
-      if(score < 1. && ins->GetQth() < 0 ){
-        ins->SetQth(qth);
-        rig->RemoveExcludedInstance(ins);
-      }
+      //if(score < 1. && ins->GetQth() < 0 ){ // seq05 멀쩡히 인식한 트럭을 지워버린다.
+      //  ins->SetQth(qth);
+      //  rig->RemoveExcludedInstance(ins);
+      //}
     }
   }
   /*
@@ -709,12 +710,16 @@ Frame* Pipeline::Put(const cv::Mat gray,
   */
 
   std::set<Pth> fixed_instances;
+  fixed_instances.insert(_fixed_instances.begin(), _fixed_instances.end());
   //fixed_instances.insert(pnp_fixed_instances.begin(), pnp_fixed_instances.end());
 
   { // while !segmented_instances.empty()
     const Qth qth = 0;
     RigidGroup* rig = qth2rig_groups_.at(qth);
     std::set<Pth> outlier_detected =  NewDynamicDetect(curr_frame, qth); // TODO dynamic instance 처리.
+    for(auto pth : fixed_instances)
+      outlier_detected.erase(pth);
+
     vinfo_outlier_detected_.clear();
     for(Pth pth : outlier_detected)
       if(density_scores[pth] > 1.)

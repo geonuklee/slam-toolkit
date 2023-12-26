@@ -58,7 +58,9 @@ struct MarkerStats{
 
 void ImageTrackerNew::Put(const cv::Mat _gray,
                           const cv::Mat _unsync_marker,
-                          float sync_min_iou) {
+                          float sync_min_iou,
+                          const std::map<int,int> forced_unsynced2synced
+                          ) {
   std::map<int, MarkerStats> unsync2sync;
   cv::Size size = _gray.size();
   int i, j, u, v;
@@ -121,6 +123,9 @@ void ImageTrackerNew::Put(const cv::Mat _gray,
     // if prev_gray empty
     prev_sync_marker_ = cv::Mat::zeros(size, CV_32SC1);
   }
+
+  for(auto it : forced_unsynced2synced)
+    unsync2sync[it.first].synced_label = it.second;
 
   int32_t*  curr_sync_l  = prev_sync_marker_.ptr<int32_t>();
   const int32_t*  unsyc_l = _unsync_marker.ptr<int32_t>();

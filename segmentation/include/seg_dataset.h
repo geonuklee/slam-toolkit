@@ -42,23 +42,30 @@ namespace NEW_SEG {
 class Frame;
 class EvalWriter {
 public:
-  EvalWriter(std::string output_seq_dir);
+  EvalWriter(std::string dataset_type, std::string seq, std::string output_dir);
   void Write(Frame* frame,
              RigidGroup* static_rig,
              const cv::Mat synced_marker,
              const cv::Mat gt_insmask,
              const cv::Mat gt_dmask
              );
-
   void WriteInstances(const std::map<Pth, Pth>& pth_removed2replacing);
 
 private:
+  int start_frame_;
+  int last_frame_;
   std::map<int, int> pth2qth_; // Update from Write()
-  const std::string output_seq_dir_;
-  const std::string output_mask_dir_;
+  std::string seq_;
+  std::string output_seq_dir_;
+  std::string output_mask_dir_;
+
   std::ofstream trj_output_;
+
   std::ofstream keypoints_output_;
   std::ofstream instances_output_;
+
+  std::ofstream seqmap_output_;
+  std::ofstream kitti2dbox_output_;
 };
 
 };

@@ -2,6 +2,7 @@
 #include "camera.h"
 #include "hitnet.h"
 #include <filesystem>
+#include <iomanip> // for setw and setfill
 
 void WriteKittiTrajectory(const g2o::SE3Quat& Tcw,
                           std::ofstream& output_file) {
@@ -394,20 +395,61 @@ void KittiTrackingDataset::ComputeCacheImages() { // depth image, dynamic instan
 #include "segslam.h"
 namespace NEW_SEG {
 
-EvalWriter::EvalWriter(std::string output_seq_dir) 
-: output_seq_dir_(output_seq_dir),
-  output_mask_dir_( output_seq_dir+"/"+"mask"),
-  trj_output_(output_seq_dir+"/"+"trj.txt"),
-  keypoints_output_(output_seq_dir+"/"+"keypoints.txt"),
-  instances_output_(output_seq_dir+"/"+"instances.txt")
-{
+EvalWriter::EvalWriter(std::string dataset_type, std::string seq, std::string output_dir) {
+  start_frame_ = -1;
+  last_frame_ = -1;
+  seq_ = seq;
+
+  if(!std::filesystem::exists(output_dir) )
+    std::filesystem::create_directories(output_dir);
+
+  std::string output_seq_dir = output_dir+"/"+dataset_type+"_"+seq;
+  output_seq_dir_ =output_seq_dir;
+  output_mask_dir_= output_seq_dir+"/"+"mask";
+
+  if(std::filesystem::exists(output_seq_dir) )
+    std::filesystem::remove_all(output_seq_dir);
+  std::filesystem::create_directories(output_seq_dir);
+
   if(std::filesystem::exists(output_mask_dir_) )
     std::filesystem::remove_all(output_mask_dir_);
   std::filesystem::create_directories(output_mask_dir_);
+
+  trj_output_        = std::ofstream(output_seq_dir+"/"+"trj.txt");
+  keypoints_output_  = std::ofstream(output_seq_dir+"/"+"keypoints.txt");
+  instances_output_  = std::ofstream(output_seq_dir+"/"+"instances.txt");
+
+  std::string output_trackevalform_dir = output_dir + "/trackevalform_"+dataset_type;
+  if(!std::filesystem::exists(output_trackevalform_dir) )
+    std::filesystem::create_directories(output_trackevalform_dir);
+
+  // MySeg <- 알고리즘명 
+  if(!std::filesystem::exists(output_trackevalform_dir+"/MySeg") )
+    std::filesystem::create_directories(output_trackevalform_dir+"/MySeg");
+
+  std::string seqmap = output_trackevalform_dir+"/evaluate_tracking.seqmap."+dataset_type;
+  seqmap_output_ = std::ofstream(seqmap, std::ios::app);
+  if (!seqmap_output_.is_open()) {
+    std::cerr << "Can't open file " << seqmap << std::endl;
+    exit(1);
+  }
+  kitti2dbox_output_ = std::ofstream(output_trackevalform_dir+"/MySeg/"+seq_+".txt");
 }
 
-
 void EvalWriter::WriteInstances(const std::map<Pth, Pth>& pth_removed2replacing) {
+  std::string s_sframe; {
+    std::stringstream ss;
+    ss << std::setfill('0') << std::setw(6) << start_frame_;
+    s_sframe = ss.str();
+  }
+  std::string s_nframe; {
+    std::stringstream ss;
+    ss << std::setfill('0') << std::setw(6) << last_frame_+1;
+    s_nframe = ss.str();
+  }
+  seqmap_output_ << seq_ << " empty " << s_sframe << " " << s_nframe << std::endl;
+  seqmap_output_.flush();
+
   for(auto it : pth_removed2replacing){
     Pth pth = it.first;
     Qth qth = pth2qth_[it.second];
@@ -429,6 +471,9 @@ void EvalWriter::Write(Frame* frame,
                        const cv::Mat gt_dmask) {
   const Qth qth = static_rig->GetId();
   assert(qth==0);
+  if(start_frame_ < 0)
+    start_frame_ = frame->GetId();
+  last_frame_ = frame->GetId();
 
   {
     // 1. Trajectory 
@@ -439,8 +484,7 @@ void EvalWriter::Write(Frame* frame,
   int frame_id = frame->GetId();
   std::set<int> uniq_labels;
   {
-    /* 2. keypoints 저장.
-    */
+    /* 2. keypoints 저장. */
     const auto& keypoints = frame->GetKeypoints();
     const auto& mappoints = frame->GetMappoints();
     for(size_t n=0; n < keypoints.size(); n++){
@@ -479,7 +523,59 @@ void EvalWriter::Write(Frame* frame,
     std::sprintf(filename, "/ins%06d.raw", frame_id);
     writeRawImage(synced_marker, output_mask_dir_+std::string(filename) );
   }
- 
+
+  {
+    /* 4. KITTI object dataset format 저장. TrackEval에서 evaluation을 위해.
+      Format :
+      bbox - left top right bottom pixel
+      frame trackid cls truncated occluded alpha bbox(4) dim(3) loc(3) rotationy score
+    */
+    std::map<int, cv::Rect> rects;
+    for(int r=0;r<synced_marker.rows;r++){
+      for(int c=0;c<synced_marker.cols;c++){
+        const int32_t& pth = synced_marker.at<int32_t>(r,c);
+        if(pth < 1)
+          continue;
+        bool est_on_dynamic = static_rig->GetExcludedInstances().count(pth);
+        if(!est_on_dynamic)
+          continue;
+        if(! rects.count(pth) ){
+          cv::Rect& rect = rects[pth];
+          rect.x  = rect.y = 999999.;
+        }
+        cv::Rect& rect = rects[pth];
+        rect.x     = std::min(rect.x,c);
+        rect.y     = std::min(rect.y,r);
+        rect.width = std::max(rect.width,c); // 원래 cv::Rect 정의 대신 KITTI 2dBB 정의에 따라.
+        rect.height = std::max(rect.height,r);
+      }
+    }
+
+    for(auto it : rects){
+      const std::string cls = "dynamic"; // TODO 동적, 정적물체 구분.
+      const float score = 1.;
+      const int truncated = 0;
+      const int occluded = 0;
+
+      // OBB 추정 생략
+      const float alpha = 0.;
+      const float w = 1.; const float h = 1.; const float d = 1.;
+      const float x = 1.; const float y = 1.; const float z = 1.;
+      const float rotationy = 0.; // TODO alpha와 뭐가 다르지?
+
+      const int& trackid = it.first;
+      const int& x0 = it.second.x;
+      const int& y0 = it.second.y;
+      const int& x1 = it.second.width;
+      const int& y1 = it.second.height;
+      kitti2dbox_output_
+        << frame_id << " " << trackid << " " << cls << " " <<truncated << " " << occluded << " " << alpha << " "
+        << x0 << " " << y0 << " " << x1 << " " << y1 << " " << w << " " << h << " " << d << " "
+        << x << " " << y << " " << z << " " << rotationy << " " << score << std::endl;
+    }
+
+  }
+
   return;
 }
 

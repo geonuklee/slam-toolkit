@@ -15,8 +15,8 @@ std::set<Pth> Pipeline::NewFilterOutlierMatches(Frame* curr_frame,const EigenMap
   double confidence = .99;
   cv::Mat& dst = vinfo_match_filter_;
   if(verbose){
-    dst = GetColoredLabel(vinfo_synced_marker_);
-    dst.setTo(CV_RGB(255,0,0), GetBoundary(vinfo_synced_marker_,2));
+    dst = GetColoredLabel(vinfo_synced_marker_,true);
+    dst.setTo(CV_RGB(255,255,255), GetBoundary(vinfo_synced_marker_,2));
     cv::addWeighted(cv::Mat::zeros(dst.rows,dst.cols,CV_8UC3), .5, dst, .5, 1., dst);
   }
   int flag = cv::SOLVEPNP_ITERATIVE;

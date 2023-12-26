@@ -32,6 +32,10 @@ seq="0000"
 
 
 output_dir="output"
+if [ -e $output_dir/trackeval_format ]; then
+  rm -rf $output_dir/trackevalform
+fi
+mkdir -p $output_dir/trackevalform
 
 #msg "Build is done"
 if [ $retval -eq 0 ]; then
