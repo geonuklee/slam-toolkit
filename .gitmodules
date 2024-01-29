@@ -19,3 +19,6 @@
 [submodule "segmentation/Pangolin-0.8"]
 	path = segmentation/Pangolin-0.8
 	url = https://github.com/stevenlovegrove/Pangolin
+[submodule "segmentation/kitti_tracking_tool/TrackEval"]
+	path = segmentation/kitti_tracking_tool/TrackEval
+	url = https://github.com/JonathonLuiten/TrackEval
